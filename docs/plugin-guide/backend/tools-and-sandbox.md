@@ -104,11 +104,11 @@ public String run_agent(
 要做「跑命令」类工具不要自己拼 `ProcessBuilder`：`ToolContext.shellExecutor()` 已把 **PermissionGate 授权 + 沙箱 + 输出护栏** 内建好（`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/ToolContextImpl.java:106-118`），plugin-api 提供 `ShellTool` 工厂（底层是 Spring AI `FunctionToolCallback.builder`，`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/shell/ShellTool.java:41-49`）。**描述必传（2026-12 决策：核心零默认）**——`powershell(String description, ShellExecutor)` / `bash(String description, ShellExecutor)`，工具用途、工作目录、实际 shell 等一律由提供者按自身事实全量声明（外部工具可用性不归后端描述宣称——rg 已收敛为独立插件 ripgrep-tool 提供，四个后端描述零 rg），null/空串运行期拒绝；写漏描述不会被核心的模板兜底（模板与后端事实脱节正是谎报之源，见 ARCHITECTURE §7.10「描述精简的第三批」）。范例：
 
 ```java
-// every-agent-plugins/sandbox-windows-mic/src/main/java/dev/everyagent/plugin/sandbox/mic/WindowsMicShellToolProvider.java:28-46（节选）
+// every-agent-plugins/sandbox-wsl-ubuntu/src/main/java/dev/everyagent/plugin/sandbox/wslubuntu/WslUbuntuBashToolProvider.java:47-50（节选）
     @Override
     public boolean appliesTo(ToolContext ctx) {
-        // 只在当前生效沙箱后端是 windows-mic 时贡献工具（§7.10 约定判据）
-        return ctx.sandbox() != null && "windows-mic".equals(ctx.sandbox().id());
+        // 只在当前生效沙箱后端是 wsl-ubuntu 时贡献工具（§7.10 约定判据）
+        return ctx.sandbox() != null && "wsl-ubuntu".equals(ctx.sandbox().id());
     }
 
     @Override
@@ -209,7 +209,7 @@ ChatClient.prompt(...).stream()
 // every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/spi/SandboxProvider.java
 public interface SandboxProvider {
 
-    /** 后端 id（如 "wsl-ubuntu"/"windows-mic"/"docker"/"none"）。 */
+    /** 后端 id（如 "wsl-ubuntu"/"codex"/"docker"/"none"）。 */
     String id();
 
     /** 此后端在当前平台是否可用（探测）。 */
@@ -231,11 +231,11 @@ public interface SandboxProvider {
 
 ### 3.3 选择规则与时机（时序红线）
 
-- **选择规则**（`SandboxProviderRegistry.select`，`:84-137`）：显式 `type` 精确命中且 `isAvailable()` → `create()`；命中但不可用 / 无对应 provider → 转 auto；auto = `isAvailable()` 过滤后取 `priority()` 最高者（**只对胜出者调 `create()`**，重副作用如 codex 的 UAC setup 不因探测被提前触发）；`enabled=false` 或 `type=none` → 返回 null，调用方退化 DIRECT。配置键 `worker.sandbox.type`，旧值归一（`acl`→`windows-mic` 等）见 `OsSandbox.normalizeBackend`（`OsSandbox.java:182-201`）。
+- **选择规则**（`SandboxProviderRegistry.select`，`:84-137`）：显式 `type` 精确命中且 `isAvailable()` → `create()`；命中但不可用 / 无对应 provider → 转 auto；auto = `isAvailable()` 过滤后取 `priority()` 最高者（**只对胜出者调 `create()`**，重副作用如 codex 的 UAC setup 不因探测被提前触发）；`enabled=false` 或 `type=none` → 返回 null，调用方退化 DIRECT。配置键 `worker.sandbox.type`，旧值归一（`windows-mic`/`acl` → auto 并 WARN 等）见 `OsSandbox.normalizeBackend`（`OsSandbox.java:182-201`）。
 - **时机红线**（§7.10 原文口径）：全部 SandboxProvider 都由插件在 `PluginLoader` 的 `@PostConstruct` 里注册，而 `PluginLoader → WorkerServices → OsSandbox` 的构造依赖链决定了 OsSandbox **必然先于插件激活完成初始化**——后端不得在 `@PostConstruct` 一次性定论。`OsSandbox` 曾因此在启动期 `select()` 恒得「无可用后端」（类 Javadoc 记录了这次翻车，`OsSandbox.java:81-87`）；现改为按**注册表代次惰性解析**（每次注册/注销自增，`SandboxProviderRegistry.java:49-58`）。
-- 现役后端：`wsl-ubuntu`(10)、`codex`(Windows 8)、`windows-mic`(5)、`direct`（无 Provider，OsSandbox 自身兜底）。⚠️ 仓库现状：`sandbox-windows-mic` 与 `sandbox-wsl-ubuntu` 的 `plugin.json` 均写 `"enabled": false`（内置扫描期整目录跳过），实际在册的 SPI 后端只有 codex——启用前两者需改清单并重启 worker（`every-agent-plugins/sandbox-windows-mic/plugin.json:9`、`every-agent-plugins/sandbox-wsl-ubuntu/plugin.json:9`）。
+- 现役后端：`wsl-ubuntu`(10)、`codex`(Windows 8)、`direct`（无 Provider，OsSandbox 自身兜底）；`windows-mic` 已随 sandbox-windows-mic 插件移除（2026-10）。⚠️ 仓库现状：`sandbox-wsl-ubuntu` 的 `plugin.json` 写 `"enabled": false`（内置扫描期整目录跳过），实际在册的 SPI 后端只有 codex——启用 wsl-ubuntu 需改清单并重启 worker（`every-agent-plugins/sandbox-wsl-ubuntu/plugin.json:9`）。
 
-### 3.4 与 worker 命令执行链的关系（§7.10 windows-mic 语境）
+### 3.4 与 worker 命令执行链的关系（§7.10 语境）
 
 沙箱后端不执行命令；命令的**实际执行**有两条互不相同的路：
 
@@ -244,32 +244,26 @@ public interface SandboxProvider {
 | worker 核心命令工具 | `CommandExecutor`（`every-agent-worker/src/main/java/dev/everyagent/worker/tools/CommandExecutor.java`） | cwd 锁 `Path.of(task.workspaceRoot())`（`:95`）；执行前 `gate.requireCommand`（危险动词/越界路径授权，`:90`）与 `gate.requirePrivilege`（`:128`）；实际 spawn 走 `OsSandbox.spawnNative/spawnToFileRedirected`（`:137-196`，超时/输出护栏/凭据 env 剔除内建） |
 | 沙箱插件自己的命令工具 | 插件自带 CommandExecutor（如 `every-agent-plugins/sandbox-windows-codex/.../CodexCommandExecutor.java`） | §7.10：「只有某后端才做得到的隔离能力，其命令与状态一律归该插件」——完全自由实现、自扫描路径、自定授权策略，经 `ToolProvider.appliesTo` 控制生效 |
 
-windows-mic 后端的隔离语义即架构 §7.10 的 **Windows Medium IL 契约**原文：「沙箱进程运行在 Medium IL(Restricted Token 去特权但不降级)，天然可写工作区与已授权目录，不对文件系统做任何标注或 ACL 修改——零副作用、零残留。越界写拦截由 PermissionGate 责任链承担。」（[`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §7.10）
+范例：完整后端见 `every-agent-plugins/sandbox-wsl-ubuntu/`（原最小样本 sandbox-windows-mic 已移除）。
 
-### 3.5 范例与注册代码
-
-最小范例：`sandbox-windows-mic`（provider 46 行 + backend 33 行 + 入口 34 行）；`WindowsMicSandboxBackend` 全用默认实现（mount 返回原路径、onWorkspaceRemoved no-op）——windows-mic 命令跑在宿主上，无需挂载（`WindowsMicSandboxBackend.java:14-33`）。
+范例（已移除的最小样本 sandbox-windows-mic 曾承担此位,现以 wsl-ubuntu 为准）：完整后端见 `every-agent-plugins/sandbox-wsl-ubuntu/`——`WslUbuntuSandboxProvider`（id/priority 见 `WslUbuntuSandboxProvider.java:41,81`，`create` 在 `:86`）,强隔离样本见 sandbox-windows-codex。
 
 ```java
-// every-agent-plugins/sandbox-windows-mic/src/main/java/dev/everyagent/plugin/sandbox/mic/WindowsMicSandboxProvider.java:16-46（节选）
-public final class WindowsMicSandboxProvider implements SandboxProvider {
-    private static final boolean WINDOWS =
-            System.getProperty("os.name").toLowerCase(Locale.ROOT).contains("win");
+// every-agent-plugins/sandbox-wsl-ubuntu/src/main/java/dev/everyagent/plugin/sandbox/wslubuntu/WslUbuntuSandboxProvider.java:41-90（骨架,节选）
+public final class WslUbuntuSandboxProvider implements SandboxProvider {
 
-    @Override public String id() { return "windows-mic"; }
-    @Override public boolean isAvailable() { return WINDOWS; }   // 探测必须轻量：不弹 UAC、不做 setup
-    @Override public int priority() { return 5; }                // auto 模式的兜底位次
+    @Override public String id() { return "wsl-ubuntu"; }
+    @Override public boolean isAvailable() { /* 轻量探测:不弹 UAC、不做 setup */ }
+    @Override public int priority() { return 10; }               // auto 模式的兜底位次
     @Override public SandboxBackend create(SandboxConfig config) {
-        return new WindowsMicSandboxBackend(props);              // 胜出才付创建成本
+        return new WslUbuntuSandboxBackend(props, workspaces, pluginDir);  // 胜出才付创建成本
     }
 }
 
-// every-agent-plugins/sandbox-windows-mic/src/main/java/dev/everyagent/plugin/sandbox/mic/WindowsMicSandboxPlugin.java:24-33
+// 入口(WslUbuntuSandboxPlugin):沙箱后端 + 命令工具一起注册——后端只管挂载/清理,命令工具才是 AI 看得见的东西
 public void activate(WorkerPluginContext ctx) throws Exception {
-    WorkerConfig props = ctx.getService(WorkerConfig.class);
-    // 沙箱后端 + 命令工具一起注册：后端只管挂载/清理，命令工具才是 AI 看得见的东西
-    ctx.registerSandboxProvider(new WindowsMicSandboxProvider(props));
-    ctx.registerToolProvider(new WindowsMicShellToolProvider());
+    ctx.registerSandboxProvider(...);
+    ctx.registerToolProvider(new WslUbuntuBashToolProvider(...));
 }
 ```
 
@@ -418,7 +412,7 @@ return new FileReferenceResult("（附图：" + displayPath(ref) + "）", List.o
 | 红线 | 出处 | 与本篇四个 SPI 的关系 |
 |---|---|---|
 | **PermissionGate**：危险操作必须经用户授权——AI 工具的工作区外路径访问先弹 `kind=authorization` 的 ask（拒绝/本轮运行/本任务三档）；命令中的危险动词**仅当命令引用可能落在工作区外**时才需授权，工作区内增删改查直接放行（cwd 锁定 + 沙箱可写性契约兜底）；**用户 `@` 显式选择的工作区外部授权根 = 已授权**（完全读写 READ+WRITE+EXEC），文件工具与命令串中引用其内的路径都不再弹窗（§7.17）；拒绝抛异常回灌模型 | §7.8 / §7.17 | 用 `ctx.shellExecutor()` 就自动带上；自己碰文件系统要走 `ctx.workspaces()` 的 jailed 解析；**不得绕过 gate 直接放行越界 IO** |
-| **沙箱契约（windows-mic）**：沙箱进程 Medium IL（Restricted Token 去特权但不降级），天然可写工作区与已授权目录，零文件系统标注、零 ACL 修改、零残留；越界写拦截由 PermissionGate 责任链承担，无 OS 级写隔离兜底 | §7.10 | SandboxProvider 实现者不要试图靠改 ACL/打标记做隔离；隔离做不到的部分交给授权链 |
+| **沙箱契约（codex）**：沙箱进程 WRITE_RESTRICTED 受限令牌 + capability SID，工作区树可写、区外物理只读；越界写拦截由 PermissionGate 责任链兜底 | §7.10 | SandboxProvider 实现者不要试图靠改 ACL/打标记做隔离；隔离做不到的部分交给授权链 |
 | **ExecContext 管道**：横切层只见 ExecContext 槽位，不见 `TaskEntry/TaskRuntime/TaskInfo`；禁止 properties 黑盒 map 与强转再现；插件功能与主体特有槽位不进核心接口 | §14.11 | 四个 SPI 的 ctx 全部 `extends ExecContext`；插件代码 import 任务域类型即违红线 |
 
 ## 下一步读

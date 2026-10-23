@@ -80,7 +80,7 @@
 - Per-round token usage and context consumption are clear at a glance.
 
 ### 🛡️ Security sandbox + human-AI collaboration guardrails
-- Commands run in a **system-level sandbox** — not application-layer path checking, but **OS-level isolation**: Codex-style dual local accounts + restricted tokens; outside the workspace, the file system is physically read-only. Three pluggable backends (`sandbox-windows-codex` / `wsl-ubuntu` / `windows-mic`), switchable via one line of `worker.sandbox.type`. This is a true sandbox most coding agents don't have — see the [🛡️ System-Level Sandbox section](#-system-level-sandbox-codex-inspired-real-isolation) below.
+- Commands run in a **system-level sandbox** — not application-layer path checking, but **OS-level isolation**: Codex-style dual local accounts + restricted tokens; outside the workspace, the file system is physically read-only. Two pluggable backends (`sandbox-windows-codex` / `wsl-ubuntu`), switchable via one line of `worker.sandbox.type`. This is a true sandbox most coding agents don't have — see the [🛡️ System-Level Sandbox section](#-system-level-sandbox-codex-inspired-real-isolation) below.
 - Out-of-workspace operations / dangerous commands always require **popup authorization**, with optional **AI review** / **unattended mode** for auto-adjudication; git credentials are AES-GCM encrypted and stored locally.
 
 ### 🔌 Plug in any model, with built-in failover
@@ -146,8 +146,6 @@ Most coding agents either have no sandbox at all or rely on `cwd` locks + path-p
    - Tasks run inside a **WSL2 Ubuntu distribution**; host Windows drives outside the workspace are **completely invisible**;
    - The distribution can be **fully reinstalled** (`wsl --unregister` → re-init) — use-and-discard, back to a clean state in one step;
    - The only backend that can **truly cut the network**: the in-task `/disable-network` command runs `unshare -n` inside the distro, physically isolating the network.
-
-3. **`windows-mic`** — Windows Medium IL restricted-token sandbox: lightweight de-privilege, between codex and no sandbox.
 
 > When no sandbox plugin is present, the system falls back to `DIRECT` (running directly on the host), but the PermissionGate chain still intercepts out-of-bounds writes — **even if the user deliberately disables the sandbox, writes outside the workspace are not allowed** and must be authorized.
 
@@ -349,7 +347,7 @@ After saving a manual edit, click **Reload model config** in the Settings page t
 | `SERVER_ADDRESS` (env var) | Hub listen address, defaults to `127.0.0.1` (loopback only); docker/compose and systemd deployment paths inject `0.0.0.0` explicitly |
 | `WORKER_ID` (env var) | Worker identity; the frontend addresses by this |
 | `EVERYAGENT_HOME` | System directory (model config / default workspace / data), default `~/.everyagent` |
-| `worker.sandbox.type` | `auto` (default; picks the highest-priority available sandbox plugin) / `wsl-ubuntu` / `windows-mic` / `none` (legacy values `wsl-direct` / `wsl-bwrap` are auto-normalized) |
+| `worker.sandbox.type` | `auto` (default; picks the highest-priority available sandbox plugin) / `wsl-ubuntu` / `none` (legacy values `wsl-direct` / `wsl-bwrap` / `windows-mic` are auto-normalized) |
 | `worker.permissions.*` | Dangerous operation authorization, AI review timeout, etc. (see Architecture §7.8–§7.9) |
 
 ---

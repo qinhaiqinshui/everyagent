@@ -82,7 +82,7 @@
 - 每轮 token 用量、上下文占用一目了然。
 
 ### 🛡️ 安全沙箱 + 人机协作护栏
-- 命令在**系统级沙箱**中执行——不是应用层路径检查,而是 **OS 底层隔离**:仿 Codex 双账户 + 受限令牌,工作区之外物理上只读不可写;三种可插拔后端(`sandbox-windows-codex` / `wsl-ubuntu` / `windows-mic`),`worker.sandbox.type` 一行切换。这是很多 coding agent 都没有的真正沙箱,详见下文 [🛡️ 系统级沙箱专章](#-系统级沙箱仿-codex真正隔离)。
+- 命令在**系统级沙箱**中执行——不是应用层路径检查,而是 **OS 底层隔离**:仿 Codex 双账户 + 受限令牌,工作区之外物理上只读不可写;两种可插拔后端(`sandbox-windows-codex` / `wsl-ubuntu`),`worker.sandbox.type` 一行切换。这是很多 coding agent 都没有的真正沙箱,详见下文 [🛡️ 系统级沙箱专章](#-系统级沙箱仿-codex真正隔离)。
 - 工作区外操作 / 危险命令一律**弹窗授权**,可开 AI 审议 / 无人值守自动裁决;git 凭证 AES-GCM 加密存本机。
 
 ### 🔌 模型随便换,自带容灾
@@ -146,8 +146,6 @@ web / hub / worker / desktop 四个模块**互相解耦、物尽其用**,可按�
    - 任务在 **WSL2 Ubuntu 发行版**里执行,工作区之外的宿主 Windows 盘**完全不可见**;
    - 发行版**可整体重装**(`wsl --unregister` → 重新 init),用完即弃、一键回到干净状态;
    - 唯一能**真正断网**的后端:任务内 `/禁用网络` 在发行版内 `unshare -n`,物理隔离网络。
-
-3. **`windows-mic`** —— Windows Medium IL 受限令牌沙箱:轻量降权,介于 codex 与无沙箱之间。
 
 > 没有任何沙箱插件时回退 `DIRECT`(直跑宿主),但 PermissionGate 责任链仍然兜底拦截越界写——**即使用户主动关闭沙箱,工作区外的写入也不会被放行**,必须经用户授权。
 
@@ -339,7 +337,7 @@ worker:
 | `SERVER_ADDRESS`(环境变量) | hub 监听地址,默认 `127.0.0.1`(仅回环);docker/compose 与 systemd 部署链路显式注入 `0.0.0.0` |
 | `WORKER_ID`(环境变量) | worker 身份,前端按此寻址 |
 | `EVERYAGENT_HOME` | 系统目录(模型配置/默认工作区/数据),默认 `~/.everyagent` |
-| `worker.sandbox.type` | `auto`(默认,取可用沙箱插件中优先级最高者) / `wsl-ubuntu` / `windows-mic` / `none`(旧值 `wsl-direct`、`wsl-bwrap` 自动归一) |
+| `worker.sandbox.type` | `auto`(默认,取可用沙箱插件中优先级最高者) / `wsl-ubuntu` / `none`(旧值 `wsl-direct`、`wsl-bwrap`、`windows-mic` 自动归一) |
 | `worker.permissions.*` | 危险操作授权、AI 审议超时等(见架构文档 §7.8–§7.9) |
 
 ---

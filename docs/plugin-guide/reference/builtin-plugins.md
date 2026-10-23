@@ -41,7 +41,6 @@ has_children: false
 | plugin-manager | 插件管理 | web | —（无 Java；调 `plugin.list/enable/disable` RPC） | `ui.sidebar_items` | 侧边栏 9 | web 37 行 |
 | ripgrep-tool | ripgrep 搜索工具 | java | ToolProvider + ToolExecutionInterceptor | — | — | 入口 79 行 |
 | sandbox-windows-codex | Windows Codex 沙箱 | java | SandboxProvider + ToolProvider | — | priority 8（非 Windows 为 0） | 入口 59 行 |
-| sandbox-windows-mic | Windows MIC 沙箱 | java（`enabled:false`） | SandboxProvider + ToolProvider | — | priority 5 | 入口 34 行 |
 | sandbox-wsl-ubuntu | WSL Ubuntu 沙箱 | java（`enabled:false`） | SandboxProvider + ToolProvider + SlashProvider + SlashTokenResolver | — | priority 10 | 入口 47 行 |
 | secret-redaction | 凭据输出脱敏 | java | ToolExecutionInterceptor | — | — | 入口 24 行 |
 | selection-reference | 选区引用 | both | SlashTokenResolver | `ui.editor_context_menu_actions` + `ui.composer_chip_actions` | — | 入口 90 行 + web 94 行 |
@@ -58,10 +57,10 @@ has_children: false
 ### 2.1 全体共性（读任何一个插件前先知道）
 
 - 形态分布：java-only 20 / both 6 / web-only 4；**没有纯声明式插件**（每个都至少有一侧入口）。
-- 清单字段全体一致：`id/name/version/description/author` + `enabled`，version 一律 `0.1.0`、author 一律 `everyagent`；含 Java 的 26 个另有 `main`，含前端的 10 个另有 `webMain`（值全部写 `web/index.ts`，宿主实际加载的是构建产物 `web/index.js`，见 [plugin.json 字段参考](../plugin-manifest.md) §5）。
+- 清单字段全体一致：`id/name/version/description/author` + `enabled`，version 一律 `0.1.0`、author 一律 `everyagent`；含 Java 的 25 个另有 `main`，含前端的 10 个另有 `webMain`（值全部写 `web/index.ts`，宿主实际加载的是构建产物 `web/index.js`，见 [plugin.json 字段参考](../plugin-manifest.md) §5）。
 - 用 `contributes.config` 的只有 2 个：image-vision（3 键）、sandbox-windows-codex（6 键）。
-- `enabled:false` 的只有 2 个：sandbox-windows-mic、sandbox-wsl-ubuntu（内置扫描期整目录跳过）。
-- 依赖红线干净：全部 26 个 pom **零 `every-agent-worker` 依赖**；`task-edit-resend`、`task-input-queue` 额外依赖 `every-agent-contract` 属共享契约层，合规（[架构文档](../../ARCHITECTURE.md) §14.9）。
+- `enabled:false` 的有 3 个：ripgrep-tool、sandbox-wsl-ubuntu、secret-redaction（内置扫描期整目录跳过；sandbox-windows-mic 已移除）。
+- 依赖红线干净：全部 25 个 pom **零 `every-agent-worker` 依赖**；`task-edit-resend`、`task-input-queue` 额外依赖 `every-agent-contract` 属共享契约层，合规（[架构文档](../../ARCHITECTURE.md) §14.9）。
 - 全部插件源码零 Spring 容器注解：插件经 `URLClassLoader` 加载、不在 Spring 容器中，取服务只能 `ctx.services()` / `getService(Class)`。
 - 每个 Java 入口都实现 `dev.everyagent.plugin.api.EveryAgentPlugin` 的 `activate(WorkerPluginContext ctx)`；改完 Java 要重跑 `mvn package`、改完 web 要重跑 `npm run build:plugins`（均需重启 worker，见 [构建与运行](../guides/build-and-run.md)）。
 
@@ -73,9 +72,9 @@ has_children: false
 
 | 想实现 | 推荐范本 | 源码相对路径 | 为什么推荐 |
 |---|---|---|---|
-| ToolProvider（给模型加工具） | sandbox-windows-mic | `every-agent-plugins/sandbox-windows-mic/src/main/java/dev/everyagent/plugin/sandbox/mic/WindowsMicSandboxPlugin.java:31` | 入口仅 34 行，注册即用；更典型的工具型实现看 subagent（`SubAgentPlugin.java:41`） |
+| ToolProvider（给模型加工具） | subagent | `every-agent-plugins/subagent/src/main/java/dev/everyagent/plugin/subagent/SubAgentPlugin.java:41` | 典型工具型实现,注册即用 |
 | AdvisorProvider（请求/响应链增强） | system-info | `every-agent-plugins/system-info/src/main/java/dev/everyagent/plugin/sysinfo/SystemInfoAdvisorProvider.java` | 全仓最小 Advisor 范例（入口 19 行），只做请求前 system prompt 注入 |
-| SandboxProvider（自定义沙箱） | sandbox-windows-mic | `every-agent-plugins/sandbox-windows-mic/src/main/java/dev/everyagent/plugin/sandbox/mic/WindowsMicSandboxProvider.java:38-39` | 三实现中依赖最少（仅 jna）；优先级取值坐标参考 sandbox-wsl-ubuntu（priority=10） |
+| SandboxProvider（自定义沙箱） | sandbox-wsl-ubuntu | `every-agent-plugins/sandbox-wsl-ubuntu/src/main/java/dev/everyagent/plugin/sandbox/wslubuntu/WslUbuntuSandboxProvider.java:81-82` | 独立沙箱后端完整样例（codex 为强隔离样本,体量大） |
 | SearchProvider | **无内置范例** | —（声明：`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/WorkerPluginContext.java:52`） | 内置插件零使用，别照抄空气；SPI 已接线（统一 `search` 聚合——内置 `file-content`/`file-name`/`task` 三引擎本身就是内置 provider、与插件 provider 同权，见 [advisors §6](../backend/advisors.md)） |
 | AuthorizationHandler（接管授权闸门） | unattended | `every-agent-plugins/unattended/src/main/java/dev/everyagent/plugin/unattended/UnattendedPlugin.java:23` | 逻辑最短；带评审模型的进阶版看 ai-review（`AiReviewPlugin.java:24`） |
 | ToolExecutionInterceptor（拦截工具调用） | secret-redaction | `every-agent-plugins/secret-redaction/src/main/java/dev/everyagent/plugin/secretredaction/SecretRedactionPlugin.java:22` | 唯一「单 SPI 极简」实现（入口 24 行），上行掩码单向拦截 |
@@ -162,7 +161,6 @@ has_children: false
 |---|---|---|
 | 10 | sandbox-wsl-ubuntu | `every-agent-plugins/sandbox-wsl-ubuntu/src/main/java/dev/everyagent/plugin/sandbox/wslubuntu/WslUbuntuSandboxProvider.java:81-82` |
 | 8（非 Windows 为 0） | sandbox-windows-codex | `every-agent-plugins/sandbox-windows-codex/src/main/java/dev/everyagent/plugin/sandbox/codex/CodexSandboxProvider.java:47,70-71` |
-| 5 | sandbox-windows-mic | `every-agent-plugins/sandbox-windows-mic/src/main/java/dev/everyagent/plugin/sandbox/mic/WindowsMicSandboxProvider.java:38-39` |
 
 ### 4.4 前端侧边栏 order（float 升序，缺省 100）
 
@@ -286,12 +284,6 @@ schema 化 `rg` 工具（自带二进制三档解析）+ shell 裸 rg 空结果 
 Windows Codex 沙箱 + bash 工具。
 - 关键文件：`~plugins/sandbox-windows-codex/src/main/java/dev/everyagent/plugin/sandbox/codex/CodexSandboxPlugin.java:47,51`；priority 8/0 见 `CodexSandboxProvider.java:47,70-71`。
 - 值得看：`contributes.config` 6 键的最大样本；内置插件里依赖最多的 pom（jna / jackson / slf4j 等共 7 项）。
-
-### sandbox-windows-mic（Windows MIC 沙箱）
-
-Windows 受限令牌沙箱 + shell 工具。
-- 关键文件：`~plugins/sandbox-windows-mic/src/main/java/dev/everyagent/plugin/sandbox/mic/WindowsMicSandboxPlugin.java:25,31`；priority 5 见 `WindowsMicSandboxProvider.java:38-39`。
-- 值得看：**SandboxProvider + ToolProvider 最小组合**；仓内两个 `enabled:false` 样本之一。
 
 ### sandbox-wsl-ubuntu（WSL Ubuntu 沙箱）
 

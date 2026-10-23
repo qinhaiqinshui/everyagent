@@ -26,7 +26,7 @@ Every Agent 是一套「**公网可及、本机执行**」的 AI Agent 系统:AI
 | `every-agent-contract` | 纯协议契约:帧信封 / RPC 信封 / 通用错误码 / 身份哈希(Java DTO + TS 类型) | — |
 | `every-agent-plugin-api` | 插件 API 契约:ExecContext(统一执行上下文) / EventEmitter / EmitEvent / ChatModelEnhancer / ModelConfig / TaskLifecycleNode 等接口 + 少量工具类(`util/AtomicFiles` 原子写、`util/SecretPatterns` 凭据模式、`slash/SlashTokenEncoder`、`tool/PlainTextToolCallResultConverter`、`skill/SkillMaterializer` 技能包物化;并非纯类型模块,显式依赖 `spring-core`,插件与 worker 共用) | — |
 | `every-agent-plugin-parent` | **插件 SDK parent**(仅 `pom.xml`):内置与外部插件共用的构建约定——Java 25 / 编码 / 插件依赖版本管理 / `plugin.json` 打包 / 测试栈。插件只继承它,**不继承应用的 every-agent-parent** | — |
-| `every-agent-plugins` | 内置插件集(30 个,清单见 plugin-guide `reference/builtin-plugins.md`):sandbox-windows-codex(Windows 原生沙箱,**默认启用**)、sandbox-windows-mic / sandbox-wsl-ubuntu(可选沙箱,默认禁用)、ripgrep-tool(rg 搜索工具,rg 能力唯一归属)、model-rate-limit(限流) / token-estimator(token 估算与校准) / task-queue(并发排队) / task-input-queue(输入队列) / subagent / git / ai-review / ask-user / empty-response-retry / transient-error-retry / context-compression / model-length-guard / adaptive-max-tokens / model-pool / file-change / agents-md / system-info / image-vision / mobile-keyboard(移动端终端键盘悬浮球) / task-edit-resend / unattended / secret-redaction(默认禁用) / selection-reference(选区引用) / plugin-manager / pdf-viewer / update-file-view | — |
+| `every-agent-plugins` | 内置插件集(30 个,清单见 plugin-guide `reference/builtin-plugins.md`):sandbox-windows-codex(Windows 原生沙箱,**默认启用**)、sandbox-wsl-ubuntu(可选沙箱,默认禁用)、ripgrep-tool(rg 搜索工具,rg 能力唯一归属)、model-rate-limit(限流) / token-estimator(token 估算与校准) / task-queue(并发排队) / task-input-queue(输入队列) / subagent / git / ai-review / ask-user / empty-response-retry / transient-error-retry / context-compression / model-length-guard / adaptive-max-tokens / model-pool / file-change / agents-md / system-info / image-vision / mobile-keyboard(移动端终端键盘悬浮球) / task-edit-resend / unattended / secret-redaction(默认禁用) / selection-reference(选区引用) / plugin-manager / pdf-viewer / update-file-view | — |
 | `every-agent-desktop` | Electron 桌面版:web + hub + worker 一体打包(Windows x64 便携/安装包) | 本地 6101/6102 |
 
 ### 1.1 设计理念
@@ -552,7 +552,7 @@ ask 管道承载第二类阻塞请求:**危险操作授权**。`PermissionGate` 
 
 ### 7.10 命令沙箱(插件化,多后端)
 
-沙箱后端已从 worker 核心抽离为独立插件(`every-agent-plugins/sandbox-windows-codex/`、`every-agent-plugins/sandbox-windows-mic/`、`every-agent-plugins/sandbox-wsl-ubuntu/`)。`SandboxBackend` SPI 只表达**「对沙箱做了什么」+「路径在沙箱世界里长什么样」**,不执行命令、不涉及工具注册、不做授权策略判定;核心不感知任何后端细节。
+沙箱后端已从 worker 核心抽离为独立插件(`every-agent-plugins/sandbox-windows-codex/`、`every-agent-plugins/sandbox-wsl-ubuntu/`)。`SandboxBackend` SPI 只表达**「对沙箱做了什么」+「路径在沙箱世界里长什么样」**,不执行命令、不涉及工具注册、不做授权策略判定;核心不感知任何后端细节。
 
 **SandboxBackend SPI(效果 2 + 查询 2 + 标识):**
 - `id()` — 后端标识(也是 `SandboxPathRegistry` 判「后端切换 → 整批重放」的键)。
@@ -565,7 +565,7 @@ ask 管道承载第二类阻塞请求:**危险操作授权**。`PermissionGate` 
 |---|---|---|---|---|---|
 | **WSL Ubuntu** | `wsl-ubuntu` | 10 | 批量 drvfs 挂载(READ_ONLY → `-o ro`)/ best-effort umount | 已授权根 → `/c/...`(`WslPathView` 纯映射;未授权路径原样不谎报) | 原 wsl-direct 改名,独立插件;**plugin.json 默认 enabled=false** |
 | **Windows Codex** | `codex` | Windows?8:0 | 登记/注销写根(cap SID + preflight 刷 ACE)与读根 | 恒等(命令跑宿主路径) | Windows 原生强隔离(双本地账户 `EACodexOffline`/`EACodexOnline` + 组 `EACodexSandboxUsers` + WRITE_RESTRICTED 受限令牌 + capability SID + 防火墙/WFP);工作区树经 capability SID ACE 可写、区外只读;**默认启用,即 Windows 出厂默认后端**(优先级低于 wsl-ubuntu,但后者默认禁用;setup 延迟到首次 `create()` 才做、弹一次 UAC);**沙箱账户 profile 一致性治理**——`LOGON_WITH_PROFILE` 常态供给真 profile,但账户重建换 RID 后残留旧 profile 会让新账户读 HKCU 全拒读(PS 5.1 启动读 GPO 策略键即崩,其余程序无感),setup 侧以 NTUSER.DAT 属主校验+`DeleteProfileW` 重建、runner 启动 HKCU 自检失败(stage=`hkcu_profile_check`)触发同一自愈 |
-| **Windows MIC** | `windows-mic` | 5 | SPI 默认(no-op) | SPI 默认(恒等) | 命令跑在宿主上(Medium IL),独立插件;**plugin.json 默认 enabled=false** |
+| **Windows MIC** | `windows-mic` | 5 | SPI 默认(no-op) | SPI 默认(恒等) | 命令跑在宿主上(Medium IL),独立插件;**plugin.json 默认 enabled=false**;**已移除**(2026-10,曾致工作区文件残留 Low 完整性标签污染后续构建,见 `scripts/scan-low-integrity.ps1`) |
 | **DIRECT(兜底沙箱)** | `direct` | — | SPI 默认(no-op) | SPI 默认(恒等) | OsSandbox 自身,无 Provider;auto 下无任何可用后端插件时兜底 |
 
 **效果与时机分离(§7.8)**:沙箱只表达效果,**何时授权/回收由上层决定**——`PermissionGate`/`GrantRegistry` 是唯一翻译点(见 §7.8「授权下发沙箱」),故沙箱插件**不订阅任何领域事件**,也不需要事件总线。
@@ -579,7 +579,7 @@ ShellExecutor gated = (cmd, shell) -> { ctx.commandGate().authorize(cmd); return
 - 授权通过后 worker **同步把授权范围下发沙箱**(§7.8),插件无需自行落地权限;
 - 拒绝 → 抛异常(消息回灌模型),命令不执行;
 - **不接门禁的后果**:该后端的命令永远不会触发授权 → 「授权 → 下发沙箱」链路根本不启动,表现为工作区外读写被 OS 直接拒绝且**从不弹窗**(难以从表象归因,故列为插件契约硬要求);
-- 现状:codex / wsl-ubuntu 自建执行器 → 已接门禁;windows-mic 使用 `ctx.shellExecutor()`(= worker 的 `CommandExecutor`,门禁内建)→ 无需重复包装;DIRECT(`DirectShellToolProvider`)同 mic。
+- 现状:codex / wsl-ubuntu 自建执行器 → 已接门禁;DIRECT(`DirectShellToolProvider`)同走 worker 的 `CommandExecutor`(门禁内建),无需重复包装。
 
 **后端选择时机(时序红线)**:`SandboxProvider` 全部由插件在 `PluginLoader` 的 `@PostConstruct` 里注册,而 `PluginLoader → WorkerServices → OsSandbox` 的构造依赖链决定了 **OsSandbox 一定先于插件激活完成初始化**。因此后端**不得在 `@PostConstruct` 一次性定论**:
 - `OsSandbox` 的 delegate 按 **`SandboxProviderRegistry` 代次(generation,每次注册/注销自增)惰性解析**:首次访问(`id()`/`grant()`/`revoke()`/`toSandbox()`/`toHost()`)或代次变化时重新 `select()`,解析结果(含「无可用后端」的 null)按代次缓存,不产生每次调用的重复探测;
@@ -617,9 +617,9 @@ ShellExecutor gated = (cmd, shell) -> { ctx.commandGate().authorize(cmd); return
 **任务级授权不进意图表(历史约束,现已被上面的 `grants:` owner supersede)**:原设计为避免 run 档授权经持久 drvfs 挂载泄漏成跨任务可读根,曾规定「单次授权只在授权决议层放行、不进沙箱」。现改为**路径级、无语义的 grant/revoke 通道**:沙箱侧只见到路径,由 worker 聚合账本按主体生命周期增删,故 run 档授权不会沉淀(主体边界即回收边界);wsl 侧仍是持久 drvfs 挂载,但其可见性由同一份账本驱动。
 
 **核心宿主访问工具与沙箱命令工具共存:**
-- **核心的命令工具**(windows-mic / DIRECT 后端):核心自带,Windows 上 PowerShellTool 以 `powershell` 工具名注册;Linux 上 BashTool 以 `bash` 工具名注册。直接 ProcessBuilder 执行,走自己的授权链。
+- **核心的命令工具**(DIRECT 后端):核心自带,Windows 上 PowerShellTool 以 `powershell` 工具名注册;Linux 上 BashTool 以 `bash` 工具名注册。直接 ProcessBuilder 执行,走自己的授权链。
 - **沙箱插件的命令工具**:沙箱插件不只提供 `SandboxBackend`(挂载+清理),还提供 `ToolProvider`(命令工具)。沙箱完全自由:自己实现 CommandExecutor、自己扫描路径、自己决定授权策略。通过 `appliesTo(ToolContext)` 控制生效条件(如 `ctx.sandbox().id().equals("wsl-ubuntu")`)。
-- 两者通过 `ToolProvider.appliesTo()` 各自控制生效条件,不冲突。核心 `DirectShellToolProvider` appliesTo = 生效后端 id == `direct`(即无任何 SPI 后端),Windows 提供 `powershell`、其余提供 `bash`;各沙箱插件提供自己方言的命令工具:windows-mic 提供 `powershell`、wsl-ubuntu 提供 `bash`、codex 提供 `powershell`(PowerShell `-File` 为主形态、CMD 回退,**无独立 bash 工具**)。**四个后端(codex/mic/wsl-ubuntu/worker DIRECT)的 shell 链路零 rg**:不自带 rg 二进制、不向子进程 PATH 注入 rg、工具描述不提 rg(描述谎报红线:后端不得宣称或暗示本后端管不了的搜索工具)——rg 能力(schema 化 `rg` 工具 + 自带二进制 + 结果侧兜底拦截器)整体收敛为独立插件 `ripgrep-tool` 提供,二进制三档解析见 §7.17「程序附属文件」,stdin 根因与设计对策见本节「rg 的 stdin 语义陷阱」。
+- 两者通过 `ToolProvider.appliesTo()` 各自控制生效条件,不冲突。核心 `DirectShellToolProvider` appliesTo = 生效后端 id == `direct`(即无任何 SPI 后端),Windows 提供 `powershell`、其余提供 `bash`;各沙箱插件提供自己方言的命令工具:wsl-ubuntu 提供 `bash`、codex 提供 `powershell`(PowerShell `-File` 为主形态、CMD 回退,**无独立 bash 工具**)。**各后端(codex/wsl-ubuntu/worker DIRECT)的 shell 链路零 rg**:不自带 rg 二进制、不向子进程 PATH 注入 rg、工具描述不提 rg(描述谎报红线:后端不得宣称或暗示本后端管不了的搜索工具)——rg 能力(schema 化 `rg` 工具 + 自带二进制 + 结果侧兜底拦截器)整体收敛为独立插件 `ripgrep-tool` 提供,二进制三档解析见 §7.17「程序附属文件」,stdin 根因与设计对策见本节「rg 的 stdin 语义陷阱」。
 - **只有某后端才做得到的隔离能力,其命令与状态一律归该插件**:wsl-ubuntu 的 `/禁用网络` 由 `sandbox-wsl-ubuntu` 自己经 `registerSlashProvider`/`registerSlashTokenResolver` 注册、状态即任务级 `network.access` slash token(落盘任务目录 `slash-tokens.json`),并在自己的 CommandExecutor 里经 `WorkerServices.slashTokens()` 读取生效;worker 核心不持有该开关,也不为做不到断网的后端预留同名命令。
 
 **路径翻译流程:**
@@ -628,17 +628,16 @@ ShellExecutor gated = (cmd, shell) -> { ctx.commandGate().authorize(cmd); return
 3. 非工具路径翻译:`SkillAdvisor`(知识包路径)和 `ExternalFileTokenResolver`(@ 引用)直接调 `pathRegistry.toSandboxPath()` → 转发 `sandbox.toSandbox()`(默认恒等)。
 4. 命令组装翻译:由各后端自持(wsl 用 `WslPathView` 的挂载表把已授权根及其子路径映射为 `/c/...`;codex/mic 恒等,命令本就跑宿主路径)。
 
-- `worker.sandbox.type`: `auto`(默认)| `wsl-ubuntu` | `windows-mic` | `none`。归一化别名:旧值 `wsl-direct`/`direct` → `wsl-ubuntu`(静默兼容);`wsl-bwrap`/`wsl`/`bwrap` → 归一为 `auto` 并 WARN;`acl`/`mic` → `windows-mic`;未知/空 → `auto`。WSL 专属配置(distro/tarball 等)与 codex 专属配置(`codex.home`/`codex.account-prefix`/`codex.network-policy`(auto|offline|online)/`codex.proxy-ports`/`codex.allow-local-binding`/`codex.java-home`)均由各插件通过 plugin.json `contributes.config` 自管。
+- `worker.sandbox.type`: `auto`(默认)| `wsl-ubuntu` | `none`。归一化别名:旧值 `wsl-direct`/`direct` → `wsl-ubuntu`(静默兼容);`wsl-bwrap`/`wsl`/`bwrap` → 归一为 `auto` 并 WARN;`windows-mic`/`acl`/`mic`(sandbox-windows-mic 插件已移除)→ 归一为 `auto` 并 WARN;未知/空 → `auto`。WSL 专属配置(distro/tarball 等)与 codex 专属配置(`codex.home`/`codex.account-prefix`/`codex.network-policy`(auto|offline|online)/`codex.proxy-ports`/`codex.allow-local-binding`/`codex.java-home`)均由各插件通过 plugin.json `contributes.config` 自管。
 - **WSL 发行版可用性由 sandbox-wsl-ubuntu 插件全责保证(desktop 零参与,2026-10 移交)**:发行版探测与自动导入(`wsl -l -q` 探测 → 缺失时 sha256 校验 + `wsl --import EveryAgent` → 重探)全部住在 `WslUbuntuSandboxProvider.isAvailable()` 内,由上述后端选择时机的首次 `select()` 惰性触发——插件未启用/未注册即全链路零 WSL 调用。desktop 主进程**不做任何 WSL 探测**(曾有的启动期 utilityProcess preflight 硬编码了插件领域知识——发行版名/镜像文件名/导入语义——且与插件启用开关脱节,禁用插件后仍 spawn wsl.exe,已删除)。插件自带资源(rootfs 镜像、eagent-run.py)按三级链定位:`<pluginDir>/wsl/`(.eap 安装/源码开发态)→ `WorkerConfig.resolveRuntimeDir()/wsl/`(打包 desktop 态,镜像经插件 `runtime/` 目录并入程序根 runtime/,见 §7.17 程序附属文件;插件 `enabled=false` 时不进安装包)→ 配置 `worker.sandbox.wsl.tarball`(手动场景,相对系统目录解析)。
-- **Windows Medium IL 契约**(对 windows-mic 后端):沙箱进程运行在 Medium IL(Restricted Token 去特权但不降级),天然可写工作区与已授权目录,不对文件系统做任何标注或 ACL 修改——零副作用、零残留。越界写拦截由 PermissionGate 责任链承担。
-- **网络策略**:两级开关,默认放行——① 全局 `worker.sandbox.allow-network=false`(经 `SandboxConfig.networkDenied` 交给后端:wsl-ubuntu 真断网、codex 选 Offline 账户;mic/direct 只剥代理 env 拦不住直连);② 任务级 `/禁用网络`(**只有 wsl-ubuntu 后端做得到**,故整个能力归 `sandbox-wsl-ubuntu` 插件自带:插件自己注册 slash 命令提供者 + token 提交解析器,状态即任务级 `network.access` slash token(落盘任务目录 `slash-tokens.json`,核心不感知 kind),由 `NetworkTaskFlag.isOn` 经 `WorkerServices.slashTokens()` 查询、`WslUbuntuCommandExecutor` 每次 spawn 实时读;`/` 菜单条目按当前生效后端 `sandbox().id()` 决定是否出现,其他后端不提供该命令)。落地由沙箱插件自己的 CommandExecutor 负责:wsl-ubuntu = 发行版内 `unshare -n` 新建无 eth0 的 netns(DNS/回环全断)。worker 核心不持有任何任务级禁网状态,通用 `CommandExecutor`/`OsSandbox` 也不再判定网络。
-- **命令 stdin 契约**:AI 命令的 stdin 语义口径是**无输入可用、不可交互输入**(非交互/headless 工具的通用做法)。契约按**效果**表述,**实现手段各处不同且不必相同**。四档现状:
+- **Windows Medium IL 契约**(原 windows-mic 后端,2026-10 随 sandbox-windows-mic 插件移除而废止):沙箱进程运行在 Medium IL(Restricted Token 去特权但不降级),天然可写工作区与已授权目录,不对文件系统做任何标注或 ACL 修改——零副作用、零残留。越界写拦截由 PermissionGate 责任链承担。
+- **网络策略**:两级开关,默认放行——① 全局 `worker.sandbox.allow-network=false`(经 `SandboxConfig.networkDenied` 交给后端:wsl-ubuntu 真断网、codex 选 Offline 账户;direct 只剥代理 env 拦不住直连);② 任务级 `/禁用网络`(**只有 wsl-ubuntu 后端做得到**,故整个能力归 `sandbox-wsl-ubuntu` 插件自带:插件自己注册 slash 命令提供者 + token 提交解析器,状态即任务级 `network.access` slash token(落盘任务目录 `slash-tokens.json`,核心不感知 kind),由 `NetworkTaskFlag.isOn` 经 `WorkerServices.slashTokens()` 查询、`WslUbuntuCommandExecutor` 每次 spawn 实时读;`/` 菜单条目按当前生效后端 `sandbox().id()` 决定是否出现,其他后端不提供该命令)。落地由沙箱插件自己的 CommandExecutor 负责:wsl-ubuntu = 发行版内 `unshare -n` 新建无 eth0 的 netns(DNS/回环全断)。worker 核心不持有任何任务级禁网状态,通用 `CommandExecutor`/`OsSandbox` 也不再判定网络。
+- **命令 stdin 契约**:AI 命令的 stdin 语义口径是**无输入可用、不可交互输入**(非交互/headless 工具的通用做法)。契约按**效果**表述,**实现手段各处不同且不必相同**。三档现状:
   - worker DIRECT:`ProcessBuilder.Redirect.from(NUL 设备)`(§7.9,Windows=`NUL`/其余=`/dev/null`)→ 读到立即 EOF;
   - wsl-ubuntu:`eagent-run.py::_stdin_null()` 在 exec 前把 fd0 重定向 `/dev/null`(wsl-direct / bwrap / seccomp 三条路径;seccomp supervisor 自身 stdin 承载控制帧除外)→ 立即 EOF;
   - codex:建 stdin 管道 + spawn 后立即 `closeStdin()` 关写端(`CodexRunnerMain`,由 `SpawnRequest.stdinOpen()=false` 触发;终端类会话才留开通道)→ 读到 EOF;**形态是「已关闭的管道」,不是 NUL 设备**;
-  - windows-mic:`si.hStdInput = new WinNT.HANDLE()`(NULL 句柄)→ 句柄无效,读得**失败/不可读**,与其余三档的「读到 EOF」**不同源**(2026-12 以 `STARTF_USESTDHANDLES` + NULL `hStdInput` 等价 spawn 实测:rg 按「无可读输入」处理并搜 cwd,既不报错也不空结果——旧文本推测的「rg 会报错退出」**不成立,已作废**)。
-  **旧措辞「一律接 null 设备」把手段当契约,对 codex/mic 不成立,已按效果口径改写。**
-  - **「字符设备」与「管道」对子进程不等价(2026-12 实测,本条曾写错)**:Windows `NUL`、Linux `/dev/null` 都是**字符设备**。rg/grep 一类工具「未给路径时据 stdin 可读判输入源」的规则里,**「管道/普通文件」算可读输入 → 把 stdin 当输入源**(管道下裸 `rg <pattern>` 得空 + exit 1);**「字符设备」不算 → 回退搜 cwd**——故 DIRECT / wsl(以及 NUL 句柄的 windows-mic)下,裸 `rg <pattern>` **本来就能搜当前目录**。由此两条:
+  **旧措辞「一律接 null 设备」把手段当契约,对 codex 不成立,已按效果口径改写。(历史第四档 windows-mic 已随插件移除:其 NULL `hStdInput` 句柄形态读得「失败/不可读」,与其余档「读到 EOF」不同源——2026-12 等价 spawn 实测 rg 按「无可读输入」处理并搜 cwd,旧文本推测的「rg 会报错退出」不成立。)**
+  - **「字符设备」与「管道」对子进程不等价(2026-12 实测,本条曾写错)**:Windows `NUL`、Linux `/dev/null` 都是**字符设备**。rg/grep 一类工具「未给路径时据 stdin 可读判输入源」的规则里,**「管道/普通文件」算可读输入 → 把 stdin 当输入源**(管道下裸 `rg <pattern>` 得空 + exit 1);**「字符设备」不算 → 回退搜 cwd**——故 DIRECT / wsl 下,裸 `rg <pattern>` **本来就能搜当前目录**。由此两条:
     - 「无路径静默空结果」这个坑**只在 codex 一档(管道)发生**;旧文本「stdin 恒为空管道/NULL 设备 → 恒得空结果 + exit 1」把两类混为一谈,**归因错误,已订正**(2026-12 实测:同一 `rg.exe`,stdin 接 NUL 搜 cwd、接空管道则空 + exit 1);
     - **反向代价(为何不把 codex 改成 NUL)**:NUL 会让 **Windows CRT 的 `_isatty()` 判出「是终端」**——其判据即「`GetFileType == FILE_TYPE_CHAR`」,而 NUL 是字符设备(2026-12 沙箱内实测:`msvcrt`/`ucrt` 的 `_isatty(0)` 在 NUL 下返回 `0x40`(=FDEV 标志位),python `sys.stdin.isatty()` 得 `True`;管道下三者依次为 `0`/`False`)。子进程据此误判自己在终端上、走交互分支,破坏本契约的「不可交互」一半。**故 Windows 上不存在同时满足「读到 EOF」与「不被误判为终端」的 stdin 形态**;codex 的「关闭的管道」是对该取舍的**正确**选择,**不得**以「治 rg 空结果」为由改成 NUL。Linux 无此矛盾:`/dev/null` 亦是字符设备,但 POSIX `isatty(3)` 走 `tcgetattr`(对 `/dev/null` 得 `ENOTTY`)→ 判假,**非**「字符设备即终端」(依 POSIX 定义,**未在本机实测**——本机无 Linux)。
     - 「不可交互」的落地**不依赖 stdin 形态**,由**显式 env** 钉住(口径同 git 插件 `NativeGit` 的 `GIT_TERMINAL_PROMPT=0`);分页器等同类项(`GIT_PAGER`/`PAGER`/`LESS`,对齐 codex 原生 `env.rs::ensure_non_interactive_pager`)本实现**尚未接线,登记为待办**。
@@ -689,7 +688,7 @@ ShellExecutor gated = (cmd, shell) -> { ctx.commandGate().authorize(cmd); return
 
 ### 7.11 提权拦截
 
-wsl-bwrap 后端的 seccomp 内核级提权拦截已随 bwrap 后端删除而移除。wsl-ubuntu 后端以 root 完整权限直连,无提权授权概念。windows-mic / codex / DIRECT 后端通过 Restricted Token(mic=去特权 Medium IL;codex=WRITE_RESTRICTED + capability)+ PermissionGate 文本扫描拦截危险命令。
+wsl-bwrap 后端的 seccomp 内核级提权拦截已随 bwrap 后端删除而移除。wsl-ubuntu 后端以 root 完整权限直连,无提权授权概念。codex / DIRECT 后端通过 Restricted Token(codex=WRITE_RESTRICTED + capability)+ PermissionGate 文本扫描拦截危险命令。
 
 ### 7.12 原生 git 执行与凭证
 
@@ -1511,7 +1510,7 @@ docker-compose 一键:`HUB_KEY=你的密钥 WORKER_API_KEY=你的worker密钥 do
 | D23 | 输入走 worker 级频道 `u.K.worker.<id>.input` | 订阅数 O(worker×hub) 不随任务数增长 |
 | D24 | 短 ID:`{前缀}_{3位盐}{base36 序号}`(t_/a_/sub_/q_) | 人可读可念;单 worker 查重兜底 |
 | D25 | contract 只承载纯协议,业务常量住 worker proto | workflow 演进零改 contract、零改 hub |
-| D26 | 命令沙箱多后端**插件化**:sandbox-windows-codex(默认启用,Windows 出厂默认)、sandbox-wsl-ubuntu / sandbox-windows-mic(默认禁用,按需启用);`auto` 取可用插件中 priority 最高者(wsl-ubuntu=10 > codex=8 > mic=5),无后端时 DIRECT 兜底 | 隔离能力全部下沉插件(§7.10);强隔离(codex:WRITE_RESTRICTED + capability SID + 防火墙/WFP)与零管理员(WSL)各有取舍,按部署场景选 |
+| D26 | 命令沙箱多后端**插件化**:sandbox-windows-codex(默认启用,Windows 出厂默认)、sandbox-wsl-ubuntu(默认禁用,按需启用;sandbox-windows-mic 已于 2026-10 移除——其早期 Low IL 实现曾致工作区文件残留 Low 完整性标签);`auto` 取可用插件中 priority 最高者(wsl-ubuntu=10 > codex=8),无后端时 DIRECT 兜底 | 隔离能力全部下沉插件(§7.10);强隔离(codex:WRITE_RESTRICTED + capability SID + 防火墙/WFP)与零管理员(WSL)各有取舍,按部署场景选 |
 | D27 | (历史)授权语义(seccomp 场景)= WSL 原生 root 重跑;bwrap 后端已删除,seccomp 拦截随之移除(§7.11) | 当时的 NNP + userns 不映射 uid0 + 基座只读 → 沙箱内真实提权物理不可行;现由 Restricted Token + PermissionGate 文本扫描承担 |
 | D28 | AI 审议与无人值守为独立任务级开关,开启时联动、事后可拆分 | 分别满足"无人监督但有把关"与"全流程无人值守"两种需求 |
 | D29 | **统一执行上下文 ExecContext**:黑盒 properties 四件套(taskEntry/taskId/workspaceRoot/configId)显式类型化为 plugin-api 接口槽位(仅主体必然具备的核心属性与端口,含 agents 活动实体注册表=主+各插件派生 agent;configId 无独立槽);三预绑定端口 `emitter()/agentFactory()/interaction()`(静态代理)经 ctx 下传;`TaskInfo` 退役;授权请求收编为 `AuthorizationRequest(ExecContext,agentId,grantKey,prompt)`;fileChanges 等插件功能槽位留 TaskRuntime;subagent 作为执行域能力插件全面中性化(零服务依赖/生命周期壳核分离;**台账后续收编 worker core `AgentLedger`——原 `SubAgentLedger` IO 自持已退役,`AgentBuilder.build()` 自动注册+发 `agent.started`,见 §7.20.1**);task 核心去插件概念(截断不删插件数据文件);审议 agent per-task 固定 id 复用会话;各横切 Context 接口(ToolContext/AdvisorContext/FileReferenceContext/ToolExecutionContext/TaskLifecycleContext)收编为 `extends ExecContext`(重复字段与 execution() 槽位删除,消费侧直读槽位、主体 ID 一律 subjectId(),§7.20.5) | 授权链与全部横切层(advisor/工具/子 agent/审议)域中性,subagent 无 task 只有 workflow 亦可复用;未来工作流实现 ExecContext 即零改动复用;20+ 处强转消失;详见 docs/design-exec-context.md 与 §7.20 |

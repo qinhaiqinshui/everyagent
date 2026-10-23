@@ -298,7 +298,7 @@ Select-String -Path "$HOME\.everyagent\logs\worker.log" -Pattern "my-tool"
 **症状**：`插件已激活` 在日志里，模型对话里从不出现你的工具。
 **定位**：
 
-1. `ToolProvider.appliesTo` 返回 false：命令类工具的惯例判据是当前沙箱后端（`ctx.sandbox() != null && "<后端id>".equals(ctx.sandbox().id())`，范例 `every-agent-plugins/sandbox-windows-mic/src/main/java/dev/everyagent/plugin/sandbox/mic/WindowsMicShellToolProvider.java:41-43`）——后端没选中你的工具就不存在，见[工具与沙箱](../backend/tools-and-sandbox.md) §1.4。
+1. `ToolProvider.appliesTo` 返回 false：命令类工具的惯例判据是当前沙箱后端（`ctx.sandbox() != null && "<后端id>".equals(ctx.sandbox().id())`，范例 `every-agent-plugins/sandbox-wsl-ubuntu/src/main/java/dev/everyagent/plugin/sandbox/wslubuntu/WslUbuntuBashToolProvider.java:48-50`）——后端没选中你的工具就不存在，见[工具与沙箱](../backend/tools-and-sandbox.md) §1.4。
 2. `createTools` 拿不到依赖静默返回空：`shellExecutor()` 为 null 时返回 `List.of()` 是对的姿势，但等于零工具（同文件 `:47-50`）。
 3. 描述质量：工具 `@Tool` 描述没说清「何时该用」，模型自然不选——描述是给模型看的接口，写「做什么 + 什么时候用」，改完重新 `mvn package` + 重启 worker。
 **修复**：逐条对照[工具与沙箱](../backend/tools-and-sandbox.md) §1.5 常见坑表（含「provider 里存 per-run 状态」「以为插件是 Spring bean」两条结构性错误）。

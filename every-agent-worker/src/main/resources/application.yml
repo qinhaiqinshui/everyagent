@@ -83,17 +83,17 @@ worker:
     active-process-limit: 32
     memory-limit-mb: -1
     cpu-hard-cap-percent: 100
-    # 沙箱类型(docs/ARCHITECTURE.md §7.10):auto | wsl-direct(=direct)| wsl-bwrap(=wsl)| windows-mic(=acl)| none。
+    # 沙箱类型(docs/ARCHITECTURE.md §7.10):auto | wsl-direct(=direct)| wsl-bwrap(=wsl)| none。
     #   auto(默认/不配)= Windows 平台默认 wsl-direct(发行版 root 完整权限、可丢弃,宿主靠
-    #     automount 关闭隔离);探测失败回退 windows-mic。非 Windows 无内核级沙箱,直接 spawn。
+    #     automount 关闭隔离);探测失败回退 DIRECT(无沙箱直跑)。非 Windows 无内核级沙箱,直接 spawn。
     #   wsl-direct = 发行版 root 直连:automount 关闭 + 手动 mount 工作区到原路径挂载点(/c/a/foo),
     #     AI 拥有发行版完整权限,apt install / 改配置 均持久;装坏由宿主重装整个发行版。
     #   wsl-bwrap = 备选更强隔离:命令经 wsl.exe 进发行版、bubblewrap 挂载命名空间(bind 白名单 + 只读基座),
-    #     探测失败回退 windows-mic(error 日志)。要求 worker 非降权(WSL 服务拒 Low-IL 调用方)。
-#    type: windows-mic
+    #     探测失败回退 DIRECT(error 日志)。要求 worker 非降权(WSL 服务拒 Low-IL 调用方)。
+    #   旧值 windows-mic/acl/mic(sandbox-windows-mic 插件已移除)→ auto 并 WARN。
     # 是否允许沙箱内命令提权(root/sudo)。默认 false。
     #   true = 全局默认放行(不再弹窗):wsl-bwrap 以 uid 0 运行(新建 user namespace,宿主侧仍非特权,
-    #     需内核允许非特权 userns);windows-mic 跳过 Restricted Token + Low IL 降权。
+    #     需内核允许非特权 userns)。
     #   false = 默认拒绝;命令含 sudo/su/doas/runas 等提权动词时,弹窗让用户授权(复用危险命令
     #     授权机制:授权后同类提权命令在所选范围内不再询问,拒绝则命令不执行、错误文本回灌模型)。
     allow-privilege-escalation: false
@@ -104,7 +104,7 @@ worker:
     #   false = 关闭 seccomp,回退文本扫描(usesPrivilege)启发式。
     intercept-privilege: true
     # 是否允许沙箱内命令访问网络。默认 true(放行:含回环与出站;wsl-bwrap 不加 --unshare-net、
-    # wsl-direct 不 unshare、direct/mic 不剥代理 env)。
+    # wsl-direct 不 unshare、DIRECT 不剥代理 env)。
     #   false 回落到 network-policy(deny-all 硬/软拒,audit-only 放行)。
     #   任务级更细粒度:保持 true;`/禁用网络` 由 wsl-ubuntu 沙箱插件自带(只有它能在发行版内
     #   unshare -n 真断网),用户对某个任务选中该命令即单独关闭本任务网络。
@@ -124,7 +124,7 @@ worker:
     #   pwsh-enabled: false     # true 时 powershell 命令经发行版内 pwsh 执行(须发行版预装)
     #   login-shell: true       # true 时 wsl-bwrap 后端 bash 命令以登录 shell(-lc)执行,自动加载 /etc/profile 与 ~/.profile(profile 里 export 的环境变量对每条命令持久生效);默认 false 保持 bash -c(环境白名单确定性)。wsl-direct 恒用 -lc,不受此开关影响。
   # 原生 git 执行(架构 §7.12):git.* RPC 由 worker 宿主原生 git argv 直传执行,
-  # 不经 wsl/mic 沙箱后端(前端按钮触发的平台受控操作)。凭证走 GIT_ASKPASS env 注入,
+  # 不经沙箱后端(前端按钮触发的平台受控操作)。凭证走 GIT_ASKPASS env 注入,
   # 本机 credential.helper / ssh-agent / ~/.ssh 由 git 自行复用。
   git:
     # git 可执行文件绝对路径;空 = 自动探测(常见安装路径 + PATH 兜底)。
