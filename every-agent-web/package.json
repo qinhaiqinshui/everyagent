@@ -49,7 +49,7 @@
     "@types/react": "^18.2.66",
     "@types/react-dom": "^18.2.22",
     "@vitejs/plugin-react": "^4.2.1",
-    "esbuild": "^0.25.12",
+    "esbuild": "^0.28.2",
     "typescript": "^5.2.2",
     "vite": "^6.4.5",
     "vitest": "^3.2.7"
