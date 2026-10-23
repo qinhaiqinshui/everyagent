@@ -91,4 +91,39 @@ class SecretPatternsTest {
         assertTrue(SecretPatterns.scrubInPlace(null).isEmpty());
         assertFalse(SecretPatterns.isSecretBearing("MY_TOKEN", "   "), "空白值不算凭据");
     }
+
+    // ---- 剔除审计去重(repeatedScrub) ----
+
+    @Test
+    void repeatedScrubReturnsFalseOnFirstAnnouncementThenTrueOnSameList() {
+        String tag = "test-first-" + System.nanoTime();
+        assertFalse(SecretPatterns.repeatedScrub(tag, List.of("codex")),
+                "首次通报不算重复(调用方打 INFO)");
+        assertTrue(SecretPatterns.repeatedScrub(tag, List.of("codex")),
+                "同名单再来 → 重复(调用方降 DEBUG)");
+        assertTrue(SecretPatterns.repeatedScrub(tag, List.of("codex")));
+    }
+
+    @Test
+    void repeatedScrubDetectsListChangeAcrossTags() {
+        String tagA = "test-a-" + System.nanoTime();
+        String tagB = "test-b-" + System.nanoTime();
+        SecretPatterns.repeatedScrub(tagA, List.of("codex"));
+        SecretPatterns.repeatedScrub(tagB, List.of("codex"));
+        assertFalse(SecretPatterns.repeatedScrub(tagA, List.of("codex", "HUB_KEY")),
+                "名单变化(新增)→ 不算重复,重新打 INFO");
+        assertFalse(SecretPatterns.repeatedScrub(tagB, List.of("HUB_KEY")),
+                "名单变化(变更)→ 不算重复");
+        assertTrue(SecretPatterns.repeatedScrub(tagA, List.of("codex", "HUB_KEY")),
+                "变化后的新名单进入稳态");
+    }
+
+    @Test
+    void repeatedScrubTreatsEmptyOrNullAsNeverRepeated() {
+        String tag = "test-empty-" + System.nanoTime();
+        SecretPatterns.repeatedScrub(tag, List.of("codex"));
+        assertFalse(SecretPatterns.repeatedScrub(tag, List.of()),
+                "空名单恒不重复(调用方本来就不打日志)");
+        assertFalse(SecretPatterns.repeatedScrub(tag, null));
+    }
 }

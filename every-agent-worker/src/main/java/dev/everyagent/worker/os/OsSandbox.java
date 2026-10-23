@@ -283,7 +283,11 @@ public final class OsSandbox implements SandboxBackend, NativeExec {
         List<String> scrubbed = dev.everyagent.plugin.api.util.SecretPatterns
                 .scrubInPlace(pb.environment());
         if (!scrubbed.isEmpty()) {
-            log.info("[os-sandbox] 子进程 env 剔除凭据变量(仅名): {}", scrubbed);
+            if (dev.everyagent.plugin.api.util.SecretPatterns.repeatedScrub("os-sandbox", scrubbed)) {
+                log.debug("[os-sandbox] 子进程 env 剔除凭据变量(仅名,同上次): {}", scrubbed);
+            } else {
+                log.info("[os-sandbox] 子进程 env 剔除凭据变量(仅名): {}", scrubbed);
+            }
         }
         pb.environment().putAll(sanitizedEnv(env, true));
         java.io.File outFile = null;
@@ -395,7 +399,11 @@ public final class OsSandbox implements SandboxBackend, NativeExec {
         List<String> scrubbed = dev.everyagent.plugin.api.util.SecretPatterns
                 .scrubInPlace(pb.environment());
         if (!scrubbed.isEmpty()) {
-            log.info("[os-sandbox] 子进程 env 剔除凭据变量(仅名): {}", scrubbed);
+            if (dev.everyagent.plugin.api.util.SecretPatterns.repeatedScrub("os-sandbox", scrubbed)) {
+                log.debug("[os-sandbox] 子进程 env 剔除凭据变量(仅名,同上次): {}", scrubbed);
+            } else {
+                log.info("[os-sandbox] 子进程 env 剔除凭据变量(仅名): {}", scrubbed);
+            }
         }
         pb.environment().putAll(sanitizedEnv(extraEnv, allowNetwork));
         try {

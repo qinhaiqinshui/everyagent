@@ -1002,12 +1002,17 @@ public final class CodexCommandExecutor {
         return merged;
     }
 
-    /** 父环境继承 + 凭据剔除（审计只打变量名，绝不打值）；同口径供 runner 复用。 */
+    /** 父环境继承 + 凭据剔除（审计只打变量名，绝不打值；名单变化才 INFO、重复降 DEBUG）；同口径供 runner 复用。 */
     static Map<String, String> inheritEnv() {
         SecretPatterns.EnvScrub scrub = SecretPatterns.scrubEnv(System.getenv());
         if (scrub.cleaned()) {
-            LOG.log(System.Logger.Level.INFO, "[exec] 沙箱 env 剔除凭据变量(仅名): {0}",
-                    scrub.removedNames());
+            if (SecretPatterns.repeatedScrub("exec-codex", scrub.removedNames())) {
+                LOG.log(System.Logger.Level.DEBUG, "[exec] 沙箱 env 剔除凭据变量(仅名,同上次): {0}",
+                        scrub.removedNames());
+            } else {
+                LOG.log(System.Logger.Level.INFO, "[exec] 沙箱 env 剔除凭据变量(仅名): {0}",
+                        scrub.removedNames());
+            }
         }
         return scrub.env();
     }

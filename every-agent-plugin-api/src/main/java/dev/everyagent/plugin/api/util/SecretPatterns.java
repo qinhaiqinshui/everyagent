@@ -40,6 +40,7 @@ import java.util.regex.Pattern;
  * {@link #isSecretName} 由<b>常驻链路</b>调用：sandbox-windows-codex（{@code CodexCommandExecutor.childEnv}、
  * {@code RunnerClient} 两处）、sandbox-windows-mic（{@code WindowsSandbox.buildEnvBlock}）、
  * worker（{@code OsSandbox} 两处 {@code ProcessBuilder}、{@code TerminalPtyFactory}）。
+ * 剔除审计的<b>去重</b>（名单变化才 INFO、重复降 DEBUG）统一走 {@link #repeatedScrub}。
  * 进程边界不该由可选扩展决定存在与否，故这些调用点<b>不放在插件里</b>。
  * {@link #maskSecrets} 同为常驻消费面（日志出口，见其 javadoc）。
  */
@@ -171,6 +172,38 @@ public final class SecretPatterns {
     /** 宿主继承环境的清理版（{@code System.getenv()} 去掉凭据后的副本）。 */
     public static Map<String, String> inheritedEnv() {
         return scrubEnv(System.getenv()).env();
+    }
+
+    /**
+     * 各调用方(tag)已通报过的剔除名单——去重审计记忆(架构 §7.10 环境闸门)。
+     *
+     * <p>宿主进程环境在 worker 生命周期内基本恒定,被剔除的名单也就恒定;此前每次
+     * 构造子进程环境(powershell/cmd/git/runner/env block)都打一条同名 INFO,
+     * 宿主 shell 里只要挂着一个命中指纹的变量(如真实事故里那个名叫 {@code codex}
+     * 的),日志就被刷成每秒数条的纯噪音。审计的价值在「闸门确实生效 + 剔了谁」,
+     * 首次通报即已完整承载,故名单变化才再打 INFO,重复由调用方降为 DEBUG。
+     *
+     * <p>key 集合有限(=子进程环境构造点个数),无泄漏;并发下两个线程同时
+     * 首次调用可能都拿到「未重复」,多打一条 INFO,无害(去重不是精确一次语义)。
+     */
+    private static final Map<String, List<String>> ANNOUNCED_SCRUBS =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
+     * 剔除审计去重:记录该调用方的剔除名单并判定是否与上次相同。
+     *
+     * @param tag         调用方标识(如 {@code "os-sandbox"}/{@code "runner"}),各构造点各自固定
+     * @param removedNames 本次被剔除的变量名(仅名,来自 {@link EnvScrub#removedNames()} 等)
+     * @return {@code true} = 与该调用方上次相同(调用方降为 DEBUG);{@code false} = 首次
+     *         或名单变化(调用方打 INFO)。名单为 null/空恒返回 {@code false}
+     */
+    public static boolean repeatedScrub(String tag, List<String> removedNames) {
+        if (removedNames == null || removedNames.isEmpty()) {
+            return false;
+        }
+        List<String> frozen = List.copyOf(removedNames);
+        List<String> prev = ANNOUNCED_SCRUBS.put(tag, frozen);
+        return prev != null && prev.equals(frozen);
     }
 
     /** 日志出口掩码占位符（4 字符——短于全部规则的最小密钥长度，掩码结果不会再命中任何规则，幂等）。 */

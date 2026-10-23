@@ -208,8 +208,13 @@ public final class RunnerClient {
                 // 不该看到宿主 shell 的 API key(§7.17 环境侧信道)
                 SecretPatterns.EnvScrub inherit = SecretPatterns.scrubEnv(System.getenv());
                 if (inherit.cleaned()) {
-                    LOG.log(System.Logger.Level.INFO, "[runner] env 剔除凭据变量(仅名): {0}",
-                            inherit.removedNames());
+                    if (SecretPatterns.repeatedScrub("runner", inherit.removedNames())) {
+                        LOG.log(System.Logger.Level.DEBUG, "[runner] env 剔除凭据变量(仅名,同上次): {0}",
+                                inherit.removedNames());
+                    } else {
+                        LOG.log(System.Logger.Level.INFO, "[runner] env 剔除凭据变量(仅名): {0}",
+                                inherit.removedNames());
+                    }
                 }
                 java.util.Map<String, String> runnerEnv =
                         new java.util.LinkedHashMap<>(inherit.env());
@@ -526,8 +531,13 @@ public final class RunnerClient {
         Files.createDirectories(tmp);
         SecretPatterns.EnvScrub inherit = SecretPatterns.scrubEnv(System.getenv());
         if (inherit.cleaned()) {
-            LOG.log(System.Logger.Level.INFO, "[runner] env 剔除凭据变量(仅名): {0}",
-                    inherit.removedNames());
+            if (SecretPatterns.repeatedScrub("runner", inherit.removedNames())) {
+                LOG.log(System.Logger.Level.DEBUG, "[runner] env 剔除凭据变量(仅名,同上次): {0}",
+                        inherit.removedNames());
+            } else {
+                LOG.log(System.Logger.Level.INFO, "[runner] env 剔除凭据变量(仅名): {0}",
+                        inherit.removedNames());
+            }
         }
         Map<String, String> env = new LinkedHashMap<>(inherit.env());
         env.put("TEMP", tmp.toString());
