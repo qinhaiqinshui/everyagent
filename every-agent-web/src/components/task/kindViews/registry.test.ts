@@ -4,7 +4,9 @@
  * 覆盖:registry 查表语义(未注册返回 undefined——兜底归分发点显式 ?? FallbackView,
  * 不埋进注册表)/重复注册覆盖/注销/空 kind 抛错;FallbackView 宽松读取
  * (title+summary+content 对象 / content 字符串 / 非对象 payload 三形态与
- * stringify 零丢失兜底,经纯函数 readFallbackTraceShape 直测);useThreadBoard
+ * stringify 零丢失兜底,经纯函数 readFallbackTraceShape 直测)与 **data 透传**(第二级
+ * trace 类型的 metadata 供体——auth.review 空卡片回归:归一吃掉了 payload.data,
+ * 插件视图拿到空 metadata 却因 stringify 兜底的 content 仍可展开);useThreadBoard
  * 缺 Provider 行为(空 items + console.warn 恰一次);插件 kind 视图接管
  * (ui.kind_views 扩展点:注册可见/插件优先于核心/dispose 回退)。
  *
@@ -17,13 +19,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import React from 'react'
 import { renderToString } from 'react-dom/server'
-import type { Disposable, KindViewComponent, PluginKindViewProps } from '@everyagent/plugin-api'
+import type { Disposable, KindViewComponent, PluginKindViewProps, TraceTypeDefinition } from '@everyagent/plugin-api'
 import type { ThreadItem } from '@/task/threadItem'
 import { pluginDispatcher } from '@/plugin/PluginDispatcher'
-import { initializeTraceTypes } from '@/plugin/traceTypeRegistry'
+import { initializeTraceTypes, registerTraceType, unregisterTraceType } from '@/plugin/traceTypeRegistry'
 import {
   FallbackView,
   getKindView,
+  readFallbackTraceData,
   readFallbackTraceShape,
   registerKindView,
   unregisterKindView,
@@ -262,6 +265,61 @@ describe('FallbackView 渲染(renderToString,node 环境)', () => {
     expect(html).not.toContain('nagent-entry__name')
     // content 存在 → 可展开(完整切换链展开态可见)。
     expect(html).toContain('aria-expanded="false"')
+  })
+})
+
+describe('FallbackView 的 data 透传(第二级 trace 类型的 metadata 供体)', () => {
+  it('readFallbackTraceData:对象 payload 的 data 原样读出;缺失/数组/非对象一律 undefined', () => {
+    expect(readFallbackTraceData({ title: 'T', data: { decision: 'ALLOW' } })).toEqual({ decision: 'ALLOW' })
+    expect(readFallbackTraceData({ title: 'T' })).toBeUndefined()
+    expect(readFallbackTraceData({ data: [1, 2] })).toBeUndefined()
+    expect(readFallbackTraceData({ data: null })).toBeUndefined()
+    expect(readFallbackTraceData('raw')).toBeUndefined()
+    expect(readFallbackTraceData(null)).toBeUndefined()
+  })
+
+  it('auth.review 式插件 trace 类型:metadata 拿到 data,摘要按结论走(不再退化为「未知」)', () => {
+    // 回归:两级分发统一化后 FallbackView 把 payload 归一成 {title,summary,content},
+    // 顺手吃掉了 data → 壳内合成的 trace.metadata 为空 → 插件判断卡渲染成空卡片
+    // (徽标「未知」、理由/置信度全缺),且 stringify 出的 content 还让该行可展开。
+    const seen: Array<Record<string, unknown> | undefined> = []
+    const def: TraceTypeDefinition = {
+      kind: 'auth.review',
+      hideTitle: true,
+      canExpand: (trace) => Boolean(trace.metadata && Object.keys(trace.metadata).length > 0),
+      getSummary: (trace) => `AI 审议：${String(trace.metadata?.decision ?? '未知')}`,
+      renderContent: (trace) => {
+        seen.push(trace.metadata)
+        return React.createElement('span', null, 'card')
+      },
+    }
+    registerTraceType(def)
+    try {
+      const html = renderToString(
+        React.createElement(FallbackView, {
+          item: itemOf('auth.review', {
+            title: 'AI 安全审议',
+            summary: 'ALLOW — 只读目录列表操作',
+            data: { decision: 'ALLOW', reason: '只读目录列表操作' },
+          }),
+          payload: {
+            title: 'AI 安全审议',
+            summary: 'ALLOW — 只读目录列表操作',
+            data: { decision: 'ALLOW', reason: '只读目录列表操作' },
+          },
+          taskId: 'task-1',
+          mainAgentId: 'main',
+        }),
+      )
+      // 收起态摘要以插件 getSummary 为准(拿到结论就不再原样透出 worker summary)。
+      expect(html).toContain('AI 审议：ALLOW')
+      expect(html).not.toContain('ALLOW — 只读目录列表操作')
+      // renderContent 在收起态也会被壳调用(展开容器按 open 挂载),据此断言 metadata 供体。
+      expect(seen).toHaveLength(1)
+      expect(seen[0]).toEqual({ decision: 'ALLOW', reason: '只读目录列表操作' })
+    } finally {
+      expect(unregisterTraceType('auth.review')).toBe(true)
+    }
   })
 })
 

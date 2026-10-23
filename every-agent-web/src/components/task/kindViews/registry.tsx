@@ -86,6 +86,25 @@ export interface FallbackTraceShape {
   content?: string
 }
 
+/**
+ * 宽松读取 payload.data(kind 专属结构化数据,对象形态才返回)。
+ *
+ * 它是第二级 trace 类型(插件 `ui.trace_types`)的唯一 metadata 供体:
+ * `TaskTraceShell` 以 `metadata: payload.data` 合成 PluginTraceRecord。FallbackView
+ * 归一时必须把它原样透传,否则插件视图拿到空 metadata(auth.review 判断卡曾因此
+ * 结论徽标退化为「未知」、摘要退回 worker 原始 summary,而 stringify 兜底的 content
+ * 又让该行仍可展开——表现为「卡片渲染了但全是空字段」)。
+ */
+export function readFallbackTraceData(payload: unknown): Record<string, unknown> | undefined {
+  if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) {
+    return undefined
+  }
+  const data = (payload as Record<string, unknown>).data
+  return data !== null && typeof data === 'object' && !Array.isArray(data)
+    ? (data as Record<string, unknown>)
+    : undefined
+}
+
 /** 判断 payload 对象是否尚有 title/summary/content 之外的字段(宽松读取未展示的信息)。 */
 function hasHiddenFields(record: Record<string, unknown>): boolean {
   for (const key of Object.keys(record)) {
@@ -138,15 +157,20 @@ export function readFallbackTraceShape(item: ThreadItem, payload: unknown): Fall
  * trace 形状;item.seq/ts/agentId/kind 原样保留,壳内按传入 kind 查第二级
  * traceTypeRegistry 取定义,如 error 的 alert 图标),两层均未注册的新 kind
  * 自动可见、内容零丢失。
+ *
+ * 归一只**补** title/summary/content,不删 `data`:data 是第二级 trace 类型(插件
+ * `ui.trace_types`,如 auth.review)的 metadata 供体,吃掉它会让插件视图渲染空卡片。
  */
 export function FallbackView({ item, payload, taskId }: KindViewProps) {
   const shape = readFallbackTraceShape(item, payload)
+  const data = readFallbackTraceData(payload)
   const normalized: ThreadItem = {
     ...item,
     payload: {
       title: shape.title,
       ...(shape.summary !== undefined ? { summary: shape.summary } : {}),
       ...(shape.content !== undefined ? { content: shape.content } : {}),
+      ...(data !== undefined ? { data } : {}),
     },
   }
   return <TaskTraceShell item={normalized} taskId={taskId} />
