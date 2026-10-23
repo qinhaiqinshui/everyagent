@@ -38,8 +38,8 @@ import java.util.regex.Pattern;
  *
  * <p><b>消费面</b>：{@link #scrubEnv} / {@link #scrubInPlace} / {@link #isSecretBearing} /
  * {@link #isSecretName} 由<b>常驻链路</b>调用：sandbox-windows-codex（{@code CodexCommandExecutor.childEnv}、
- * {@code RunnerClient} 两处）、sandbox-windows-mic（{@code WindowsSandbox.buildEnvBlock}）、
- * worker（{@code OsSandbox} 两处 {@code ProcessBuilder}、{@code TerminalPtyFactory}）。
+ * {@code RunnerClient} 两处）、worker（{@code OsSandbox} 两处 {@code ProcessBuilder}、
+ * {@code TerminalPtyFactory}；sandbox-windows-mic 的 {@code WindowsSandbox.buildEnvBlock} 已随插件移除）。
  * 剔除审计的<b>去重</b>（名单变化才 INFO、重复降 DEBUG）统一走 {@link #repeatedScrub}。
  * 进程边界不该由可选扩展决定存在与否，故这些调用点<b>不放在插件里</b>。
  * {@link #maskSecrets} 同为常驻消费面（日志出口，见其 javadoc）。
