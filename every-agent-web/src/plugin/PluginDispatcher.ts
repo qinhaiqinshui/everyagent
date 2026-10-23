@@ -12,6 +12,7 @@
 
 import type {
   Disposable,
+  KindViewComponent,
   TraceTypeDefinition,
   OutputBlockHandler,
   FileExplorerAction,
@@ -32,6 +33,7 @@ import type {
   UiFileSidebarPanelDefinition,
   UiComposerAbovePanelDefinition,
   ToolCallViewDefinition,
+  KindViewDefinition,
   UiUserMessageActionDefinition,
   TaskRunSubmitContributionProvider,
   UiRoundTailPanelDefinition,
@@ -52,6 +54,7 @@ const EXT_UI_WORKSPACE_TAB_TYPES = 'ui.workspace_tab_types'
 const EXT_UI_FILE_SIDEBAR_PANELS = 'ui.file_sidebar_panels'
 const EXT_UI_COMPOSER_ABOVE_PANEL = 'ui.composer_above_panel'
 const EXT_UI_TOOL_CALL_VIEWS = 'ui.tool_call_views'
+const EXT_UI_KIND_VIEWS = 'ui.kind_views'
 const EXT_UI_USER_MESSAGE_ACTIONS = 'ui.user_message_actions'
 const EXT_TASK_SUBMIT_CONTRIBUTIONS = 'task.submit_contributions'
 const EXT_UI_FILE_CONTENT_EDITORS = 'ui.file_content_editors'
@@ -143,6 +146,8 @@ export interface RealPluginDispatcher {
   getComposerAbovePanels: () => Promise<UiComposerAbovePanelDefinition[]>
   /** 已注册的工具调用视图接管（供 toolViews 注册表解析合并，同步）。 */
   listRegisteredToolCallViews: () => ToolCallViewDefinition[]
+  /** 已注册的 kind 视图接管（供 kindViews 注册表解析合并，同步；两级分发第一级）。 */
+  listRegisteredKindViews: () => KindViewDefinition[]
   /** 注册侧边栏项。 */
   registerSidebarItem: (def: UiSidebarItemDefinition) => Disposable
   /** 注册工作区标签类型。 */
@@ -153,6 +158,12 @@ export interface RealPluginDispatcher {
   registerComposerAbovePanel: (def: UiComposerAbovePanelDefinition) => Disposable
   /** 注册工具调用视图接管。 */
   registerToolCallView: (def: ToolCallViewDefinition) => Disposable
+  /**
+   * 注册 kind 视图接管（`ui.kind_views` 扩展点，两级分发第一级）。
+   * 按 kind 整体接管该类线程条目渲染（插件优先于核心视图，可接管任意 kind 含
+   * user.message）；dispose 注销即回退核心视图/FallbackView。空/纯空白 kind 抛错。
+   */
+  registerKindView: (kind: string, Component: KindViewComponent) => Disposable
   /** 注册用户消息动作。 */
   registerUserMessageAction: (def: UiUserMessageActionDefinition) => Disposable
   /** 同步获取插件注册的用户消息动作列表（供消息线程渲染合并）。 */
@@ -255,6 +266,8 @@ export const pluginDispatcher: RealPluginDispatcher = {
         return getRegistry<T>(extensionPoint).getAll()
       case EXT_UI_TOOL_CALL_VIEWS:
         return getRegistry<T>(extensionPoint).getAll()
+      case EXT_UI_KIND_VIEWS:
+        return getRegistry<T>(extensionPoint).getAll()
       case EXT_UI_USER_MESSAGE_ACTIONS:
         return getRegistry<T>(extensionPoint).getAll()
       case EXT_TASK_SUBMIT_CONTRIBUTIONS:
@@ -295,6 +308,9 @@ export const pluginDispatcher: RealPluginDispatcher = {
   listRegisteredToolCallViews() {
     return getRegistry<ToolCallViewDefinition>(EXT_UI_TOOL_CALL_VIEWS).getAll()
   },
+  listRegisteredKindViews() {
+    return getRegistry<KindViewDefinition>(EXT_UI_KIND_VIEWS).getAll()
+  },
 
   registerSidebarItem(def) {
     return getRegistry<UiSidebarItemDefinition>(EXT_UI_SIDEBAR_ITEMS).register('', def)
@@ -310,6 +326,13 @@ export const pluginDispatcher: RealPluginDispatcher = {
   },
   registerToolCallView(def) {
     return getRegistry<ToolCallViewDefinition>(EXT_UI_TOOL_CALL_VIEWS).register('', def)
+  },
+  registerKindView(kind, Component) {
+    // 空/纯空白 kind 抛错：与核心 kindViews/registry.registerKindView 同款显性暴露。
+    if (!kind.trim()) {
+      throw new Error('kind 视图 kind 不能为空')
+    }
+    return getRegistry<KindViewDefinition>(EXT_UI_KIND_VIEWS).register('', { kind, Component })
   },
   registerUserMessageAction(def) {
     return getRegistry<UiUserMessageActionDefinition>(EXT_UI_USER_MESSAGE_ACTIONS).register('', def)

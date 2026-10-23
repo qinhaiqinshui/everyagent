@@ -164,6 +164,25 @@ public final class SetupHelperMain {
             throw new SetupErrorReport.SetupException(
                     SetupErrorReport.HELPER_USER_CREATE_OR_UPDATE_FAILED, e.getMessage());
         }
+        // profile 一致性治理（design.md §4.3.1 #8）：账户若经历了「删除重建换 RID」，旧
+        // profile 的 hive ACL 只授权已删 SID——LOGON_WITH_PROFILE 照常加载但新账户读
+        // HKCU 全拒读（PS 5.1 启动读 GPO 策略键即崩）。属主校验+删除外来 profile，
+        // 下次登录重建干净 profile。best-effort：失败只留痕，不阻断 setup。
+        if (com.sun.jna.Platform.isWindows()) {
+            Path usersRoot = Path.of(System.getenv().getOrDefault("SystemDrive", "C:"),
+                    "Users");
+            for (String username : List.of(model.offlineUsername, model.onlineUsername)) {
+                try {
+                    ProfileDoctor.ensureAccountProfileFresh(username,
+                            SandboxAccounts.sidString(username), usersRoot,
+                            new ProfileDoctor.WindowsOps());
+                } catch (RuntimeException e) {
+                    LOG.log(System.Logger.Level.WARNING,
+                            "[profile-doctor] {0} profile 一致性治理失败(best-effort): {1}",
+                            new Object[] { username, e.toString() });
+                }
+            }
+        }
         try {
             SandboxSecrets.write(codexHome, SetupPayload.SETUP_VERSION,
                     model.offlineUsername, offlinePassword,

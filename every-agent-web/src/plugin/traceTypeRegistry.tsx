@@ -25,14 +25,26 @@ const TRACE_ICON_COMPONENTS: Record<string, React.ComponentType<AppGlyphProps>> 
   alert: AlertTriangleIcon,
 }
 
-/** 把 trace 图标字段（字符串 key）解析为可渲染节点；未知 key 回退为原始文本。 */
-export function resolveTraceIcon(icon?: string): React.ReactNode {
-  if (!icon) {
+/**
+ * 把 trace 图标字段解析为可渲染节点(双通道):
+ * - string:内置图标 key——命中渲染对应 SVG 组件,未命中的 key 原样渲染为文本
+ *   (旧数据向后兼容);
+ * - ReactNode:插件自带图标节点,直接透传渲染。
+ * 空值返回 null(不渲染图标)。
+ */
+export function resolveTraceIcon(icon?: string | React.ReactNode): React.ReactNode {
+  if (icon == null || icon === '') {
     return null
+  }
+  if (typeof icon !== 'string') {
+    return icon
   }
   const Glyph = TRACE_ICON_COMPONENTS[icon]
   if (Glyph) {
-    return <Glyph size={14} />
+    // 13px = 工具行折叠行图标尺寸(WrenchIcon/TerminalIcon size=13):trace 图标与工具图标
+    // 同列同尺寸(样式侧图标槽宽亦按 13px 算,见 chatPanel.css
+    // `.nagent-trace-shell .nagent-entry__icon`)。
+    return <Glyph size={13} />
   }
   return icon
 }
@@ -62,10 +74,10 @@ function renderFallbackContent(trace: {
 }): React.ReactNode {
   const text = stringifyTraceContent(trace.content).trim()
   if (!text) {
-    return <span className="nagent-trace-shell__empty">（空追踪）</span>
+    return <span className="nagent-entry__empty">（空追踪）</span>
   }
   return (
-    <pre className="nagent-trace-shell__pre">
+    <pre className="nagent-entry__pre">
       {text}
     </pre>
   )
@@ -109,11 +121,19 @@ export function getTraceType(kind: string): TraceTypeDefinition {
   }
 }
 
-/** 注册核心 trace 类型。 */
+/**
+ * 注册核心 trace 类型(注册键 = wire kind,与落盘/线程 kind 一致——点号形态)。
+ *
+ * 历史死键 system_notice/model_switch/task_duration/request_retry 已删:下划线
+ * 键从未命中(真键是点号);任务耗时已不再发 trace(worker 改为回填 rounds.jsonl,
+ * 见 WorkerIntegrationTest「耗时不再发 task_duration trace」)。历史数据里若仍有
+ * 旧 kind 行,FallbackView 兜底渲染,内容零丢失。
+ */
 export function initializeTraceTypes(): void {
-  // task_duration = 任务耗时(worker task.trace 事件);request_retry = 重试生命周期。
-  const coreKinds = ['system_notice', 'model_switch', 'task_duration']
-  for (const kind of coreKinds) {
+  // 默认定义(getSummary 派生 + getIcon trace.icon 透传)的注册集;error/retry 另有
+  // 差异项(error 缺省 alert 图标;retry 隐藏与 summary 语义重复的固定 title)。
+  const defaultKinds = ['cancelled', 'model.switch', 'context.compression', 'system.notice']
+  for (const kind of defaultKinds) {
     registerTraceType({
       kind,
       renderContent: renderFallbackContent,
@@ -121,17 +141,19 @@ export function initializeTraceTypes(): void {
       getIcon: (trace) => trace.icon,
     })
   }
-  // run_error = 任务/子任务运行错误(worker error 事件);错误色调 + 缺省三角警示图标。
+  // error = 任务/子任务运行错误(worker error 事件;ErrorPayload {title,summary?,content?}
+  // 形状兼容):缺省三角警示图标(alert 内置 key);无 tone——视觉仅保留图标标识。
   registerTraceType({
-    kind: 'run_error',
+    kind: 'error',
     renderContent: renderFallbackContent,
     getSummary: (trace) => trace.summary?.trim() || stringifyTraceContent(trace.content),
     getIcon: (trace) => trace.icon ?? 'alert',
-    tone: 'error',
   })
-  // request_retry:title 固定为「请求重试/已恢复/失败」,与 summary 语义重复,收起态只展示 summary。
+  // retry(点号,wire 键) = 重试生命周期(empty-response-retry/transient-error-retry
+  // 插件发射):title 固定为「请求重试/已恢复/失败」类短语,与 summary 语义重复,
+  // 收起态只展示 summary。
   registerTraceType({
-    kind: 'request_retry',
+    kind: 'retry',
     renderContent: renderFallbackContent,
     getSummary: (trace) => trace.summary?.trim() || stringifyTraceContent(trace.content),
     getIcon: (trace) => trace.icon,
@@ -145,7 +167,7 @@ export function initializeTraceTypes(): void {
     kind: 'model.failover',
     renderContent: (trace) => {
       const text = stringifyTraceContent(trace.content).trim() || trace.summary?.trim() || ''
-      return <pre className="nagent-trace-shell__pre">{text}</pre>
+      return <pre className="nagent-entry__pre">{text}</pre>
     },
     getSummary: (trace) => trace.summary?.trim() || stringifyTraceContent(trace.content),
     getIcon: (trace) => trace.icon,

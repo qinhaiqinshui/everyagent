@@ -28,7 +28,7 @@ import java.util.concurrent.TimeoutException;
  * <p>职责：作为 DIRECT 默认沙箱实现 {@link SandboxBackend}（grant/revoke no-op、
  * 翻译恒等），以及提供通用宿主进程执行服务（{@link #spawnNative}）。
  *
- * <p>沙箱后端（codex / windows-mic / wsl-ubuntu）由独立插件通过
+ * <p>沙箱后端（codex / wsl-ubuntu）由独立插件通过
  * {@link SandboxProviderRegistry} 注册;本类实现 SPI 接口作为 DIRECT 默认行为,
  * 并在解析到 SPI 后端时把 {@code id()/grant()/revoke()/toSandbox()/toHost()}
  * <strong>转发</strong>给它。
@@ -187,11 +187,12 @@ public final class OsSandbox implements SandboxBackend, NativeExec {
     }
 
     /**
-     * backend 值归一:{@code auto}(默认)| {@code wsl-ubuntu} |
-     * {@code windows-mic} | {@code none};
+     * backend 值归一:{@code auto}(默认)| {@code wsl-ubuntu} | {@code none};
      * 旧值 {@code wsl-direct} → {@code wsl-ubuntu}（静默兼容）;
      * 旧值 {@code wsl-bwrap}/{@code bwrap}/{@code wsl} → {@code auto} 并 WARN;
-     * 别名 {@code acl}→windows-mic、{@code direct}→wsl-ubuntu;
+     * 旧值 {@code windows-mic}/{@code acl}/{@code mic}(sandbox-windows-mic 插件已移除)
+     * → {@code auto} 并 WARN;
+     * 别名 {@code direct}→wsl-ubuntu;
      * 未知/空值 → auto。
      */
     static String normalizeBackend(String raw) {
@@ -202,7 +203,10 @@ public final class OsSandbox implements SandboxBackend, NativeExec {
                 log.warn("[sandbox] 旧后端类型 {} 已废弃,归一为 auto", s);
                 yield "auto";
             }
-            case "windows-mic", "acl", "mic" -> "windows-mic";
+            case "windows-mic", "acl", "mic" -> {
+                log.warn("[sandbox] 旧后端类型 {} 已废弃(sandbox-windows-mic 插件已移除),归一为 auto", s);
+                yield "auto";
+            }
             case "none" -> "none";
             default -> "auto";
         };
@@ -279,7 +283,11 @@ public final class OsSandbox implements SandboxBackend, NativeExec {
         List<String> scrubbed = dev.everyagent.plugin.api.util.SecretPatterns
                 .scrubInPlace(pb.environment());
         if (!scrubbed.isEmpty()) {
-            log.info("[os-sandbox] 子进程 env 剔除凭据变量(仅名): {}", scrubbed);
+            if (dev.everyagent.plugin.api.util.SecretPatterns.repeatedScrub("os-sandbox", scrubbed)) {
+                log.debug("[os-sandbox] 子进程 env 剔除凭据变量(仅名,同上次): {}", scrubbed);
+            } else {
+                log.info("[os-sandbox] 子进程 env 剔除凭据变量(仅名): {}", scrubbed);
+            }
         }
         pb.environment().putAll(sanitizedEnv(env, true));
         java.io.File outFile = null;
@@ -391,7 +399,11 @@ public final class OsSandbox implements SandboxBackend, NativeExec {
         List<String> scrubbed = dev.everyagent.plugin.api.util.SecretPatterns
                 .scrubInPlace(pb.environment());
         if (!scrubbed.isEmpty()) {
-            log.info("[os-sandbox] 子进程 env 剔除凭据变量(仅名): {}", scrubbed);
+            if (dev.everyagent.plugin.api.util.SecretPatterns.repeatedScrub("os-sandbox", scrubbed)) {
+                log.debug("[os-sandbox] 子进程 env 剔除凭据变量(仅名,同上次): {}", scrubbed);
+            } else {
+                log.info("[os-sandbox] 子进程 env 剔除凭据变量(仅名): {}", scrubbed);
+            }
         }
         pb.environment().putAll(sanitizedEnv(extraEnv, allowNetwork));
         try {

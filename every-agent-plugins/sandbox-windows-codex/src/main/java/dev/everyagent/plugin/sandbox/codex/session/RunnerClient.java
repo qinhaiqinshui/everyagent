@@ -33,8 +33,9 @@ import java.util.Map;
  * <p>{@link CreateProcessWithLogonW}：账户=沙箱用户名、域 {@code "."}、密码 =
  * {@link SandboxSecrets#readPassword} 解出的明文（JNA UNICODE_OPTIONS 把 String/WString
  * 直接按 UTF-16LE 编组，全程不经平台默认 charset）；旗标
- * CREATE_NO_WINDOW|CREATE_UNICODE_ENVIRONMENT、STARTF_FORCEOFFFEEDBACK、不传
- * LOGON_WITH_PROFILE（无 execution alias，免建 profile）；runner 的 TEMP/TMP 显式指到
+ * CREATE_NO_WINDOW|CREATE_UNICODE_ENVIRONMENT|LOGON_WITH_PROFILE（真 profile 常态供给
+ * ——沙箱账户有可用的 HKCU/USERPROFILE；profile 一致性治理见 design.md §4.3.1 #8 与
+ * setup 的 ProfileDoctor）、STARTF_FORCEOFFFEEDBACK；runner 的 TEMP/TMP 显式指到
  * {@code <codexHome>/.sandbox/tmp}；spawn 前后 SetErrorMode(0x3) 保存恢复。
  *
  * <p>失败分类（对齐 runner_client.rs::retry_runner_spawn_once /
@@ -207,8 +208,13 @@ public final class RunnerClient {
                 // 不该看到宿主 shell 的 API key(§7.17 环境侧信道)
                 SecretPatterns.EnvScrub inherit = SecretPatterns.scrubEnv(System.getenv());
                 if (inherit.cleaned()) {
-                    LOG.log(System.Logger.Level.INFO, "[runner] env 剔除凭据变量(仅名): {0}",
-                            inherit.removedNames());
+                    if (SecretPatterns.repeatedScrub("runner", inherit.removedNames())) {
+                        LOG.log(System.Logger.Level.DEBUG, "[runner] env 剔除凭据变量(仅名,同上次): {0}",
+                                inherit.removedNames());
+                    } else {
+                        LOG.log(System.Logger.Level.INFO, "[runner] env 剔除凭据变量(仅名): {0}",
+                                inherit.removedNames());
+                    }
                 }
                 java.util.Map<String, String> runnerEnv =
                         new java.util.LinkedHashMap<>(inherit.env());
@@ -525,8 +531,13 @@ public final class RunnerClient {
         Files.createDirectories(tmp);
         SecretPatterns.EnvScrub inherit = SecretPatterns.scrubEnv(System.getenv());
         if (inherit.cleaned()) {
-            LOG.log(System.Logger.Level.INFO, "[runner] env 剔除凭据变量(仅名): {0}",
-                    inherit.removedNames());
+            if (SecretPatterns.repeatedScrub("runner", inherit.removedNames())) {
+                LOG.log(System.Logger.Level.DEBUG, "[runner] env 剔除凭据变量(仅名,同上次): {0}",
+                        inherit.removedNames());
+            } else {
+                LOG.log(System.Logger.Level.INFO, "[runner] env 剔除凭据变量(仅名): {0}",
+                        inherit.removedNames());
+            }
         }
         Map<String, String> env = new LinkedHashMap<>(inherit.env());
         env.put("TEMP", tmp.toString());

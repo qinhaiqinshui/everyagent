@@ -24,8 +24,9 @@ import java.util.Objects;
  */
 public final class SetupPayload {
 
-    /** 协议版本（对齐 codex SETUP_VERSION=5；marker/secrets/payload 三处共用闸门值）。 */
-    public static final int SETUP_VERSION = 5;
+    /** 协议版本（对齐 codex SETUP_VERSION=5 起步；6 = profile 一致性治理入 FULL setup，
+     * marker/secrets/payload 三处共用闸门值——存量机器靠版本失配自动重放全量 setup）。 */
+    public static final int SETUP_VERSION = 6;
 
     /** setup 模式（对齐 SetupMode 的取用子集 + 自有 Remove）。 */
     public enum Mode {

@@ -27,6 +27,21 @@
   color: var(--accent-green);
 }
 
+/* 折叠行三态图标着色（index.ts 的 getIcon 经 className 通道挂类，见 AuthReviewGlyphs）：
+   与判断卡徽标同一套语义色（allow 绿 / deny 红 / escalate 琥珀），色值全走宿主 token，
+   明暗主题自动适配；未挂类的图标不着色（继承宿主 trace 图标色）。 */
+.auth-review-glyph--allow {
+  color: var(--accent-green);
+}
+
+.auth-review-glyph--deny {
+  color: var(--accent-red);
+}
+
+.auth-review-glyph--escalate {
+  color: var(--accent-amber);
+}
+
 .auth-review-card__badge--deny {
   background: var(--accent-red-dim);
   color: var(--accent-red);

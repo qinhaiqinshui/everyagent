@@ -186,7 +186,14 @@ public sealed interface IpcMessage {
     enum ErrorStage {
         READ_SPAWN_REQUEST("read_spawn_request"),
         SPAWN_CHILD("spawn_child"),
-        WRITE_SPAWN_READY("write_spawn_ready");
+        WRITE_SPAWN_READY("write_spawn_ready"),
+        /**
+         * HKCU 健康自检失败（本插件扩展）：runner 以沙箱账户登录后发现
+         * {@code RegOpenKeyEx(HKEY_CURRENT_USER, "Software", KEY_READ)} 被拒——典型根因是
+         * 账户被删重建换 RID 后残留旧 profile（hive ACL 只授权已删旧 SID）。worker 侧对该
+         * stage 触发强制重 setup（含 profile 一致性治理）后原地重试命令（design.md §4.3.1 #8）。
+         */
+        HKCU_PROFILE_CHECK("hkcu_profile_check");
 
         private final String wireName;
 

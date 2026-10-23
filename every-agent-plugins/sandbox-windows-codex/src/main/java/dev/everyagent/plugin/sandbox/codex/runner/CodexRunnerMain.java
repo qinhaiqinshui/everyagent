@@ -215,6 +215,24 @@ public final class CodexRunnerMain {
             });
         }
         Object writeLock = new Object(); // output 读线程与主线程共用 -out 管写端
+        // HKCU 健康自检（design.md §4.3.1 #8）：账户 profile 失真（账户重建换 RID 后旧
+        // hive 顶包）时新账户读 HKCU 全拒读——PS 5.1 启动即崩、其余程序静默。此处以
+        // 账户令牌显式探测一次，把隐形损坏变成可自愈的 error 帧（worker 触发强制重
+        // setup + profile 重建后原地重试命令）。单次注册表读，不在任何启动预算路径上。
+        int hkcu = HkcuHealth.probeSoftwareKeyRead();
+        if (hkcu != 0) {
+            System.err.println("[codex-runner] HKCU health check FAILED (error " + hkcu
+                    + ") — sandbox account profile is stale/foreign; reporting for self-heal");
+            System.err.flush();
+            sendError(out, writeLock, IpcMessage.ErrorStage.HKCU_PROFILE_CHECK, hkcu,
+                    "HKCU unreadable (error " + hkcu + "): sandbox account profile"
+                            + " is stale/foreign (account recreated with new SID?);"
+                            + " re-setup with profile rebuild will heal");
+            closeQuietly(in);
+            closeQuietly(out);
+            return 1;
+        }
+        stage("hkcu health ok");
         try {
             // 池化多命令会话：单一读线程终身持有 -in 管道做帧分发（消除主线程/输入线程
             // 争读同一管道的竞态），主线程串行执行命令（spawn_request → … → exit 后回到

@@ -107,9 +107,18 @@ public class PermissionGate {
         if (anchor == null) {
             return; // 连盘符根都不存在,交给 Sandbox/IO 层报错
         }
-        Path unit = PathSupport.grantUnitOf(norm, anchor); // 授权单元(判定与文案同源)
-        Path rootAnchor = PathSupport.grantRootOf(anchor); // 链节点判定/沙箱可达根:最深已存在目录
-        Path real = rootAnchor.toRealPath();
+        Path unit;
+        Path rootAnchor;
+        Path real;
+        try {
+            unit = PathSupport.grantUnitOf(norm, anchor); // 授权单元(判定与文案同源)
+            rootAnchor = PathSupport.grantRootOf(anchor); // 链节点判定/沙箱可达根:最深已存在目录
+            real = rootAnchor.toRealPath();
+        } catch (java.nio.file.AccessDeniedException e) {
+            // toRealPath 拒绝的裸路径 message 不可读(§7.8 可读化):转 PermissionDeniedException
+            // 回灌模型,明确指向「路径/安全上下文不可访问」而非「文件不存在」
+            throw new PermissionDeniedException(PathSupport.accessDeniedHint(norm));
+        }
         Path lexical = rootAnchor.normalize();
         List<Path> roots = lexical.equals(real) ? List.of(real) : List.of(real, lexical);
         // 下发给沙箱的范围(§7.8 P5 不放大):授权单元确实存在时可按请求粒度落地

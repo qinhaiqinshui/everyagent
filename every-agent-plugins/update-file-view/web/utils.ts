@@ -373,7 +373,7 @@ export function toolDurationTint(ms: number | undefined): number {
 }
 
 /** 详情 → 耗时内联样式:把 tint 百分比写成 `--tool-dur-tint` 自定义属性,
- *  颜色插值留在宿主样式层(.nagent-tool__duration),插件只喂数值。 */
+ *  颜色插值留在宿主样式层(.nagent-entry__duration),插件只喂数值。 */
 export function toolDurationTintStyle(detail: { durationMs?: number }): Record<string, string> {
   return { '--tool-dur-tint': `${toolDurationTint(detail.durationMs)}%` }
 }

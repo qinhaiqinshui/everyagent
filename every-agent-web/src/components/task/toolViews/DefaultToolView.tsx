@@ -5,12 +5,16 @@
  * 展开态：单独显示工具名 + 参数块 + 结果块，参数与结果均以 `字段名: 字段值` 平铺，
  *         不再用 JSON.stringify 包裹，去掉结构化 JSON 的多余花括号与双引号。
  * 任何未注册专用美化视图的工具都走这里，保证"无扩展点则显示默认样子"。
+ *
+ * 折叠行骨架(折叠按钮/chevron/展开容器/is-open/拖选保护)由共享壳 EntryShell 承担
+ * (步骤 5 迁移,视觉零变化;工具行与 trace 壳的行族差异经 chatPanel.css 的
+ * .nagent-tool 作用域覆盖表达;参数展平/截断等域逻辑留在本文件)。
  */
 
-import React from 'react'
-import { WrenchIcon, ChevronDownIcon, ChevronRightIcon } from '@/components/shared/AppGlyphs'
+import { WrenchIcon } from '@/components/shared/AppGlyphs'
 import JsonBlock from '@/components/shared/JsonBlock'
-import { hasActiveTextSelection, toolStateClass, toolDurationText, toolDurationTintStyle } from './helpers'
+import { EntryShell } from '@/components/task/entryViews/EntryShell'
+import { toolStateClass, toolDurationText, toolDurationTintStyle } from './helpers'
 import type { AggregatedToolDetail, ToolViewProps } from './types'
 
 function formatPrimitive(v: unknown): string {
@@ -88,32 +92,18 @@ function DefaultEntry({ detail }: { detail: AggregatedToolDetail }) {
 
   const stateClass = toolStateClass(detail)
   const durationText = toolDurationText(detail)
-  const [open, setOpen] = React.useState(false)
 
   return (
-    <div className={`nagent-tool nagent-tool--call${open ? ' is-open' : ''}`}>
-      <button
-        type="button"
-        className="nagent-tool__summary"
-        aria-expanded={open}
-        onClick={() => {
-          // 拖选参数文本（选区非空）时不切换折叠，保证参数可选中复制。
-          if (hasActiveTextSelection()) return
-          setOpen((value) => !value)
-        }}
-      >
-        <WrenchIcon size={13} className={`nagent-tool__icon${stateClass ? ` ${stateClass}` : ''}`} />
-        {durationText ? <span className="nagent-tool__duration" style={toolDurationTintStyle(detail)}>{durationText}</span> : null}
-        <span className="nagent-tool__name">{detail.toolName || '工具调用'}</span>
-        <span className="nagent-tool__inline-preview">{inlinePreview}</span>
-        {open ? (
-          <ChevronDownIcon size={13} className="nagent-tool__chevron" />
-        ) : (
-          <ChevronRightIcon size={13} className="nagent-tool__chevron" />
-        )}
-      </button>
-      {open ? (
-        <div className="nagent-tool__detail">
+    <EntryShell
+      className="nagent-tool nagent-tool--call"
+      expandable
+      icon={<WrenchIcon size={13} className={`nagent-tool__icon${stateClass ? ` ${stateClass}` : ''}`} />}
+      duration={durationText || undefined}
+      durationStyle={durationText ? toolDurationTintStyle(detail) : undefined}
+      name={detail.toolName || '工具调用'}
+      summary={<span className="nagent-tool__inline-preview">{inlinePreview}</span>}
+    >
+      <div className="nagent-tool__detail">
           <div className="nagent-tool__result-item">
             <div className="nagent-tool__result-item-head">
               <WrenchIcon size={12} className={`nagent-tool__icon${stateClass ? ` ${stateClass}` : ''}`} />
@@ -151,8 +141,7 @@ function DefaultEntry({ detail }: { detail: AggregatedToolDetail }) {
             </div>
           </div>
         </div>
-      ) : null}
-    </div>
+    </EntryShell>
   )
 }
 

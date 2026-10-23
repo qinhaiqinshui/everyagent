@@ -232,6 +232,9 @@ public final class CodexCommandExecutor {
         LOG.log(System.Logger.Level.WARNING,
                 "[exec] codex 沙箱账户/凭据失配({0}),自动重新 setup 重建后重试一次",
                 messageOf(damage));
+        // 先作废池中 runner：终止其登录会话才能卸载 profile hive——重 setup 的
+        // ProfileDoctor.DeleteProfileW 才不会撞在用（含 HKCU 自愈路径,design.md §4.3.1 #8）
+        RunnerPools.invalidateAll(options.codexHome());
         try {
             reprovisioner.reprovision(manager);
         } catch (RuntimeException setupFailure) {
@@ -243,7 +246,7 @@ public final class CodexCommandExecutor {
                     + "(未提权时修复需在 UAC 弹窗中同意,拒绝后可重发命令再次触发自愈)";
         }
         // 池中既有 runner 与旧凭据/旧账户代际绑定（其受限令牌自旧登录会话派生）：
-        // 全部作废，重试命令按新凭据重建（design.md §4.3.1 自愈矩阵的池化配套）。
+        // 上方已提前作废；此处兜底再作废一次（防 reprovision 过程中有新 runner 入池）。
         RunnerPools.invalidateAll(options.codexHome());
         try {
             SessionRun run = runInSession(command, options);
@@ -271,6 +274,9 @@ public final class CodexCommandExecutor {
     String healSetupDamage(CodexSandboxOptions options, String reason) {
         LOG.log(System.Logger.Level.WARNING,
                 "[exec] codex 沙箱就绪态受损({0}),自动重新 setup...", reason);
+        // 先作废池中 runner：终止其登录会话才能卸载 profile hive——重 setup 的
+        // ProfileDoctor.DeleteProfileW 才不会撞在用（design.md §4.3.1 #8）
+        RunnerPools.invalidateAll(options.codexHome());
         try {
             reprovisioner.reprovision(manager);
         } catch (RuntimeException setupFailure) {
@@ -283,12 +289,13 @@ public final class CodexCommandExecutor {
                     + "或重新启动 worker]";
         }
         // 自愈链路配套：重 setup 可能轮换凭据/重建账户，池中 runner 一律作废重建
+        //（上方已提前作废；此处兜底再作废一次,防 reprovision 过程中有新 runner 入池）
         RunnerPools.invalidateAll(options.codexHome());
         return null;
     }
 
     /**
-     * 账户·凭据类可自愈失败判定（cause 链遍历，三类信号任一命中即触发重 setup 自愈，
+     * 账户·凭据类可自愈失败判定（cause 链遍历,四类信号任一命中即触发重 setup 自愈,
      * 与 {@link RunnerClient#isHealableAccountFailureCode} 共用同一张码表）：
      * ① spawn 侧 {@link RunnerClient.CredentialMismatchException}（CreateProcessWithLogonW
      *    1317/1332/1326 等），或 runner error 帧带回的凭据类 windows_error_code
@@ -296,7 +303,10 @@ public final class CodexCommandExecutor {
      * ② {@code Win32Exception} 携可愈码——账户/组被删后 {@code LookupAccountName} 失败
      *    （1332/1317，preflight 与 runnerConfigFactory 的 {@code sidString} 处抛出）；
      * ③ {@link SandboxSecrets.CredentialsFileException}——凭据文件态失真
-     *    （丢失/损坏/版本失配/DPAPI 解密失败）。
+     *    （丢失/损坏/版本失配/DPAPI 解密失败）；
+     * ④ runner error 帧 stage=hkcu_profile_check——账户 profile 失真（HKCU 拒读）：
+     *    账户重建换 RID 后旧 profile 顶包,新账户读 HKCU 全拒（PS 5.1 启动读 GPO 策略
+     *    键即崩）——按 stage 而非错误码判定（5=ACCESS_DENIED 过于通用,不能进全局码表）。
      */
     static boolean needsAccountHealing(Throwable e) {
         int depth = 0;
@@ -306,6 +316,10 @@ public final class CodexCommandExecutor {
                 return true;
             }
             if (t instanceof CodexSandboxSession.RunnerStartupException startup) {
+                if (startup.error().stage()
+                        == dev.everyagent.plugin.sandbox.codex.runner.IpcMessage.ErrorStage.HKCU_PROFILE_CHECK) {
+                    return true;
+                }
                 Integer code = startup.error().windowsErrorCode();
                 if (code != null && RunnerClient.isHealableAccountFailureCode(code)) {
                     return true;
@@ -988,12 +1002,17 @@ public final class CodexCommandExecutor {
         return merged;
     }
 
-    /** 父环境继承 + 凭据剔除（审计只打变量名，绝不打值）；同口径供 runner 复用。 */
+    /** 父环境继承 + 凭据剔除（审计只打变量名，绝不打值；名单变化才 INFO、重复降 DEBUG）；同口径供 runner 复用。 */
     static Map<String, String> inheritEnv() {
         SecretPatterns.EnvScrub scrub = SecretPatterns.scrubEnv(System.getenv());
         if (scrub.cleaned()) {
-            LOG.log(System.Logger.Level.INFO, "[exec] 沙箱 env 剔除凭据变量(仅名): {0}",
-                    scrub.removedNames());
+            if (SecretPatterns.repeatedScrub("exec-codex", scrub.removedNames())) {
+                LOG.log(System.Logger.Level.DEBUG, "[exec] 沙箱 env 剔除凭据变量(仅名,同上次): {0}",
+                        scrub.removedNames());
+            } else {
+                LOG.log(System.Logger.Level.INFO, "[exec] 沙箱 env 剔除凭据变量(仅名): {0}",
+                        scrub.removedNames());
+            }
         }
         return scrub.env();
     }

@@ -221,7 +221,7 @@ CSS 同走换算路径：esbuild 把样式抽到与入口同名的 `.css`，宿�
 两个坑：
 
 - **外部插件同样有 `enabled` 语义**：`ExternalPluginScanner` 与内置同款判定（缺省视为 true），`enabled=false` 整目录跳过、不加载——「装上但默认禁用」直接写它即可；用户运行期自主关停仍走 `.disabled-plugins`（或把目录移走）。
-- **为什么 `enabled` 检查要在 `target/` 判定之前做**：源码注释解释得很直白——避免「已构建但没清理的 `target/` 残留导致禁用插件被误加载」（`BuiltInPluginScanner.java:26-28`、`:76-78`）。实测仓内有两个内置插件正是这样关掉的：`every-agent-plugins/sandbox-windows-mic/plugin.json` 与 `every-agent-plugins/sandbox-wsl-ubuntu/plugin.json` 均 `"enabled": false`，且两者的 `target/` 都还在。
+- **为什么 `enabled` 检查要在 `target/` 判定之前做**：源码注释解释得很直白——避免「已构建但没清理的 `target/` 残留导致禁用插件被误加载」（`BuiltInPluginScanner.java:26-28`、`:76-78`）。实测仓内有内置插件正是这样关掉的：`every-agent-plugins/sandbox-wsl-ubuntu/plugin.json` 写 `"enabled": false`，且其 `target/` 还在。
 - 缺省即 `true`；**解析失败也算 `true`**（`isEnabled` 的 `catch (Exception)` 宽容分支，`BuiltInPluginScanner.java:117-123`）。
 
 两种机制的更细对比（含插件私有数据的合法存放）见 [持久化与插件私有状态](backend/persistence-and-state.md)。

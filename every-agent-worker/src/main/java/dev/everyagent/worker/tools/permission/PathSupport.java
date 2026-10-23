@@ -88,6 +88,26 @@ public final class PathSupport {
         return "p::" + op.name().toLowerCase() + "::" + real;
     }
 
+    /**
+     * {@code toRealPath} 链访问拒绝的可读提示(单点文案;架构 §7.8「路径解析异常的可读化」)。
+     * {@link java.nio.file.AccessDeniedException} 原生 message 是裸路径(无原因无类型),
+     * 直接回灌模型会误导排查(2026-10-23 事故中被长期误判为文件不存在)。
+     */
+    public static String accessDeniedHint(Path p) {
+        return "路径规范化被拒: " + p
+                + "(读取该路径或其所在目录的安全上下文失败;常见原因:安全软件拦截或该路径 ACL 损坏;"
+                + "请确认路径可访问后重试,或在命令中改用其它路径形态)";
+    }
+
+    /** deny 文案形态({@link #accessDeniedHint} 的命令链前缀版)。 */
+    public static String accessDeniedHint(String file) {
+        if (file == null || file.isBlank()) {
+            return "授权检查失败: 路径规范化被拒(目标路径不可得;常见原因:安全软件拦截或该路径 ACL 损坏;"
+                    + "请确认命令引用的路径可访问后重试)";
+        }
+        return "授权检查失败: " + accessDeniedHint(Path.of(file));
+    }
+
     public static String verbKey(String verb) {
         return "c::" + verb;
     }

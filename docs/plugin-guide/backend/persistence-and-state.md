@@ -172,7 +172,7 @@ plugin.json 的 contributes.config.*.default
 | 对外部插件是否生效 | ✅ 生效（扫描期整目录跳过，与内置同语义） | ✅ 生效 |
 | 当前进程内立即生效？ | ❌（配置是启动期读的） | ❌（已激活的贡献留在注册表里，`PluginStateStore.java:29` javadoc 自证） |
 | 恢复方式 | 改回 plugin.json + 重启 | `plugin.enable` RPC（或手删文件行）+ 重启 |
-| 适合场景 | 随分发包声明「默认不启用」（内置 sandbox-windows-mic、sandbox-wsl-ubuntu 的 `enabled:false` 先例；外部插件同样支持） | 用户运行期自主关停某插件 |
+| 适合场景 | 随分发包声明「默认不启用」（内置 sandbox-wsl-ubuntu 等的 `enabled:false` 先例；外部插件同样支持） | 用户运行期自主关停某插件 |
 
 **均须重启 worker 才真正生效**：禁用对当前进程不回收任何已注册贡献（deactivate 只在 worker 优雅关闭时调用，§5.1）；启用同理——本轮进程里它从未被 activate，重启才会走加载链。
 

@@ -20,17 +20,23 @@
  * 就是相对路径、盘符路径就是盘符路径），不得把 businessPath 当展示文本——businessPath
  * 是统一加前导 `/` 的内部坐标（工作区外绝对路径会变成 `/C:/Users/...`），只用于
  * 网关探测与 openGlobalFileTab，直接展示会凭空空出一个 `/` 前缀。
+ *
+ * 折叠行骨架(折叠按钮/chevron/展开容器/is-open/拖选保护)由共享壳 EntryShell 承担
+ * (步骤 5 迁移,视觉零变化;工具行与 trace 壳的行族差异经 chatPanel.css 的
+ * .nagent-tool 作用域覆盖表达);展开态 result-item-head(图标+工具名+路径 chip)
+ * 不在壳职责内,连同 detail 域类原样保留。
  */
 
 import React from 'react'
-import { WrenchIcon, ChevronDownIcon, ChevronRightIcon } from '@/components/shared/AppGlyphs'
+import { WrenchIcon } from '@/components/shared/AppGlyphs'
 import { useWorkspaceShell } from '@/components/app/WorkspaceShellContext'
 import { useAppUi } from '@/components/app/AppUiContext'
 import { machinePathToBusiness } from '@/platform/fs/pathUtils'
 import { workspaceGateway } from '@/platform/fs/workspaceGateway'
 import { workspaceRegistry } from '@/hub/workspaceRegistry'
 import { useTaskWorkspaceRoot } from '../TaskWorkspaceContext'
-import { extractFileName, hasActiveTextSelection, toolStateClass, toolDurationText, toolDurationTintStyle } from './helpers'
+import { EntryShell } from '@/components/task/entryViews/EntryShell'
+import { extractFileName, toolStateClass, toolDurationText, toolDurationTintStyle } from './helpers'
 import type { AggregatedToolDetail } from './types'
 
 /** content 字段始终排在参数列表最后，避免开头被巨量正文占据。 */
@@ -90,7 +96,6 @@ export function FileToolEntry({ detail, inlineExtras }: FileToolEntryProps) {
   const argLines = flattenArgs(args)
   const stateClass = toolStateClass(detail)
   const durationText = toolDurationText(detail)
-  const [open, setOpen] = React.useState(false)
 
   /**
    * 查找文件实际所属的工作区根。任务工作区根不一定包含该文件（AI 可能经授权
@@ -134,20 +139,14 @@ export function FileToolEntry({ detail, inlineExtras }: FileToolEntryProps) {
   const canOpen = Boolean(businessPath && fallbackWorkspaceRoot && openGlobalFileTab)
 
   return (
-    <div className={`nagent-tool nagent-tool--filewrite${open ? ' is-open' : ''}`}>
-      <button
-        type="button"
-        className="nagent-tool__summary"
-        aria-expanded={open}
-        onClick={() => {
-          // 拖选参数文本（选区非空）时不切换折叠，保证参数可选中复制。
-          if (hasActiveTextSelection()) return
-          setOpen((value) => !value)
-        }}
-      >
-        <WrenchIcon size={13} className={`nagent-tool__icon${stateClass ? ` ${stateClass}` : ''}`} />
-        {durationText ? <span className="nagent-tool__duration" style={toolDurationTintStyle(detail)}>{durationText}</span> : null}
-        <span className="nagent-tool__name">{detail.toolName || '文件工具'}</span>
+    <EntryShell
+      className="nagent-tool nagent-tool--filewrite"
+      expandable
+      icon={<WrenchIcon size={13} className={`nagent-tool__icon${stateClass ? ` ${stateClass}` : ''}`} />}
+      duration={durationText || undefined}
+      durationStyle={durationText ? toolDurationTintStyle(detail) : undefined}
+      name={detail.toolName || '文件工具'}
+      summary={
         <span className="nagent-tool__inline-preview">
           {fullPath ? (
             <>
@@ -159,14 +158,9 @@ export function FileToolEntry({ detail, inlineExtras }: FileToolEntryProps) {
             '（无路径）'
           )}
         </span>
-        {open ? (
-          <ChevronDownIcon size={13} className="nagent-tool__chevron" />
-        ) : (
-          <ChevronRightIcon size={13} className="nagent-tool__chevron" />
-        )}
-      </button>
-      {open ? (
-        <div className="nagent-tool__detail">
+      }
+    >
+      <div className="nagent-tool__detail">
           <div className="nagent-tool__result-item">
             <div className="nagent-tool__result-item-head">
               <WrenchIcon size={12} className={`nagent-tool__icon${stateClass ? ` ${stateClass}` : ''}`} />
@@ -217,7 +211,6 @@ export function FileToolEntry({ detail, inlineExtras }: FileToolEntryProps) {
             ) : null}
           </div>
         </div>
-      ) : null}
-    </div>
+    </EntryShell>
   )
 }

@@ -14,7 +14,7 @@
  */
 
 import type { ComponentType, ReactNode } from 'react'
-import type { SearchTypeDefinition } from '@everyagent/plugin-api'
+import type { KindViewComponent, SearchTypeDefinition } from '@everyagent/plugin-api'
 import type { ToolViewProps } from '@/components/task/toolViews/types'
 import type {
   ChatComposerDraftState,
@@ -188,6 +188,21 @@ export interface ToolCallViewDefinition {
   toolName: string
   /** 接管渲染的完整视图组件（折叠态 + 展开态）。 */
   Component: ComponentType<ToolViewProps>
+}
+
+/**
+ * kind 视图接管定义（由 `ui.kind_views` 扩展点产出，两级分发第一级的插件入口）。
+ *
+ * 按 kind 命中即**整体接管该线程条目的渲染**（可接管任意 kind，含
+ * user.message/message 等核心 kind），组件完全自治。解析优先级：
+ * 插件注册的视图 > 核心内置注册表（kindViews/registry）> FallbackView 兜底。
+ * 注册入口是双参 `registerKindView(kind, Component)`，本结构是扩展点注册表项。
+ */
+export interface KindViewDefinition {
+  /** 接管的线程项 kind（wire kind，如 user.message/error/retry）。 */
+  kind: string
+  /** 接管渲染的完整视图组件（props = PluginKindViewProps 最小集）。 */
+  Component: KindViewComponent
 }
 
 

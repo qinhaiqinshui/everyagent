@@ -74,7 +74,7 @@ Maven 模块 `every-agent-plugins/sandbox-windows-codex`,包根 `dev.everyagent.
 | `Advapi32Ex` | advapi32 补齐:CreateRestrictedToken、SetEntriesInAclW、AllocateAndInitializeSid/FreeSid、CheckTokenMembership、ConvertSidToStringSidW、ConvertStringSecurityDescriptorToSecurityDescriptorW、RegFlushKey/RegDeleteValueW | token.rs / acl.rs / runtime_ownership.rs |
 | `NetApi32Ex` | netapi32 补齐:NetLocalGroupAdd/AddMembers/Del、NetUserSetInfo(level 1 flags / 1003 密码) | sandbox_users.rs / principals.rs |
 | `Fwpuclnt` | fwpuclnt 全量自映射:FwpmEngineOpen0/Close0、Transaction*、ProviderAdd/DeleteByKey0、SubLayerAdd/DeleteByKey0、FilterAdd/DeleteByKey0 + FWPM_FILTER0/FWP_VALUE0 结构体 | wfp.rs |
-| `UserenvEx` | userenv 自映射:DeleteProfileW(LoadUserProfile 仅卸载路径,暂缓) | uninstall_windows/users |
+| `UserenvEx` | userenv 自映射:DeleteProfileW(卸载路径 + FULL setup 的 profile 一致性治理;LoadUserProfile 暂缓) | uninstall_windows/users · setup ProfileDoctor |
 | `WinStructs` | EXPLICIT_ACCESS_W/TRUSTEE_W/SID_AND_ATTRIBUTES、USER_INFO_1/1003/23、LOCALGROUP_INFO_1/0、STARTUPINFOEXW/PROC_THREAD_ATTRIBUTE_LIST、FWPM 结构体、SHELLEXECUTEINFOW 复用 jna-platform | — |
 | `WinErr` | NERR_*/FWP_E_*/APPMODEL 错误码表与分类(凭据失配/可刷新/GPO 覆盖) | identity.rs / firewall.rs |
 
@@ -224,7 +224,7 @@ MITM 救不了它(只能帮 OpenSSL 系客户端,而它们经 CONNECT 隧道本�
 
 - 命令:`<java.home>\bin\java.exe -cp <codexHome>\.sandbox-bin\runner.jar dev.everyagent.plugin.sandbox.codex.runner.CodexRunnerMain --pipe-in=... --pipe-out=...`(逐参数 `quote_windows_arg`)。
 - 理由:① java.exe 通常在 Program Files(平台默认读根,Users 组天然 RX),沙箱账户可执行;jlink/GraalVM 原生镜像体积与构建链成本高;② jar 由 `RunnerMaterializer` 复制到 `.sandbox-bin`(组 R+X,Protected DACL),与 codex 物化 helper 的 ACL 矩阵一致,防插件目录(可能在用户私有目录)ACL 不放行;③ 若 java.home 不在默认读根,ReadAclInstaller 将其加入读根。
-- `CreateProcessWithLogonW`:账户=沙箱用户名/明文密码(DPAPI 解出的 bytes 直接 `new String(…,UTF_16LE)`,不经默认 charset)、域 `"."`、旗标 `CREATE_NO_WINDOW|CREATE_UNICODE_ENVIRONMENT`、`STARTF_FORCEOFFFEEDBACK`、不传 `LOGON_WITH_PROFILE`(无 execution alias,免建 profile;runner 的 TEMP/TMP 显式指到 `<codexHome>\.sandbox\tmp`);spawn 前后 `SetErrorMode(0x3)`。**不用匿名管道跨 logon session 传 stdio——这正是保留命名管道 IPC 的原因**(每次 WithLogonW 产生独立 logon session)。
+- `CreateProcessWithLogonW`:账户=沙箱用户名/明文密码(DPAPI 解出的 bytes 直接 `new String(…,UTF_16LE)`,不经默认 charset)、域 `"."`、旗标 `CREATE_NO_WINDOW|CREATE_UNICODE_ENVIRONMENT|LOGON_WITH_PROFILE`、`STARTF_FORCEOFFFEEDBACK`(LOGON_WITH_PROFILE 已常态化——沙箱账户有真 profile 才有可用的 HKCU/USERPROFILE;profile 一致性治理见 §4.3.1 第 8 行;runner 的 TEMP/TMP 显式指到 `<codexHome>\.sandbox\tmp`);spawn 前后 `SetErrorMode(0x3)`。**不用匿名管道跨 logon session 传 stdio——这正是保留命名管道 IPC 的原因**(每次 WithLogonW 产生独立 logon session)。
 - runner JVM 参数:`-XX:+UseSerialGC -Xshare:auto -Dfile.encoding=UTF-8`,最小化启动开销。
 
 ### 4.2 帧协议(对齐 IPC_PROTOCOL_VERSION=6)
@@ -264,9 +264,9 @@ SpawnRequest 不搬 codex 的 permission_profile 结构,改为自有 `writeRoots
 | 5 | 写根 ACL(被 icacls reset) | —(无失败信号) | preflight 每命令刷新 ACE(既有) |
 | 6 | .sandbox-bin(runner classpath) | —(物化失败) | RunnerMaterializer 按需重物化(既有) |
 | 7 | cap_sids.json | — | CapSids.loadOrCreate 重建(既有) |
-| 8 | 沙箱账户 profile 目录 | — | LOGON_WITH_PROFILE 下次登录自动重建(Windows 既有) |
+| 8 | 沙箱账户 profile 一致性(账户被删重建换 RID 后旧 profile 残留:旧 hive 的内部 ACL 只授权已删旧 SID,`LOGON_WITH_PROFILE` 照常加载它,但新账户读 HKCU 全拒读——PS 5.1 启动期无条件读 GPO 策略键 `Software\Policies\Microsoft\Windows\PowerShell` 即 `SecurityException` 崩溃 0xE0434352,其余程序不读该链故无症状) | runner 启动 HKCU 自检 error 帧(stage=`hkcu_profile_check`,winerr=RegOpenKeyEx(HKCU,Software) 失败码) | 强制重 setup:①先作废池化 runner(终止登录会话→hive 卸载,防 DeleteProfileW 撞在用);②ProfileDoctor——`NTUSER.DAT` 文件属主 ≠ 当前账户 SID 即外来 profile,`DeleteProfileW(sid)` 注销并删除,连带清理 `C:\Users\<名>.<机器名>` 冲突变体残留;下次登录重建干净 profile |
 
-判定 `needsAccountHealing`(cause 链遍历,三类信号任一):① spawn 侧 `CredentialMismatchException`(含 runner error 帧带回的凭据类 windows_error_code 二次分类);② `Win32Exception` 携可愈码(SID 解析 1332/1317);③ `CredentialsFileException`(凭据文件态失真)。触发后经 `CodexSetupCoordinator` 强制完整重 setup(跳过 marker 短路;未提权时弹一次 UAC),成功后原地重试该命令一次(重试重读新密码/重建 SID);一次 execute 至多自愈一次(防循环);重 setup 或重试仍失败才把两层错误回给模型。对齐 codex identity.rs「账户/凭据失配 → 重跑 setup 刷新后重试,而非直接报错」与 runner_client.rs is_refreshable_windows_error 口径。
+判定 `needsAccountHealing`(cause 链遍历,四类信号任一):① spawn 侧 `CredentialMismatchException`(含 runner error 帧带回的凭据类 windows_error_code 二次分类);② `Win32Exception` 携可愈码(SID 解析 1332/1317);③ `CredentialsFileException`(凭据文件态失真);④ runner error 帧 stage=`hkcu_profile_check`(账户 profile 失真,HKCU 拒读)。触发后**先作废池化 runner**(`RunnerPools.invalidateAll`——登录会话终止才能卸载 profile hive,重 setup 的 DeleteProfileW 才不会撞在用),再经 `CodexSetupCoordinator` 强制完整重 setup(跳过 marker 短路;未提权时弹一次 UAC),成功后原地重试该命令一次(重试重读新密码/重建 SID);一次 execute 至多自愈一次(防循环);重 setup 或重试仍失败才把两层错误回给模型。对齐 codex identity.rs「账户/凭据失配 → 重跑 setup 刷新后重试,而非直接报错」与 runner_client.rs is_refreshable_windows_error 口径。
 
 ## 5. SPI 对接
 

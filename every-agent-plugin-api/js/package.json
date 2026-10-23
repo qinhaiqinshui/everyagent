@@ -1,6 +1,6 @@
 {
   "name": "@everyagent/plugin-api",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "description": "Every Agent 前端插件 API 类型包（对标 @types/vscode；纯类型零运行时，入口 index.d.ts 由 scripts/sync-plugin-api-copy.ps1 逐字节同步自 index.ts）",
   "license": "MIT",
   "types": "index.d.ts",
