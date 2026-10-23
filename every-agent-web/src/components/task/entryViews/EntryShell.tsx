@@ -5,12 +5,18 @@
  * is-open 状态类、展开容器挂载),内容全部走槽位:icon/duration/name/summary +
  * children(展开态内容)。
  *
+ * **两类行是同一个东西**(图标 + 标题 + 摘要 + 可展开详情),所以列几何与展开几何
+ * 都住在壳的 nagent-entry__* 基线上、由两类行共用:折叠行左缘 0 → 13px 图标列 →
+ * 8px gap → 21px 统一文字栏;展开详情 = `.nagent-entry__content`(扁平:无外框/底色/
+ * 分隔线,上间距 --space-2,左缘同文字栏)。行族样式类(nagent-trace-shell /
+ * nagent-tool)只保留真实的行族差异(工具行 baseline 对齐与字重、trace 行把缩进挂
+ * 在行内 padding 上以便图标负 margin 挂出),不再各自定义展开态外观(§8.7)。
+ *
  * 类名策略:壳层子元素统一 `nagent-entry__*`(summary/icon/duration/name/text/
  * chevron/content,规则见 chatPanel.css「Entry 折叠行壳」块,trace 行与工具行共用
  * 同一套);外层容器类由调用方经 className 传入(如 trace 侧
- * "nagent-trace-shell nagent-msg"、工具行 "nagent-tool nagent-tool--call"),
- * 行族专属的容器样式(缩进/展开边框/悬停策略)留在各自容器类上,壳只在展开时
- * 追加 is-open 状态类。
+ * "nagent-trace-shell nagent-msg"、工具行 "nagent-tool nagent-tool--call"),壳在
+ * 展开时追加 is-open 状态类(仅作状态标记,展开外观由壳的基线规则给出)。
  *
  * open 为壳内部 state(与迁移前的 TraceShell/工具行一致,点击摘要行切换);受控
  * 形态当前无消费方,需要时再开。

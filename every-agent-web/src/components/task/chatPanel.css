@@ -1137,10 +1137,10 @@
 }
 
 .nagent-tool__detail {
-  margin-top: 8px;
-  /* 与摘要行「图标 + gap」的行内起点对齐（图标 13px + 8px gap ≈ 21px），
-     不用大缩进给左边留空白；参数/结果块从内容左近处开始。 */
-  margin-left: 21px;
+  /* 左缩进(统一文字栏 21px)与上间距由共享壳 `.nagent-entry__content` 统一提供
+     (trace 行展开详情同此口径),本块不再自带 margin——否则与壳的缩进叠加会
+     把工具详情推到 42px。这里只承载工具详情自身的内容。 */
+  margin: 0;
 }
 
 /* 合并块内：每个调用 / 结果作为子项 */
@@ -1379,17 +1379,19 @@
 
 /* ─── Entry 折叠行壳(nagent-entry__*)+ trace 行容器 ──────────
    折叠行子元素类归一为 nagent-entry__*(共享壳 EntryShell 输出),trace 行与
-   工具行(步骤 5 迁移)共用同一套;trace 行族专属的容器规则(统一文字栏缩进/
-   展开态边框/折叠态悬停抑制)保留在 .nagent-trace-shell 容器类上。 */
+   工具行(步骤 5 迁移)共用同一套。两类行**同一条列几何**:左缘 0 → 13px 图标列 →
+   8px gap → 21px 统一文字栏(= --text-column-indent);**折叠行与展开详情都按这一套
+   对齐**,行族只在字体/对齐等真实差异上覆盖(见下方工具行块)。
+   本容器类只保留 trace 行族必需的布局(占满宽度/flex 保护/上下间距)。 */
 .nagent-trace-shell {
   display: block;
   /* trace 是 .nagent-thread 直接子元素不走 .nagent-msg__body，与消息正文一样无最大宽度限制。
-     列几何与工具行**同构**(§8.7「trace 折叠行与工具行同列同尺寸」):整行左缘留在 0(与工具行
+     列几何与工具行**完全同构**(§8.7「trace 折叠行与工具行同列」):整行左缘留在 0(与工具行
      同一条竖线),统一文字栏缩进改由折叠行的 padding-left 承担(见下方
-     `.nagent-trace-shell .nagent-entry__summary`),图标槽再以等量负 margin 挂进那块 padding
-     ——图标因此落在工具图标同一列,且不会因负 out 出**容器**边界被本容器的 overflow:hidden 裁掉
-     (旧写法是容器 margin-left: --text-column-indent,整条 trace 行比工具行深一个缩进、
-     图标与工具图标不同列)。 */
+     `.nagent-trace-shell .nagent-entry__summary`)——图标槽再以等量负 margin 挂进那块
+     padding,才能既落在工具图标同一列、又不被本容器 overflow:hidden 裁掉(负 margin 一旦
+     出容器边界即被裁)。旧写法是容器 margin-left: --text-column-indent,结果整条 trace 行
+     (图标 + 文字)比工具行深一个缩进、图标与工具图标不同列。 */
   margin-left: 0;
   width: 100%;
   min-width: 0;
@@ -1398,38 +1400,24 @@
   flex-shrink: 0;
   margin-top: var(--space-2);
   margin-bottom: var(--space-2);
-  /* 折叠态：无边框无背景，视觉融入消息流；展开态才显示边框与背景（见 .is-open）。 */
   overflow: hidden;
 }
 
-/* 展开态：恢复边框、圆角与背景，与折叠态形成明显区分。 */
-.nagent-trace-shell.is-open {
-  border: 1px solid var(--border-light);
-  border-radius: var(--radius-md);
-  background: var(--bg-secondary);
-}
-
-/* trace 折叠行的左缩进挂在行内 padding 上(容器不再自带缩进,见上条注释):
-   文字起点 = 统一文字栏,与工具名/思考标题同一条竖线;无图标的 trace 行
-   (cancelled 等)文字亦恒在此列。悬停底色随之从行左缘起,与工具行一致。 */
+/* trace 折叠行在容器内的左缩进:统一文字栏(与工具行文字、思考标题同一条竖线)。
+   放在折叠行的 padding-left 而非容器的 margin-left,是为了给图标槽留出可「挂出去」
+   的空间(见下条);无图标的 trace 行(cancelled 等)文字起点亦恒在此列。 */
 .nagent-trace-shell .nagent-entry__summary {
   padding-left: var(--text-column-indent);
 }
 
-/* trace 图标列 = 工具行图标列(同列同尺寸):槽宽 13px(与工具图标 WrenchIcon/
-   TerminalIcon size=13 一致)、负 margin 挂进上面的 padding 区 → 图标左缘与
-   工具图标对齐,文字起点仍是 13 + gap 8 = 21px = 统一文字栏(与
-   .nagent-tool__detail margin-left:21px 的「图标 + gap」耦合口径同源)。 */
+/* trace 图标槽 = 工具行图标列:宽 13px(与工具图标同尺寸)、负 margin 挂进上面的
+   padding 区 → 图标左缘与工具图标对齐,文字起点仍是 13 + gap 8 = 21px = 统一文字栏,
+   与工具行「图标 + gap」同一条竖线。 */
 .nagent-trace-shell .nagent-entry__icon {
   box-sizing: border-box;
   width: calc(var(--text-column-indent) - var(--space-2));
   margin-left: calc(-1 * var(--text-column-indent));
   justify-content: flex-start;
-}
-
-/* 展开态内容左缘 = 统一文字栏 + 壳内边距(容器缩进改到行内后等量补回,展开卡片位置零变化)。 */
-.nagent-trace-shell .nagent-entry__content {
-  padding-left: calc(var(--text-column-indent) + var(--space-3));
 }
 
 .nagent-entry__summary {
@@ -1438,9 +1426,9 @@
   gap: var(--space-2);
   width: 100%;
   min-width: 0;
-  /* 左内边距归零、只保留右侧 --space-3(避免折叠图标贴边)：trace 行的左缩进不在这里,
-     由 `.nagent-trace-shell .nagent-entry__summary` 挂 padding-left 到统一文字栏;
-     工具行自带 padding:0(图标天然在文档流首位)。 */
+  /* 左内边距归零、只留右侧 --space-3(避免 chevron 贴边):trace 行的左缩进不在这里,
+     由 `.nagent-trace-shell .nagent-entry__summary` 挂 padding-left 到统一文字栏
+     (图标槽要负 margin 挂进那块 padding,见上);工具行自带 padding:0(图标在文档流首位)。 */
   padding: 0 var(--space-3) 0 0;
   border: none;
   background: transparent;
@@ -1456,14 +1444,11 @@
   text-align: left;
 }
 
+/* 悬停只强调文字颜色、不铺底色:与工具行既有观感一致(消息流是密集扁平列表,整行底色
+   会随鼠标到处块状闪烁)。两类行共用这条基线,行族不再各自抑制。 */
 .nagent-entry__summary:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
-}
-
-/* 折叠态：悬停也不显示背景，保持与折叠态一致的纯净外观（仅保留文字颜色强调）。 */
-.nagent-trace-shell:not(.is-open) .nagent-entry__summary:hover {
   background: transparent;
+  color: var(--text-primary);
 }
 
 /* 静态行(expandable=false)：不可展开，去掉点击态光标，避免误以为可交互。 */
@@ -1520,9 +1505,16 @@
   color: var(--text-muted);
 }
 
+/* 展开容器:**共享壳唯一的「展开几何」真相源**(工具行与 trace 行同值,行族不再各自覆盖)。
+   扁平形态(与折叠行同一套列几何,展开只是把详情接在文字栏下方):
+   - 无外框、无底色、无顶部分隔线(trace 行旧有的 is-open 边框卡片形态已废——它与工具行
+     展开观感不一致,而两类行本就是一个东西:图标 + 标题 + 摘要 + 详情);
+   - 上间距 --space-2;详情左缘 = 统一文字栏 --text-column-indent(= 13px 图标 + 8px gap,
+     与折叠行文字、工具图标列同一条竖线)。
+   行族自己的内容块(如 .nagent-tool__detail)因此**不再自带左缩进/上间距**,只排内部节奏。 */
 .nagent-entry__content {
-  border-top: 1px solid var(--border-subtle, var(--border-light));
-  padding: var(--space-2) var(--space-3) var(--space-3);
+  margin-top: var(--space-2);
+  padding-left: var(--text-column-indent);
 }
 
 .nagent-entry__pre {
@@ -1541,15 +1533,13 @@
 
 /* ─── 工具调用行(nagent-tool 容器)在共享壳上的行族差异 ──────
    工具三视图(DefaultToolView/CommandToolView/FileToolEntry)与 update-file-view
-   插件的折叠行结构类 = nagent-entry__*;本块按工具行折叠行的既有观感(旧
-   .nagent-tool__summary 规则,全量迁移后已删)逐项覆盖共享壳的 trace 基线值,
-   保证迁移视觉零变化:
+   插件的折叠行结构类 = nagent-entry__*;折叠行骨架与**展开几何**都住在共享壳
+   (列几何/悬停/展开容器一律走 nagent-entry__* 基线,本块不再覆盖),这里只留
+   工具行真实的行族差异:
    baseline 对齐(工具名 UI 字体与参数等宽字体的基线一致,center 会错位 1~2px)/
    字重 500(trace 基线 400)/无右 padding(trace 行有 --space-3)/行高 1.6
-   (旧值继承自 body,共享壳基线为 1.4)/摘要禁选(inline-preview 子类局部放开
-   text)/悬停仅文字变色无底色(trace 行悬停带 bg-hover 底色)。
-   gap 8px 与 --space-2 同值(--space-2=8px),显式声明保住与
-   .nagent-tool__detail margin-left:21px(13px 图标 + 8px gap)的对齐耦合。 */
+   (旧值继承自 body,共享壳基线为 1.4)/摘要禁选(inline-preview 子类局部放开 text)。
+   gap 8px 与 --space-2 同值,与图标列宽 13px 合起来正是统一文字栏 21px。 */
 .nagent-tool .nagent-entry__summary {
   align-items: baseline;
   gap: 8px;
@@ -1560,10 +1550,6 @@
   line-height: 1.6;
   user-select: none;
   overflow: hidden;
-}
-
-.nagent-tool .nagent-entry__summary:hover {
-  background: transparent;
 }
 
 /* 图标/折叠箭头槽在 baseline 行内垂直居中(旧 .nagent-tool__icon/__chevron 的
@@ -1579,14 +1565,6 @@
   color: var(--text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-/* 展开容器:工具行展开态无分隔线、无壳内边距(旧 .nagent-tool__detail 直接挂
-   容器、不套内容框;trace 行才有的 border-top + 内边距在此归零,detail 自带的
-   margin-top/margin-left 经 margin 穿透保持原位,布局不变)。 */
-.nagent-tool .nagent-entry__content {
-  border-top: none;
-  padding: 0;
 }
 
 /* ─── 底部输入区 ───────────────────────────────────────────── */

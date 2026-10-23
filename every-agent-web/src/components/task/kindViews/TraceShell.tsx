@@ -8,8 +8,10 @@
  *
  * 本组件只做「解析 + 填槽」:解析逻辑(getTraceType/PluginTraceRecord 合成/
  * getSummary/expandable/renderContent)保留,折叠行结构与展开容器由共享壳
- * EntryShell(槽位制)承担;外层容器类 nagent-trace-shell(trace 行族专属的
- * 缩进/展开边框/悬停策略)与 nagent-msg、容器 title 属性保持原样。
+ * EntryShell(槽位制)承担——**trace 行与工具行共用同一套列几何与展开几何**(图标列
+ * 13px + gap 8px → 文字栏 21px;展开详情扁平、无外框),外层容器类 nagent-trace-shell
+ * 只保留 trace 行族的布局必需项与「把缩进挂在行内」的图标挂出规则(§8.7);
+ * nagent-msg 与容器 title 属性保持原样。
  */
 import type { ThreadItem, TracePayload } from '@/task/threadItem'
 import type { PluginTraceRecord } from '@everyagent/plugin-api'
