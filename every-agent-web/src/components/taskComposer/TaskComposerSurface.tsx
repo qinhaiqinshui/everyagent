@@ -508,13 +508,15 @@ export default function TaskComposerSurface({
    *  - 'bottom' → 清掉 `/query` 触发段（不写内联胶囊），对每个 bottom 结果循环回调宿主新增底部 token
    *    （各自用 result.id 归属条目，如「无人值守」一次返回「无人值守」+「AI 审议」两个胶囊）；
    *  - 'inline'  → 与现状一致：在 `/` 触发位置原地插入 opaque 胶囊或纯文本。
+   *  select 第二参透传宿主上下文（taskId/workspace/workerId），供插件类 provider 定向取数；
+   *  既有 provider 不消费该参数即零感知。
    *  slash 层只做形态判断（isOpaqueTokenText）与位置分流，不解析 payload、不分支类型。 */
   const applySlashSelection = React.useCallback(async (entry: SlashCommandItem) => {
     setSlashOpen(false)
     setSlashQuery('')
     setSlashActiveIndex(0)
     const deleteBefore = slashStart >= 0 ? slashQuery.length + 1 : 0
-    const raw = await entry.select(entry)
+    const raw = await entry.select(entry, { taskId, workspace, workerId })
     const results = Array.isArray(raw) ? raw : [raw]
     let slashSegmentConsumed = false
     for (const result of results) {
@@ -539,7 +541,7 @@ export default function TaskComposerSurface({
       }
       slashSegmentConsumed = true
     }
-  }, [slashStart, slashQuery, onAddTaskScopeToken])
+  }, [slashStart, slashQuery, onAddTaskScopeToken, taskId, workspace, workerId])
 
   /** 内联胶囊 ✕ 删除上报：对含 slashId 的 token 触发 cancelTaskToken（不传 taskId，内联不持久化）。 */
   const handleRemoveInlineToken = React.useCallback((token: ChatComposerToken) => {

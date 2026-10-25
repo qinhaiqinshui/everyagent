@@ -23,6 +23,7 @@ import type {
   ComposerChipActionDefinition,
   UiSettingsSectionDefinition,
   ThemeDefinition,
+  PluginSlashCommandProviderDefinition,
 } from '@everyagent/plugin-api'
 import { appendComposerTextQueued, getComposerBridge, getShellBridge } from './pluginRuntimeBridge'
 import { activeTabMirror } from './activeTabMirror'
@@ -53,6 +54,7 @@ const EXT_UI_SIDEBAR_ITEMS = 'ui.sidebar_items'
 const EXT_UI_WORKSPACE_TAB_TYPES = 'ui.workspace_tab_types'
 const EXT_UI_FILE_SIDEBAR_PANELS = 'ui.file_sidebar_panels'
 const EXT_UI_COMPOSER_ABOVE_PANEL = 'ui.composer_above_panel'
+const EXT_UI_SLASH_COMMAND_PROVIDERS = 'ui.slash_command_providers'
 const EXT_UI_TOOL_CALL_VIEWS = 'ui.tool_call_views'
 const EXT_UI_KIND_VIEWS = 'ui.kind_views'
 const EXT_UI_USER_MESSAGE_ACTIONS = 'ui.user_message_actions'
@@ -156,6 +158,10 @@ export interface RealPluginDispatcher {
   registerFileSidebarPanel: (def: UiFileSidebarPanelDefinition) => Disposable
   /** 注册输入框上方面板。 */
   registerComposerAbovePanel: (def: UiComposerAbovePanelDefinition) => Disposable
+  /** 注册 slash 命令 provider（由 `ui.slash_command_providers` 扩展点产出）。 */
+  registerSlashCommandProvider: (def: PluginSlashCommandProviderDefinition) => Disposable
+  /** 同步获取插件注册的 slash 命令 provider 列表（供 `/` 菜单桥接拉取条目）。 */
+  listSlashCommandProviders: () => PluginSlashCommandProviderDefinition[]
   /** 注册工具调用视图接管。 */
   registerToolCallView: (def: ToolCallViewDefinition) => Disposable
   /**
@@ -237,6 +243,16 @@ export interface RealPluginDispatcher {
     payload?: Record<string, unknown>
     spaced?: boolean
   }) => void
+  /**
+   * 构造一枚胶囊的 opaque token 串并返回（与 `appendComposerToken` 同源单点编码，
+   * 只是不追加草稿）。`kind`/`label` 为空时由 `buildOpaqueTokenText` 抛错。
+   */
+  buildComposerToken: (input: {
+    kind: string
+    label: string
+    summary?: string
+    payload?: Record<string, unknown>
+  }) => string
   /** 用 rawContent（可能含 opaque token 串）替换整个草稿（编辑重发回填用）。 */
   setComposerRawContent: (rawContent: string) => void
 }
@@ -263,6 +279,8 @@ export const pluginDispatcher: RealPluginDispatcher = {
       case EXT_UI_FILE_SIDEBAR_PANELS:
         return getRegistry<T>(extensionPoint).getAll()
       case EXT_UI_COMPOSER_ABOVE_PANEL:
+        return getRegistry<T>(extensionPoint).getAll()
+      case EXT_UI_SLASH_COMMAND_PROVIDERS:
         return getRegistry<T>(extensionPoint).getAll()
       case EXT_UI_TOOL_CALL_VIEWS:
         return getRegistry<T>(extensionPoint).getAll()
@@ -323,6 +341,12 @@ export const pluginDispatcher: RealPluginDispatcher = {
   },
   registerComposerAbovePanel(def) {
     return getRegistry<UiComposerAbovePanelDefinition>(EXT_UI_COMPOSER_ABOVE_PANEL).register('', def)
+  },
+  registerSlashCommandProvider(def) {
+    return getRegistry<PluginSlashCommandProviderDefinition>(EXT_UI_SLASH_COMMAND_PROVIDERS).register('', def)
+  },
+  listSlashCommandProviders() {
+    return getRegistry<PluginSlashCommandProviderDefinition>(EXT_UI_SLASH_COMMAND_PROVIDERS).getAll()
   },
   registerToolCallView(def) {
     return getRegistry<ToolCallViewDefinition>(EXT_UI_TOOL_CALL_VIEWS).register('', def)
@@ -451,6 +475,14 @@ export const pluginDispatcher: RealPluginDispatcher = {
     })
     const spaced = input.spaced ?? true
     appendComposerTextQueued(spaced ? ` ${opaqueText} ` : opaqueText)
+  },
+  buildComposerToken(input) {
+    // 与 appendComposerToken 同源单点编码，只返回串不追加草稿；kind/label 为空时由它抛错。
+    return buildOpaqueTokenText(input.kind, {
+      label: input.label,
+      summary: input.summary,
+      payload: input.payload ?? {},
+    })
   },
   setComposerRawContent(rawContent) {
     getComposerBridge()?.setRawContent(rawContent)

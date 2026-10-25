@@ -7,16 +7,16 @@ has_children: false
 
 # 前端 UI 扩展点
 
-**一句话定位**：`ctx.ui`（`UiRegistry`）是前端插件往宿主 UI 里「贡献界面」的唯一通道——18 个 `register*` 扩展点 + 7 个动作方法（其中 `ui.kind_views` 为两级分发模型定稿、宿主接线随代码跟进，见 §20）。本文逐扩展点给出 Definition 字段表（抄自纯类型包 `every-agent-plugin-api/js/index.ts`）、注册代码、宿主消费链与坑；每条断言附宿主源码行号。`ctx.ui` 的宿主实现是单例 `pluginDispatcher`（接入方式见[前端 ctx API](context-api.md) §8）。
+**一句话定位**：`ctx.ui`（`UiRegistry`）是前端插件往宿主 UI 里「贡献界面」的唯一通道——19 个 `register*` 扩展点 + 8 个动作方法（其中 `ui.kind_views` 为两级分发模型定稿、宿主接线随代码跟进，见 §20）。本文逐扩展点给出 Definition 字段表（抄自纯类型包 `every-agent-plugin-api/js/index.ts`）、注册代码、宿主消费链与坑；每条断言附宿主源码行号。`ctx.ui` 的宿主实现是单例 `pluginDispatcher`（接入方式见[前端 ctx API](context-api.md) §8）。
 
 ## 0. 读前须知：所有扩展点共用的四条机制
 
-1. **注册即入表，Disposable 真清理**：每个 `register*` 落到对应扩展点的 `ListExtensionRegistry`（普通数组 push，`every-agent-web/src/plugin/ExtensionRegistry.ts:45-56`），dispose 从数组 splice 并通知订阅者。注意 dispatcher 调 `register('', def)` 时**忽略 pluginId 形参**、一律传空串（`every-agent-web/src/plugin/PluginDispatcher.ts:241-242` 等 15 处）。
+1. **注册即入表，Disposable 真清理**：每个 `register*` 落到对应扩展点的 `ListExtensionRegistry`（普通数组 push，`every-agent-web/src/plugin/ExtensionRegistry.ts:45-56`），dispose 从数组 splice 并通知订阅者。注意 dispatcher 调 `register('', def)` 时**忽略 pluginId 形参**、一律传空串（`every-agent-web/src/plugin/PluginDispatcher.ts:241-242` 等 18 处）。
 2. **注册晚于首屏，宿主靠版本号重渲染**：插件 `activate()` 是异步的。宿主用 `React.useSyncExternalStore(pluginDispatcher.subscribeExtensionsChanged, pluginDispatcher.getExtensionsVersion)` 感知注册（`every-agent-web/src/components/app/Layout.tsx:139-141`、`every-agent-web/src/components/task/TaskChat.tsx:818-821`），注册后贡献立即上屏，**无需刷新页面**。
 3. **两条读取通道**：异步 `dispatch('ui.xxx')` / `get*()`（仅文件页侧栏在用，`FileTabPage.tsx:166`）与同步 `listRegistered*()`（其余消费点的实际用法，下文逐个给出）。
 4. **示例代码约束**（详见[加载链路](overview-and-loading.md)）：入口 `web/index.ts` 只能 `import type ... from '@everyagent/plugin-api'` + 白名单 bare import（react / react-dom / react/jsx-runtime / antd / @ant-design/icons）；`.ts` 文件里用 `React.createElement`，组件放 `.tsx` 可用 JSX。
 
-## 1. 十八个扩展点总览
+## 1. 十九个扩展点总览
 
 | 扩展点（dispatch 名） | register 方法 | 一句话 | 内置范例 |
 |---|---|---|---|
@@ -38,6 +38,7 @@ has_children: false
 | `ui.settings_sections` | `registerSettingsSection` | 向设置页贡献一个设置段 | **无**（novel-reader 起于此） |
 | `ui.themes` | `registerTheme` | 贡献一套全局颜色主题（可部分覆盖、其余继承基底） | **无**（novel-reader；核心深/浅色为主题表内建项） |
 | `ui.kind_views` | `registerKindView` | 按 kind 接管任务线程条目**整行**渲染（两级分发第一级） | **无**（见 §20） |
+| `ui.slash_command_providers` | `registerSlashCommandProvider` | 注册本地 `/` 斜杠命令条目（前端直连，不经 worker `slash.list`） | task-wait（等待任务） |
 
 ## 2. `ui.sidebar_items` —— 侧边栏活动栏项
 
@@ -97,7 +98,7 @@ float 升序**统一混排**，不再有「内置在前、插件在后」的注�
 | 10 | 内置 settings「设置」 | `Layout.tsx:1078` |
 | 100 | 缺省 `DEFAULT_SIDEBAR_ORDER` | `Layout.tsx:1064` |
 
-注意 5 与 9 是**插件**取值不是内置位——插手别处请避开 1/2/3/10 四个内置占用；4（3 与 5 之间）、6~8、11~99 都是空位。其余 14 个扩展点**没有 order 字段**，一律「插件在前、按注册顺序」合并（§4/§7/§12 各自证据）。
+注意 5 与 9 是**插件**取值不是内置位——插手别处请避开 1/2/3/10 四个内置占用；4（3 与 5 之间）、6~8、11~99 都是空位。其余 15 个扩展点**没有 order 字段**，一律「插件在前、按注册顺序」合并（§4/§7/§12 各自证据）。
 
 ## 4. `ui.workspace_tab_types` —— 工作区标签类型
 
@@ -632,7 +633,7 @@ export default plugin
 - **核心已迁入**：核心自身的 `system.workspace_file` 胶囊点击行为已从两处宿主组件硬编码迁到本扩展点——`every-agent-web/src/plugin/coreComposerChipActions.ts`（`pluginId:'core'`，与 `coreRoundTailPanels` 同范式），在 `main.tsx` 里 `initializeCoreRoundTailPanels()` 之后、`void loadPlugins()` **之前**同步调用 `initializeCoreComposerChipActions()`（`every-agent-web/src/main.tsx:53`，`loadPlugins()` 在 `:55`）；`InlineComposer`/`AgentMessageThread` 里已无 kind 字面量分支。核心 action 语义：`readWorkspaceFileToken` 解析 payload（`coreComposerChipActions.ts:48`）+ `ctx.workspaceRoot` 非空 → `pluginDispatcher.openFileTab(workspaceRoot, target.filePath)`（`:50-54`）；缺任一条件则回落 `openSlashItemDetail(ctx.anchor, { token })`（`:58`）。行为与迁移前一致。
 - **降级**：未命中（无插件为该 kind 注册动作）→ 保持现状（弹只读详情层），不报错。
 - **同一 kind 两处走同一注册表**：插件用上下文里的 `source` 区分场景。
-- **坑**：① `payload` 是不透明袋——宿主只解码不解释，字段缺失 / 类型错要插件自己兜底降级（建议 payload 里自带定位所需的 `workspaceRoot`/`filePath`，别假设宿主侧解析出的工作区根一定等于原文件的工作区根）；② `source:'replay'` 时没有输入框草稿桥，只能靠 `openFileTab` 等宿主动作响应，别假设能写草稿；③ 往输入框插胶囊用 `appendComposerToken`（见 §21），别自实现 opaque 线格式。
+- **坑**：① `payload` 是不透明袋——宿主只解码不解释，字段缺失 / 类型错要插件自己兜底降级（建议 payload 里自带定位所需的 `workspaceRoot`/`filePath`，别假设宿主侧解析出的工作区根一定等于原文件的工作区根）；② `source:'replay'` 时没有输入框草稿桥，只能靠 `openFileTab` 等宿主动作响应，别假设能写草稿；③ 往输入框插胶囊用 `appendComposerToken`（见 §22），别自实现 opaque 线格式。
 - **坑（`appendComposerToken` 三则）**：① `appendComposerToken` 的 `payload` 形参是 `Record<string, unknown>`，插件侧 `interface`（如 `SelectionPayload`）**无索引签名** ⇒ 直接传会被 TS 判为不可赋值（TS2322），需展开成新对象字面量 `payload: { ...payload }`（见 §16.2 示例）；② 草稿桥（`setComposerBridge`）只在**激活**任务标签注入——`TaskChat.tsx` 的注入 effect 首行有 `if (!isActive) return` 守卫（`every-agent-web/src/components/task/TaskChat.tsx:711-713`），故没有激活任务标签时（或首个 `TaskChat` 尚未挂载）`appendComposerToken`/`appendComposerText` **静默丢弃**（同 `appendComposerText` 的时序坑）；③ `kind`/`label` 为空时由宿主 `buildOpaqueTokenText` **抛错**（`every-agent-web/src/composerToken/composerOpaqueToken.ts:52-56`，插件错误立刻可见），`appendComposerToken` 自身不做 kind 业务分支。
 - **内置范例**：`selection-reference`（`kind='file.selection'`，点击经 `openFileTab(..., { lineNumber })` 切回原文件标签并定位起始行）；核心 `system.workspace_file` 亦经此扩展点注册。
 
@@ -642,7 +643,7 @@ export default plugin
 
 | 字段 | 类型 | 必填 | 消费位置（宿主） | 说明 |
 |---|---|---|---|---|
-| `id` | `string` | ✅ | `SettingsPanel.tsx` | 渲染 key；同时是目录导航锚点 id 与 `openSettingsPage(sectionId)` 跳转目标（见 §18.3 / §21）；全局唯一 |
+| `id` | `string` | ✅ | `SettingsPanel.tsx` | 渲染 key；同时是目录导航锚点 id 与 `openSettingsPage(sectionId)` 跳转目标（见 §18.3 / §22）；全局唯一 |
 | `title` | `string` | ✅ | `SettingsPanel.tsx` | 段标题（渲染为 `<h3>`，与内置段同款；目录项文本取自它） |
 | `order` | `number?` | — | `SettingsPanel.tsx` | float 升序；缺省 100。内置段（含「关于」）恒在前、插件段在此之后按 order 排列 |
 | `Component` | `ComponentType` | ✅ | `SettingsPanel.tsx` | 段内容组件，无 props（数据靠 `ctx.storage` / `ctx.sdk.rpc` 自持） |
@@ -670,7 +671,7 @@ export default plugin
 ### 18.3 宿主消费链与坑
 
 - **消费点**：`SettingsPanel`（`every-agent-web/src/components/system/SettingsPanel.tsx`）用 `useSyncExternalStore(pluginDispatcher.subscribeExtensionsChanged, pluginDispatcher.getExtensionsVersion)` 订阅扩展点版本号，注册/注销后立即重渲染；段列表取 `listRegisteredSettingsSections()`，按 `order ?? 100` 升序（稳定 sort，同值保持注册先后）渲染在**全部内置段（含「关于」段）之后**。
-- **目录导航（自动纳入，插件零成本）**：每个设置段容器由宿主打 `data-settings-section-id` 锚点属性，插件段锚点 id 即 `def.id`；宿主设置页提供**扫描式目录导航**——在滚动容器内 `querySelectorAll('[data-settings-section-id]')` 扫描段落元素、读段内 `<h3>` 文本生成目录项（点击滚动到对应段并处理 header 偏移、用户手动滚动时高亮跟随，rAF 节流），`MutationObserver` 感知段落增删（覆盖插件晚注册场景）。插件段因此**自动出现在目录里**（桌面端左侧 sticky 目录列 / 移动端 `WorkspacePageShell` header 下拉），无需任何额外注册；`def.id` 同时是 `ctx.ui.openSettingsPage(sectionId)`（§21）的跳转目标，建议带插件前缀，避免与内置段 id（`hub-connection` / `workers` / `models` / `skills` / `restart-worker` / `appearance` / `editor-font` / `notifications` / `about`，常量收敛在宿主 `settingsSectionIds.ts`）撞名。
+- **目录导航（自动纳入，插件零成本）**：每个设置段容器由宿主打 `data-settings-section-id` 锚点属性，插件段锚点 id 即 `def.id`；宿主设置页提供**扫描式目录导航**——在滚动容器内 `querySelectorAll('[data-settings-section-id]')` 扫描段落元素、读段内 `<h3>` 文本生成目录项（点击滚动到对应段并处理 header 偏移、用户手动滚动时高亮跟随，rAF 节流），`MutationObserver` 感知段落增删（覆盖插件晚注册场景）。插件段因此**自动出现在目录里**（桌面端左侧 sticky 目录列 / 移动端 `WorkspacePageShell` header 下拉），无需任何额外注册；`def.id` 同时是 `ctx.ui.openSettingsPage(sectionId)`（§22）的跳转目标，建议带插件前缀，避免与内置段 id（`hub-connection` / `workers` / `models` / `skills` / `restart-worker` / `appearance` / `editor-font` / `notifications` / `about`，常量收敛在宿主 `settingsSectionIds.ts`）撞名。
 - **样式约定**：段由宿主包一层与内置段同款的 `<section>`（下边框 + 纵向间距），组件只渲染段内容、不必自带上外边距；视觉值请引用宿主 token（`var(--text-xs)` / `var(--space-*)` / `var(--border)` 等，经 `:root` 继承，无需 import）。
 - **坑**：① 段内容组件拿不到宿主 React context（插件在 blob 模块里），需要的数据用 `ctx.storage`（本地）或 `ctx.sdk.rpc`（后端）自取；② `id` 重复会让 React key 冲突，一个插件一个 id。
 - **内置范例**：**无**（`novel-reader` 起于此扩展点；核心自身的设置段不走此扩展点，直接写在 `SettingsPanel` 内）。
@@ -816,7 +817,86 @@ export default plugin
 - **坑 ③（不注册也可见）**：FallbackView → TaskTraceShell → 通用降级保证任意新 kind 自动可见、内容零丢失；为「让 kind 显示出来」注册视图是误解。
 - **坑 ④（组件约束）**：与所有扩展点一致，`Component` 只能 `import type` + 白名单 bare import（§0 第 4 条），不引宿主组件。
 
-## 21. UiRegistry 动作方法（7 个）
+## 21. `ui.slash_command_providers` —— 本地斜杠命令条目
+
+> **定位**：与 worker 侧 `registerSlashProvider`（`slash.list` RPC，[后端任务与 RPC](../backend/task-and-rpc.md) §4）互补的 `/` 菜单来源——本扩展点在**前端直连**提供条目：菜单数据不经 worker RPC 往返，`select` 回调就跑在插件自己的 web 模块里（可异步、可弹自己的浮层、可 `ctx.sdk.rpc` 定向取数、可一次返回多个插入结果）。适合「选中时要先问用户 / 先查数据再决定插什么」的动态条目；纯静态开关类条目（开关真相源在 worker 侧）仍走后端 `registerSlashProvider`。
+
+### 21.1 Definition 字段表（`PluginSlashCommandProviderDefinition` / `PluginSlashCommandItem` / `PluginSlashSelectionResult`，`every-agent-plugin-api/js/index.ts`）
+
+Provider 定义（`registerSlashCommandProvider(def)` 的入参）：
+
+| 字段 | 类型 | 必填 | 消费位置（宿主） | 说明 |
+|---|---|---|---|---|
+| `id` | `string` | ✅ | 登记用（桥接按扩展点整体消费，不按 provider id 分发） | 全局唯一 provider id |
+| `load` | `(workerId?) => PluginSlashCommandItem[] \| Promise<PluginSlashCommandItem[]>` | ✅ | `pluginSlashProvider.ts`（`'plugins'` provider） | 拉取该 provider 的全部条目（可异步）；`workerId` 为可选透传参数（`/` 菜单按当前 worker 打开时传入） |
+
+条目 `PluginSlashCommandItem`（展示字段 + select 回调；经 `pluginSlashProvider.ts` 的 `toHostItem` 映射为宿主 `SlashCommandItem`）：
+
+| 字段 | 类型 | 必填 | 消费位置（宿主） | 说明 |
+|---|---|---|---|---|
+| `id` | `string` | ✅ | `pluginSlashProvider.ts` | 全局唯一条目 id（React key 与跨 provider 去重，见坑 ②） |
+| `title` | `string` | ✅ | 同上 | 展示标题 |
+| `subtitle` | `string?` | — | 同上 | 副内容 |
+| `icon` | `string?` | — | 同上 | 内联 SVG 字符串（缺省用通用图标） |
+| `group` | `string?` | — | 同上 | 分组名（缺省收进无标题分组） |
+| `defaultSelected` | `boolean?` | — | 同上 | 新建任务时是否默认选中（默认 false） |
+| `select` | `(ctx?) => PluginSlashSelectionResult \| PluginSlashSelectionResult[] \| Promise<…>` | ✅ | `TaskComposerSurface.tsx`（`applySlashSelection`） | 选中回调（可异步）；`ctx` 为可选选中上下文（见下） |
+
+`select` 上下文 `PluginSlashSelectContext`：`{ taskId?, workspace?, workerId? }`——宿主在选中时构造（草稿任务 `taskId` 为 undefined）。`select` 结果 `PluginSlashSelectionResult`：`{ token, position: 'inline' | 'bottom', id? }`——`token` 为要插入的 opaque token 串或纯文本（**空串 = 清除触发段、不插入任何内容**，见坑 ①）；`position` 决定原地插入（`'inline'`，插在 `/` 触发位置）还是挂底部胶囊（`'bottom'`）；`id` 为多结果联动时各自的归属条目 id。
+
+### 21.2 注册示例（task-wait 原型：拉任务 → 弹浮层 → 构造胶囊）
+
+```ts
+// web/index.ts —— 入口只能 import type + 白名单 bare import；.ts 里用 React.createElement
+import type { PluginModule, PluginSlashCommandItem } from '@everyagent/plugin-api'
+import { KIND, buildLabel, WAIT_MENU_ICON } from './token'
+import { fetchRunningTasks } from './candidates'
+import { pickerStore } from './pickerStore'
+// ctx 为 activate 时存入的模块级持有者（file-change 的 pluginRuntime 同款）
+
+const waitItem: PluginSlashCommandItem = {
+  id: 'task-wait:select',
+  title: '等待任务',
+  subtitle: '选择一个进行中的任务，等待其完成后再继续本任务',
+  group: '任务',
+  icon: WAIT_MENU_ICON,                        // 内联 SVG 字符串（currentColor，仿 unattended 的 UNATTENDED_MENU_ICON）
+  select: async (sctx) => {
+    // ① 定向取数：selectCtx 带 taskId/workspace/workerId（排除自身、只留进行中）
+    const tasks = await fetchRunningTasks(ctx.sdk, sctx?.workerId, sctx?.workspace, sctx?.taskId)
+    if (!tasks.length) return [{ token: '', position: 'inline' }]   // 无进行中任务 → 选择失败（坑 ①）
+    // ② 弹浮层选任务（§6 ui.composer_above_panel 承载；Esc / 遮罩点击取消 resolve null）
+    const picked = await pickerStore.open(tasks)
+    if (!picked) return [{ token: '', position: 'inline' }]
+    // ③ 只编码不追加：胶囊串由 select 结果带回，宿主按 position 插回 / 触发位置
+    const token = ctx.ui.buildComposerToken({
+      kind: KIND,                           // 'task.wait'
+      label: buildLabel(picked.title),      // 等待「<目标标题>」
+      summary: '等待该任务完成后继续（本次输入有效）',
+      payload: { targetTaskId: picked.taskId, title: picked.title },
+    })
+    return [{ token, position: 'inline' }]  // 宿主在 / 位置插入内联胶囊
+  },
+}
+
+const plugin: PluginModule = {
+  activate(ctx) {
+    ctx.ui.registerSlashCommandProvider({ id: 'task-wait', load: () => [waitItem] })
+  },
+}
+export default plugin
+```
+
+### 21.3 宿主消费链与坑
+
+- **注册链**：`ctx.ui.registerSlashCommandProvider(def)` → `PluginDispatcher.registerSlashCommandProvider`（扩展点常量 `'ui.slash_command_providers'`，`every-agent-web/src/plugin/PluginDispatcher.ts`；注册 / 清单 / dispose 照 `ui.composer_above_panel` 同款模式）→ `ListExtensionRegistry` 登记，`pluginDispatcher.listSlashCommandProviders()` 同步取全部 provider；Disposable 真清理（§0 机制 1）。
+- **桥接与合并**：`every-agent-web/src/main.tsx` 启动时调 `registerPluginSlashProvider()`（`every-agent-web/src/slash/pluginSlashProvider.ts`），把「插件数据源」注册为 `slashCommandRegistry`（`every-agent-web/src/slash/slashCommandRegistry.ts`）的 `'plugins'` provider；`/` 菜单打开时输入框组件（`TaskComposerSurface.tsx`）调 `slashCommandRegistry.list(workerId)` 聚合**全部** provider——插件的 `load(workerId)` 结果经 `toHostItem` 映射为宿主 `SlashCommandItem`，与 worker 远端条目（`slash.list` RPC，`remoteSlashProvider.ts` 的 `'worker'` provider）**同表混排、按条目 id 去重**。无插件注册时 `'plugins'` provider 返回空数组，`/` 菜单零变化。
+- **select 调用链**：用户选中 → `TaskComposerSurface.applySlashSelection` **先关菜单**，再以第二参 `{ taskId, workspace, workerId }` 调 `entry.select(entry, selectCtx)`（`every-agent-web/src/slash/types.ts` 的 `SlashCommandItem.select` 可选第二参，既有 provider 不消费即零感知）→ 桥接层包装为 `(item, selectCtx) => def.select(selectCtx ?? {})` 透传给插件。结果按 `position` 分流：`'inline'` 在 `/` 触发位置原地插入 opaque 胶囊或纯文本；`'bottom'` 清掉触发段、逐个挂底部胶囊（`onAddTaskScopeToken`）。
+- **坑 ①（空 token = 清除触发段）**：`select` 返回 `{ token: '', position: 'inline' }` 时，inline 分支走 `insertText('', deleteBefore)`——**删掉 `/查询词` 触发段、不插入任何内容**，效果等价于「用户没用过 `/`」。这是「选择失败」的正规表达：task-wait 用它实现「没有进行中任务时选择失败」（候选为空、或浮层被 Esc / 遮罩点击取消，都返回空 inline 结果）。
+- **坑 ②（同名 id 后者覆盖）**：与 `slash.list` 远端条目同名 id 时，按 `slashCommandRegistry.list` 的去重语义**后写覆盖先写**（`Map.set` 逐条目覆盖）——先后由 provider 注册顺序决定（`main.tsx` 里 `'worker'` 在前、`'plugins'` 在后，即插件条目覆盖远端同名条目）。条目 id 建议带插件前缀（`task-wait:select` 同款），避免误覆盖他人。
+- **select 可异步、且已在菜单关闭后执行**：宿主先 `setSlashOpen(false)` 再 `await`——`select` 里可以弹自己的浮层等用户操作（task-wait 经 §6 `ui.composer_above_panel` 承载任务选择浮层），也可以 `await ctx.sdk.rpc` 定向取数；但 select 挂起期间用户可能已在别处输入，返回的 inline 结果仍插在原 `/` 触发位置。
+- **内置范例**：task-wait（`every-agent-plugins/task-wait/web/index.ts`——唯一使用者：`/等待任务` 本地条目，select 内拉 `tasks.list` 过滤进行中任务、弹浮层选择、`buildComposerToken` 构造内联胶囊；配套 §6 选择浮层 + §17 胶囊点击回跳 + §20 等待 trace 视图）。
+
+## 22. UiRegistry 动作方法（8 个）
 
 动作方法不注册 UI，而是**驱动宿主**。实现链统一：`pluginDispatcher` 同步委托模块级 holder 桥（`pluginRuntimeBridge.ts`），宿主组件挂载时注入、未注入时静默降级（`pluginRuntimeBridge.ts:1-10` 注释）。
 
@@ -829,6 +909,7 @@ export default plugin
 | `appendComposerText` | `(text) => void` | `PluginDispatcher.ts:385-387` → `TaskChat.tsx:690-696` 实现、`:711-713` 注入 | 向**当前激活**任务标签的草稿末尾追加纯文本 |
 | `setComposerRawContent` | `(raw) => void` | `PluginDispatcher.ts:398-400` → `TaskChat.tsx:697-703` | 用 rawContent（可含 opaque token 串）**整体替换**草稿（编辑重发回填用） |
 | `appendComposerToken` | `(input: {kind, label, summary?, payload?, spaced?}) => void` | `PluginDispatcher.ts:388-397` → `buildOpaqueTokenText`（`composerToken/composerOpaqueToken.ts:46`）→ `getComposerBridge()?.appendText`（`pluginRuntimeBridge.ts:45`） | 结构化插入一枚胶囊（宿主单点负责 opaque token 编码，插件不碰线格式）；`spaced ?? true` 时补两侧空格（`PluginDispatcher.ts:395-396`）；`kind`/`label` 为空由 `buildOpaqueTokenText` **抛错**（`composerOpaqueToken.ts:52-56`）；未绑定草稿（桥 null）**静默丢弃**；自身不做 kind 业务分支 |
+| `buildComposerToken` | `(input: { kind: string; label: string; summary?: string; payload?: Record<string, unknown> }) => string` | `PluginDispatcher.ts`（`buildComposerToken`）→ `buildOpaqueTokenText`（`composerToken/composerOpaqueToken.ts`，**不经 holder 桥**） | 与 `appendComposerToken` 同源单点编码（`buildOpaqueTokenText`），**只返回 opaque 串、不追加草稿**（不走草稿桥，未绑定草稿也照常编码）；供本地 slash provider（§21）的 `select` 构造内联胶囊 token——插入时机与位置由 select 结果的 `position` 决定，不能用「追加到当前激活草稿」语义；`kind`/`label` 为空同样由 `buildOpaqueTokenText` 抛错 |
 
 ```ts
 // 典型组合：点击工具视图里的文件名打开文件标签（update-file-view 同款，UpdateFileToolView.tsx:85）
@@ -844,20 +925,22 @@ ctx.ui.appendComposerText('\n\n（追加一段）')
 ctx.ui.openFileTab(workspaceRoot, filePath, { lineNumber: 42 })
 // 结构化插入一枚胶囊（宿主单点编码 opaque token；payload 需展开成对象字面量，见 §17 坑）
 ctx.ui.appendComposerToken({ kind: 'file.selection', label: 'foo.ts:3-5', payload: { ...payload } })
+// 只编码胶囊串、不追加草稿（本地 slash provider 的 select 构造内联 token 用，见 §21）
+const waitToken = ctx.ui.buildComposerToken({ kind: 'task.wait', label: '等待「B 任务」', payload: { targetTaskId } })
 // 打开设置页并直达某段（sectionId 即段锚点 id，见 §18；输入框模型空态引导直达 'models' 同款）
 ctx.ui.openSettingsPage('models')
 ```
 
 注意两个时序坑：① 页面刚加载、`Layout`/`TaskChat` 尚未挂载时桥为 null，动作**静默丢失**（不抛错）；② 草稿桥只在**激活标签页**持有写权（`TaskChat.tsx:703-713` 注释解释竞态），多任务标签并存时写入的是当前激活的那个。
 
-## 22. Disposable 与刷新
+## 23. Disposable 与刷新
 
 - **dispose 语义是真的**：`ListExtensionRegistry.register` 返回的 Disposable 从数组 splice 并通知宿主重渲染（`ExtensionRegistry.ts:45-56`）——`ctx.events.on`、`ctx.commands.registerCommand` 同理（见[前端 ctx API](context-api.md) §9）。`registerTraceType` / `registerOutputBlock` 的 dispose 也已补齐侧路注销（`traceTypeRegistry.unregisterTraceType` / `outputBlockRegistry.unregister`；早期曾是不清真实消费方的假 Disposable）。
 - **宿主收集并在页面卸载时统一 dispose**：激活时 `ctx.ui` 等注册表都包了收集代理（`pluginLoader.ts` 的 `trackDisposables`），注册返回的 Disposable 全部进该插件的 `disposables`；页面卸载（`pagehide`）时宿主先调 `deactivate` 再逆序 dispose 全部注册项并移除插件 CSS（早期 disposables 恒为空数组、`deactivate` 零调用）。运行期没有热卸载——中途注销仍需自己持有 Disposable 调 dispose。
 - **刷新即丢**：注册表、订阅、blob 模块全是内存态，页面刷新全部清零并重新走加载链路（[加载链路](overview-and-loading.md)）；跨刷新要保留的状态用 `ctx.storage`（localStorage）。
 - **同一会话内的「更新」= 重新加载页面**：改了插件 web 代码要重跑 `npm run build:plugins` 再刷新（该脚本不在任何流水线内）；后端启停/装卸一律重启 worker（[plugin.json 字段参考](../plugin-manifest.md) §6；扩展面板「重新加载」按钮**仅在有待生效变更时显示**，待生效变更涉及含 `main` 的插件时会弹确认并自动完成重启 + 刷新）。
 
-## 23. 下一步读
+## 24. 下一步读
 
 - `ctx.ui` 之外的能力（rpc/storage/events/fs/commands）：[前端 ctx API](context-api.md)
 - 加载链路与 bare import 白名单：[加载链路](overview-and-loading.md)

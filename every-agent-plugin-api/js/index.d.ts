@@ -418,6 +418,59 @@ export interface ComposerChipActionDefinition {
   onActivate: (ctx: ComposerChipActivationContext) => void
 }
 
+// ─── Slash 命令 provider（ui.slash_command_providers） ────────────────────
+
+/** 插件 `/` 候选被选中后的插入结果（形态对齐宿主 SlashSelectionResult）。 */
+export interface PluginSlashSelectionResult {
+  /** 要插入的 opaque token 串或纯文本（空串 = 清除触发段、不插入任何内容）。 */
+  token: string
+  /** 放置位置：'inline' → 原地插入；'bottom' → 走底部胶囊（由调用方处理）。 */
+  position: 'inline' | 'bottom'
+  /** 胶囊归属条目 id（可选，多结果联动时各自归属）。 */
+  id?: string
+}
+
+/** select 上下文（宿主在选中 `/` 候选时构造；插件可选消费，如定向拉取任务列表）。 */
+export interface PluginSlashSelectContext {
+  /** 当前任务 ID（草稿态为 undefined）。 */
+  taskId?: string
+  /** 当前工作区根。 */
+  workspace?: string
+  /** 当前 worker ID。 */
+  workerId?: string
+}
+
+/** 插件贡献的单个 `/` 候选项（展示字段 + select 回调）。 */
+export interface PluginSlashCommandItem {
+  /** 全局唯一条目 id（用于 React key 与跨 provider 去重）。 */
+  id: string
+  /** 展示标题。 */
+  title: string
+  /** 副内容（可选）。 */
+  subtitle?: string
+  /** 内联 SVG 字符串（可选，缺省使用通用图标）。 */
+  icon?: string
+  /** 分组名（可选，缺省收进无标题分组）。 */
+  group?: string
+  /** 新建任务时是否默认选中（默认 false）。 */
+  defaultSelected?: boolean
+  /** 选中回调：返回单个或一组插入结果（可异步）。 */
+  select: (ctx?: PluginSlashSelectContext) =>
+    PluginSlashSelectionResult | PluginSlashSelectionResult[]
+    | Promise<PluginSlashSelectionResult | PluginSlashSelectionResult[]>
+}
+
+/**
+ * Slash 命令 provider 定义（由 `ui.slash_command_providers` 扩展点产出）。
+ * 宿主桥接进本地 slashCommandRegistry，与 worker 远端条目统一按 id 去重混排。
+ */
+export interface PluginSlashCommandProviderDefinition {
+  /** 全局唯一 provider id。 */
+  id: string
+  /** 拉取该 provider 的全部条目（可异步）；workerId 为可选透传参数。 */
+  load: (workerId?: string) => PluginSlashCommandItem[] | Promise<PluginSlashCommandItem[]>
+}
+
 // ─── 轮末展示区（ui.round_tail_panels） ─────────────────────────────────
 
 /** 轮末展示区组件的 props（通用轮次上下文，不含任何文件变更专属字段）。 */
@@ -894,6 +947,8 @@ export interface UiRegistry {
   registerWorkspaceTabType(def: UiWorkspaceTabTypeDefinition): Disposable
   registerFileSidebarPanel(def: UiFileSidebarPanelDefinition): Disposable
   registerComposerAbovePanel(def: UiComposerAbovePanelDefinition): Disposable
+  /** 注册 `/` 命令 provider（由 `ui.slash_command_providers` 扩展点产出，条目经宿主桥接进 `/` 菜单）。 */
+  registerSlashCommandProvider(def: PluginSlashCommandProviderDefinition): Disposable
   registerToolCallView(def: ToolCallViewDefinition): Disposable
   registerUserMessageAction(def: UiUserMessageActionDefinition): Disposable
   registerTaskRunSubmitContributionProvider(provider: TaskRunSubmitContributionProvider): Disposable
@@ -956,6 +1011,11 @@ export interface UiRegistry {
     /** 追加前是否补空格分隔（默认 true）。 */
     spaced?: boolean
   }): void
+  /**
+   * 构造一枚胶囊的 opaque token 串并返回（与 `appendComposerToken` 同源单点编码，
+   * 只是不追加草稿，由插件自行决定插入位置/时机）。`kind`/`label` 为空时抛错。
+   */
+  buildComposerToken(input: { kind: string; label: string; summary?: string; payload?: Record<string, unknown> }): string
   /** 用 rawContent（可能含 opaque token 串）替换整个草稿（编辑重发回填用）。 */
   setComposerRawContent(rawContent: string): void
 }

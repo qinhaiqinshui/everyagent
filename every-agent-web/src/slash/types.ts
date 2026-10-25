@@ -37,10 +37,13 @@ export interface SlashCommandItem {
    * - `token` 为 opaque token 串或纯文本（isOpaqueTokenText(token)===true → 显示为胶囊，否则原样为纯文本）；
    * - `position` = 'inline' → 原地插入；= 'bottom' → 走底部胶囊（由调用方处理）；
    * - 数组支持一次返回多个 bottom 结果（联动场景，如「无人值守」同时返回双胶囊）。
+   * - `selectCtx`（可选第二参）为宿主构造的选中上下文（taskId/workspace/workerId），
+   *   供插件类 provider 定向取数；既有 provider 不消费即零感知。
    * slash 层不解析/不关心内容本质，只判断上述形态。
    */
   select: (
     item: SlashCommandItem,
+    selectCtx?: { taskId?: string; workspace?: string; workerId?: string },
   ) => SlashSelectionResult | SlashSelectionResult[] | Promise<SlashSelectionResult | SlashSelectionResult[]>
 }
 

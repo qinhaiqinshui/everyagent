@@ -1,0 +1,10 @@
+{
+  "id": "task-wait",
+  "name": "等待任务",
+  "version": "0.1.0",
+  "description": "等待任务插件：/等待任务 选择进行中任务生成胶囊，任务运行时阻塞等待目标任务完成（仅 done 放行），等待期间发射 task.wait trace（落盘、前端读秒）；绑定内存态不落盘，重启丢失",
+  "author": "everyagent",
+  "main": "dev.everyagent.plugin.taskwait.TaskWaitPlugin",
+  "webMain": "web/index.ts",
+  "enabled": true
+}

@@ -12,10 +12,10 @@ has_children: false
 | 注册点 | 声明位置 | worker 侧注册表 / 分发器 | 内置使用者 |
 |---|---|---|---|
 | `registerTaskAdmissionPolicy` | `TaskPluginContext.java:17` | `TaskAdmissionPolicyRegistry`（至多一个，AtomicReference） | task-queue（唯一） |
-| `registerTaskLifecycleNode` | `TaskPluginContext.java:24` | `TaskLifecycleRegistry` → `TaskLifecycleExecutor` | task-input-queue ×2、task-queue、task-edit-resend、subagent（4 插件 5 节点） |
+| `registerTaskLifecycleNode` | `TaskPluginContext.java:24` | `TaskLifecycleRegistry` → `TaskLifecycleExecutor` | task-input-queue ×2、task-queue、task-edit-resend、subagent、task-wait（5 插件 6 节点） |
 | `registerRpcMethod` | `WorkerPluginContext.java:94` | `RpcDispatcher`（方法表 ConcurrentHashMap） | git ×13、task-input-queue ×3、task-queue、file-change（共 18 个方法） |
 | `registerSlashProvider` | `WorkerPluginContext.java:102` | `SlashCommandRegistry`（→ `slash.list` RPC） | ai-review、git、sandbox-wsl-ubuntu、unattended（4 处） |
-| `registerSlashTokenResolver` | `WorkerPluginContext.java:109` | `SlashTokenHandler`（同上 4 插件各自的 resolver） | 同上 4 插件 |
+| `registerSlashTokenResolver` | `WorkerPluginContext.java:109` | `SlashTokenHandler`（同上 4 插件 + task-wait 各自的 resolver） | 同上 4 插件 + task-wait（/ 条目为前端本地，见 [UI 扩展点](../web/ui-extensions.md) §21） |
 
 两个 task 域注册点声明在父接口 `TaskPluginContext`（`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/task/TaskPluginContext.java:17,24`），`WorkerPluginContext extends TaskPluginContext`——不需要 task 域能力的插件只依赖基础接口，不被迫传递性 import task 域类型（该接口类注释自证）。
 
@@ -133,7 +133,7 @@ public interface TaskLifecycleNode {
 
 与 Advisor 链（int、`HIGHEST_PRECEDENCE + N` 约 -21.47 亿，[advisors.md](advisors.md) §2.1）是**两套互不相干的坐标系**：这里是朴素正数 float，15/40/870/950 都是「裸值」。
 
-### 2.3 完整节点 order 占用表（worker 内置 26 + 插件 5，共 31）
+### 2.3 完整节点 order 占用表（worker 内置 26 + 插件 6，共 32）
 
 worker 内置节点分两处注册：RPC 线程段 6 个在 `TaskManager.registerLifecycleNodes`（`every-agent-worker/src/main/java/dev/everyagent/worker/task/TaskManager.java:174-187`，需要 TaskManager 内部 Map/Counter 所以不进 `BuiltInTaskLifecycleNodes`）；其余 20 个在 `BuiltInTaskLifecycleNodes.registerAll`（`every-agent-worker/src/main/java/dev/everyagent/worker/task/lifecycle/BuiltInTaskLifecycleNodes.java:68-96`），全部以 `pluginId="worker"` 注册（不受临界段限制）。「段型」栏：普通 = 走 `invoke` 语义；Section = `SectionNode`/`UpstreamNode` 子类（§2.5）。
 
@@ -167,6 +167,7 @@ worker 内置节点分两处注册：RPC 线程段 6 个在 `TaskManager.registe
 | **870** | `queue.loop` | 普通 | 轮次循环：重复 next.proceed 续跑队列项 | **task-input-queue** | `QueueLoopNode.java:54` |
 | 875 | `file.reference.process` | 普通 | `@` 文件引用预处理（每轮；薄壳委托核心 `UserInputMaterializer` 物化） | worker | `FileReferenceProcessNode.java:71-72` |
 | **877** | `edit.resend` | 普通 | 编辑重发截断（每轮） | **task-edit-resend** | `EditResendNode.java:32` |
+| **879** | `wait.bind` | 普通 | 扫描本轮 rawContent 中的 task.wait 胶囊并登记内存绑定（每轮） | **task-wait** | `WaitBindNode.java` |
 | 880 | `consume.input` | 普通 | 消费当前轮输入（每轮） | worker | `ConsumeInputNode.java:24` |
 | 900 | `cascade.stop` | Upstream | 逐轮失败级联停 | worker | `CascadeStopNode.java:33` |
 | **950** | `spawned.await` | 普通 | 逐轮等子 agent 全部终态（轮收口前） | **subagent** | `SubAgentSpawnedAwaitNode.java:29` |
@@ -206,13 +207,13 @@ log.warn("插件 {} 尝试注册生命周期节点 {} 的 order={} 落入临界�
 
 **为什么有这段（临界区不容插队）**：执行器组装时把**连续且 order ∈ [420,850] 的 `SectionNode` 序列折叠成一个链位**——段内节点的下行段 `down(ctx)` 在段边界外按 order 升序**无锁**先执行，随后进入内层链；内层返回后**包一次** `synchronized(ctx.taskLock())`，段内上行段 `up(ctx, result)` 按 order 降序直接调用（`TaskLifecycleExecutor.java:67-99`；`SectionNode.java:9-15` 类注释）。任务收尾的全部一次性动作（移出注册表→摘流源→flush 日志→落终态→扣并发）必须在**同一把锁内连续完成**——若有外来节点插进这段，连续段会被切成两截、中间插入一次外来 `invoke`，锁内序列被打断（「未进入不收口」的收口动作半途插入外来副作用）。因此注册期直接拒绝插件节点落入该闭区间（含端点 420/850，判定用 `>=`/`<=`）。[`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §7.14.1 写「order ∈ [420,850] 的连续 UpstreamNode 段共享一次 synchronized(taskLock)，对外表现为 order=850 的单一链位置」（850 为旧编号口径，现段内最高是 status=840，机制描述仍准确）。
 
-**插件可选的安全区段**（闭区间 (420,850) 之外任意 float，含负数；现有 5 个插件节点分别占用 15/40/870/877/950）：
+**插件可选的安全区段**（闭区间 (420,850) 之外任意 float，含负数；现有 6 个插件节点分别占用 15/40/870/877/879/950）：
 
 | 你想做什么 | 推荐 order | 依据/范例 |
 |---|---|---|
 | 拦截/改写任务创建输入（RPC 线程段） | `11~14`、`16~19`、`21~29`、`31~39`、`41~49`、`51~54`、`56~69`、`71~79` | `queue.dispatch(15)` 的教训：**必须在 taskid.generate(30) 之前**，否则新建任务被误判为「运行中收新输入」而入队短路、永远不运行（`QueueDispatchNode.java:13-17` 注释记录的事故） |
 | 运行前排队/资源闸门 | `81~99`、`101~149`、`151~199`、`201~309`、`311~339`、`341~349`、`351~389`、`391~419` | `queue.admission(40)` 形态三 try/finally 成对节点 |
-| 每轮预处理（轮次循环段） | `851~859`、`861~869`、`871~874`、`876`、`878~879`、`881~899` | **轮次循环节点必须 >850（临界段内侧）**：`queue.loop` 曾落在 395，每轮上行把一次性收口节点逐轮执行——任务中途被移出注册表、writer 提前关闭、并发计数重复扣减（`QueueLoopNode.java:11-19` 注释记录的事故根因） |
+| 每轮预处理（轮次循环段） | `851~859`、`861~869`、`871~874`、`876`、`878`、`881~899` | **轮次循环节点必须 >850（临界段内侧）**：`queue.loop` 曾落在 395，每轮上行把一次性收口节点逐轮执行——任务中途被移出注册表、writer 提前关闭、并发计数重复扣减（`QueueLoopNode.java:11-19` 注释记录的事故根因） |
 | 收口前等待/审计 | `901~949`、`951+` | `spawned.await(950)` |
 
 ### 2.6 非 register\* 通道：`services.addRoundClosedListener`

@@ -7,7 +7,7 @@ has_children: false
 
 # 内置插件范例索引
 
-**一句话定位**：`every-agent-plugins/` 下的 30 个内置插件是**活教材**——每种扩展点、每种形态、每种 order 档位在仓内都有真实可抄的范本。本篇告诉你「想学某个扩展点，去抄哪个插件」：先查总表（§2）定位插件，再用反查表（§3）按扩展点直达推荐范本，写代码前扫一眼 order 占用表（§4）避开已占档位。
+**一句话定位**：`every-agent-plugins/` 下的 31 个内置插件是**活教材**——每种扩展点、每种形态、每种 order 档位在仓内都有真实可抄的范本。本篇告诉你「想学某个扩展点，去抄哪个插件」：先查总表（§2）定位插件，再用反查表（§3）按扩展点直达推荐范本，写代码前扫一眼 order 占用表（§4）避开已占档位。
 
 所有路径相对仓库根；表格内为省篇幅，`every-agent-plugins/` 前缀在 §5 各小节统一省略为 `~plugins/`。全部数据来自源码逐文件取证（本篇成文前按行复核过关键行号，见文末口径说明）。
 
@@ -18,7 +18,7 @@ has_children: false
 - **形态选择**：不知道该做纯 Java、纯 Web 还是混合？看 §2「形态」列，然后读 [plugin.json 字段参考](../plugin-manifest.md) §3 的三形态实例。
 - 本篇只做索引与点评，**不讲 API 细节**：注册方法的签名与生命周期见 [后端模型总览](../backend/overview.md)、[Advisor 指南](../backend/advisors.md)、[任务与 RPC](../backend/task-and-rpc.md)、[UI 扩展点](../web/ui-extensions.md)。
 
-## 2. 总表（30 个内置插件）
+## 2. 总表（31 个内置插件）
 
 缩写：**DO** = `ToolCallingAdvisor.DEFAULT_ORDER`（−2147483348）；**HP** = `Ordered.HIGHEST_PRECEDENCE`（−2147483648）。「代码量级」= 入口文件（`main` 指向的 Java 类 / `web/index.ts`）行数，量级仅供参考。
 
@@ -49,6 +49,7 @@ has_children: false
 | task-edit-resend | 编辑重发 | both | TaskLifecycleNode | `ui.user_message_actions` + `task.submit_contributions` | 节点 877 | 入口 27 行 + web 26 行 |
 | task-input-queue | 任务输入队列 | both | TaskLifecycleNode ×2 + AdvisorProvider；RPC ×3（`task.queue*`） | `ui.composer_above_panel` | 节点 15 / 870；Advisor DO+30 | 入口 38 行 + web 24 行 |
 | task-queue | 任务队列 | java | TaskLifecycleNode + TaskAdmissionPolicy；RPC `task.queueList` | — | 节点 40 ⚠️ | 入口 31 行 |
+| task-wait | 等待任务 | both | SlashTokenResolver + TaskLifecycleNode + AdvisorProvider | `ui.slash_command_providers` + `ui.composer_above_panel` + `ui.composer_chip_actions` + `ui.kind_views` | 节点 879；Advisor DO+40 | — |
 | token-estimator | Token 估算与校准 | java | TokenEstimator + AdvisorProvider ×1（校准） | — | 校准 0 | 入口 50 行 |
 | transient-error-retry | 瞬时错误退避重试 | java | AdvisorProvider | — | DO+200 | 入口 21 行 |
 | unattended | 无人值守 | java | ToolExecutionInterceptor + AuthorizationHandler + SlashProvider + SlashTokenResolver | — | — | 入口 32 行 |
@@ -56,11 +57,11 @@ has_children: false
 
 ### 2.1 全体共性（读任何一个插件前先知道）
 
-- 形态分布：java-only 20 / both 6 / web-only 4；**没有纯声明式插件**（每个都至少有一侧入口）。
-- 清单字段全体一致：`id/name/version/description/author` + `enabled`，version 一律 `0.1.0`、author 一律 `everyagent`；含 Java 的 25 个另有 `main`，含前端的 10 个另有 `webMain`（值全部写 `web/index.ts`，宿主实际加载的是构建产物 `web/index.js`，见 [plugin.json 字段参考](../plugin-manifest.md) §5）。
+- 形态分布：java-only 19 / both 7 / web-only 5；**没有纯声明式插件**（每个都至少有一侧入口）。
+- 清单字段全体一致：`id/name/version/description/author` + `enabled`，version 一律 `0.1.0`、author 一律 `everyagent`；含 Java 的 26 个另有 `main`，含前端的 12 个另有 `webMain`（值全部写 `web/index.ts`，宿主实际加载的是构建产物 `web/index.js`，见 [plugin.json 字段参考](../plugin-manifest.md) §5）。
 - 用 `contributes.config` 的只有 2 个：image-vision（3 键）、sandbox-windows-codex（6 键）。
 - `enabled:false` 的有 3 个：ripgrep-tool、sandbox-wsl-ubuntu、secret-redaction（内置扫描期整目录跳过；sandbox-windows-mic 已移除）。
-- 依赖红线干净：全部 25 个 pom **零 `every-agent-worker` 依赖**；`task-edit-resend`、`task-input-queue` 额外依赖 `every-agent-contract` 属共享契约层，合规（[架构文档](../../ARCHITECTURE.md) §14.9）。
+- 依赖红线干净：全部 26 个 pom **零 `every-agent-worker` 依赖**；`task-edit-resend`、`task-input-queue` 额外依赖 `every-agent-contract` 属共享契约层，合规（[架构文档](../../ARCHITECTURE.md) §14.9）。
 - 全部插件源码零 Spring 容器注解：插件经 `URLClassLoader` 加载、不在 Spring 容器中，取服务只能 `ctx.services()` / `getService(Class)`。
 - 每个 Java 入口都实现 `dev.everyagent.plugin.api.EveryAgentPlugin` 的 `activate(WorkerPluginContext ctx)`；改完 Java 要重跑 `mvn package`、改完 web 要重跑 `npm run build:plugins`（均需重启 worker，见 [构建与运行](../guides/build-and-run.md)）。
 
@@ -99,7 +100,7 @@ has_children: false
 | `registerTaskAdmissionPolicy`（任务准入策略） | task-queue | `every-agent-plugins/task-queue/src/main/java/dev/everyagent/plugin/taskqueue/TaskQueuePlugin.java:25` | 全仓唯一使用者 |
 | `registerTaskLifecycleNode`（任务生命周期节点） | task-edit-resend | `every-agent-plugins/task-edit-resend/src/main/java/dev/everyagent/plugin/editresend/EditResendNode.java` | 单节点、职责单一（order=877）；多节点编排（15/870 双节点）看 task-input-queue，try/finally 成对形态看 task-queue 的 `QueueAdmissionNode` |
 
-### 3.4 前端扩展点（17 个）
+### 3.4 前端扩展点（19 个）
 
 | 想实现 | 推荐范本 | 源码相对路径 | 为什么推荐 |
 |---|---|---|---|
@@ -119,7 +120,8 @@ has_children: false
 | `ui.composer_chip_actions`（胶囊激活行为） | selection-reference | `every-agent-plugins/selection-reference/web/index.ts:75` | 插件侧样本：点击胶囊经 `ctx.ui.openFileTab(..., { lineNumber })` 切回原文件标签并定位起始行；核心 `system.workspace_file` 亦经此注册（`pluginId:'core'`） |
 | `ui.settings_sections`（设置页设置段） | **无内置范例** | — | 扩展点由外部插件 novel-reader 起用；设置段组件无 props、数据自持 |
 | `ui.themes`（全局颜色主题） | **无内置范例** | — | 扩展点由外部插件 novel-reader 起用；核心深/浅色为主题表内建项（不走该扩展点）；支持部分覆盖、其余继承 `type` 基底 |
-| 扩展点之外的自绘全局 UI（悬浮球等） | mobile-keyboard | `every-agent-plugins/mobile-keyboard/web/floatball.ts` | 唯一直接操作 `document.body` 的插件：15 个扩展点没有全局覆盖层位时，挂自有根元素 + 自管生命周期与可见性 |
+| `ui.slash_command_providers`（本地 `/` 斜杠命令条目） | task-wait | `every-agent-plugins/task-wait/web/index.ts` | 唯一使用者：`/` 条目前端直连（不经 worker `slash.list`），select 内弹浮层选任务、经 `buildComposerToken` 构造内联胶囊 |
+| 扩展点之外的自绘全局 UI（悬浮球等） | mobile-keyboard | `every-agent-plugins/mobile-keyboard/web/floatball.ts` | 唯一直接操作 `document.body` 的插件：19 个扩展点没有全局覆盖层位时，挂自有根元素 + 自管生命周期与可见性 |
 
 另有非 register\* 的服务通道 `WorkerServices.addRoundClosedListener`（`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/WorkerServices.java:80`），唯一使用者 file-change（`FileChangePlugin.java:33`）。
 
@@ -137,6 +139,7 @@ has_children: false
 | −2147483348 | — | （基准值）`ToolCallingAdvisor.DEFAULT_ORDER` | spring-ai-client-chat 2.0.1（javap 实测） |
 | −2147483347 | HP+301 | file-change | `every-agent-plugins/file-change/src/main/java/dev/everyagent/plugin/filechange/FileChangeAdvisorProvider.java:45-46` |
 | −2147483318 | DO+30 | task-input-queue（对话插入） | `every-agent-plugins/task-input-queue/src/main/java/dev/everyagent/plugin/inputqueue/DialogInsertAdvisorProvider.java:34` |
+| −2147483308 | DO+40 | task-wait（等待任务） | `every-agent-plugins/task-wait/src/main/java/dev/everyagent/plugin/taskwait/WaitTaskAdvisorProvider.java` |
 | −2147483248 | DO+100 | empty-response-retry | `every-agent-plugins/empty-response-retry/src/main/java/dev/everyagent/plugin/emptyretry/EmptyResponseRetryAdvisorProvider.java:30-31` |
 | −2147483148 | DO+200 | transient-error-retry | `every-agent-plugins/transient-error-retry/src/main/java/dev/everyagent/plugin/transientretry/TransientErrorRetryAdvisorProvider.java:30-31` |
 | −2147483098 | DO+250 | adaptive-max-tokens | `every-agent-plugins/adaptive-max-tokens/src/main/java/dev/everyagent/plugin/adaptivemaxtokens/AdaptiveMaxTokensAdvisorProvider.java:37-38` |
@@ -153,6 +156,7 @@ has_children: false
 | 40 | task-queue / QueueAdmissionNode ⚠️ 类注释写 250 | `every-agent-plugins/task-queue/src/main/java/dev/everyagent/plugin/taskqueue/QueueAdmissionNode.java:31`（陈旧注释 `:12`） |
 | 870 | task-input-queue / QueueLoopNode（临界段内侧轮次循环） | `every-agent-plugins/task-input-queue/src/main/java/dev/everyagent/plugin/inputqueue/QueueLoopNode.java:54` |
 | 877 | task-edit-resend / EditResendNode | `every-agent-plugins/task-edit-resend/src/main/java/dev/everyagent/plugin/editresend/EditResendNode.java:32` |
+| 879 | task-wait / WaitBindNode（轮次循环段：扫描本轮 rawContent 登记等待绑定） | `every-agent-plugins/task-wait/src/main/java/dev/everyagent/plugin/taskwait/WaitBindNode.java` |
 | 950 | subagent / SubAgentSpawnedAwaitNode（收口前等待） | `every-agent-plugins/subagent/src/main/java/dev/everyagent/plugin/subagent/SubAgentSpawnedAwaitNode.java:29` |
 
 ### 4.3 后端 SandboxProvider（`priority()`，int，大者优先）
@@ -366,7 +370,7 @@ Token 估算器（全仓唯一实现 BuiltinTokenEstimator）+ 在线校准 Advi
 - 各注册方法与类型的完整清单：[API 一屏索引](api-index.md)
 - 把范例跑起来（构建命令矩阵、cwd 陷阱、`build:plugins`）：[构建与运行](../guides/build-and-run.md)
 - Advisor 链与 order 语义详解：[Advisor 指南](../backend/advisors.md)
-- 前端 17 个扩展点的注册签名与渲染管线：[UI 扩展点](../web/ui-extensions.md)
+- 前端 19 个扩展点的注册签名与渲染管线：[UI 扩展点](../web/ui-extensions.md)
 
 ---
 
