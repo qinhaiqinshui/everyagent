@@ -55,8 +55,8 @@ function toDisplayPath(filePath: string): string {
  * 轮末文件变更视图:渲染该轮文件变更轻量摘要行(**文件图标** + 文件名 + 完整路径 + A/M/D 标签),
  * 一行两个点击目标:
  * - **点文件名(含文件图标)** → 经 `ctx.ui.openFileTab` 打开(或激活)该文件的**文件标签页**(读写模式);
- * - **点右侧完整路径** → 按 roundId 经 `task.fileChanges` 拉全文(含 beforeContent/afterContent),
- *   再开 **diff 标签**对比。
+ * - **点右侧完整路径或最右侧 A/M/D 标签** → 按 roundId 经 `task.fileChanges` 拉全文
+ *   (含 beforeContent/afterContent),再开 **diff 标签**对比。
  * 删除的文件**文件名按钮禁用且不渲染图标**(文件已不在磁盘,打开必失败),该行只剩 diff 入口。
  *
  * **布局**:本组件不包根容器,汇总头 pill 与展开的文件行列表是宿主轮末工具栏行
@@ -187,12 +187,14 @@ export default function RoundFileChangesView({
                     {'\u200E' + displayPath}
                   </span>
                 </button>
-                <span
+                <button
+                  type="button"
                   className={`task-file-changes__tag task-file-changes__tag--${change.changeType}`}
                   title={CHANGE_GIT_LETTER[change.changeType].title}
+                  onClick={() => void openDiff(change)}
                 >
                   {CHANGE_GIT_LETTER[change.changeType].letter}
-                </span>
+                </button>
               </div>
             )
           })}

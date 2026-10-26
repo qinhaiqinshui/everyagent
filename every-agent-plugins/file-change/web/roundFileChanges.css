@@ -172,6 +172,12 @@
 .task-file-changes__tag {
   flex: 0 0 auto;
   margin-left: auto;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
   font-size: var(--text-xs);
   font-weight: 700;
 }
