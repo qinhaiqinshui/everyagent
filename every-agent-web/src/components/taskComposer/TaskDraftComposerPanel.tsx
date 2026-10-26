@@ -70,6 +70,8 @@ export interface TaskDraftComposerPanelProps {
   onAddTaskScopeToken?: (payload: { id: string; token: string }) => void | Promise<void>
   /** 移除任务级 token（底部 ✕，内联 ✕ 由 TaskComposerSurface 内部处理）。 */
   onRemoveTaskScopeToken?: (payload: { id?: string; token: string }) => void
+  /** 输入框上方可选内容（如插件注册的 composer_above_panel：等待任务选择框等）。 */
+  abovePanel?: React.ReactNode
 }
 
 /**
@@ -102,6 +104,7 @@ export default function TaskDraftComposerPanel({
   taskScopeTokens,
   onAddTaskScopeToken,
   onRemoveTaskScopeToken,
+  abovePanel,
 }: TaskDraftComposerPanelProps) {
   return (
     <ChatShell
@@ -122,6 +125,7 @@ export default function TaskDraftComposerPanel({
             workerId={workerId}
             isMobile={isMobile}
             placeholder="输入你想让当前任务处理的内容"
+            abovePanel={abovePanel}
             submitLabel={submitLabel}
             submitDisabled={submitDisabled}
             showSendButton={false}

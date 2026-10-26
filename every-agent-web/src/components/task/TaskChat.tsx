@@ -930,6 +930,8 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
 
   // 草稿态：渲染与 n 版启动台一致的草稿面板（BrandMark 顶栏 + 空线程 + 输入区）。
   // 模型配置来自 worker(config.get),选中项经 task.create 的 configId 冻结进任务快照。
+  // 草稿态同样挂载插件注册的 composer_above_panel（等待任务选择框等 fixed 浮层），
+  // 否则在「新任务」标签里插件面板未挂载、浮层无宿主渲染而「弹窗不知道弹到哪里去了」。
   if (isDraft) {
     return (
       <TaskDraftComposerPanel
@@ -951,6 +953,14 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
         onAddTaskScopeToken={handleAddTaskScopeToken}
         onRemoveTaskScopeToken={handleRemoveTaskScopeToken}
         onSubmitTask={handleSubmit}
+        abovePanel={composerAbovePanels.length > 0 ? (
+          <div className="nagent-composer__above-stack">
+            {composerAbovePanels.map((def) => {
+              const Component = def.Component as React.ComponentType<ComposerPanelCtx>
+              return <Component key={def.id} {...composerPanelCtx} />
+            })}
+          </div>
+        ) : undefined}
       />
     )
   }
