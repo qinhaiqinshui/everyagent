@@ -35,6 +35,7 @@ import AntdAppBridge from './AntdAppBridge'
 import ToastHost from './ToastHost'
 import NotificationHost from './NotificationHost'
 import UserInteractionHost from './UserInteractionHost'
+import PluginDialogHost from './PluginDialogHost'
 import PendingUserInteractionIndicator from './PendingUserInteractionIndicator'
 import BrowserNotificationHost from './BrowserNotificationHost'
 import BrowserNotificationGuide from './BrowserNotificationGuide'
@@ -1003,6 +1004,7 @@ function LayoutContent({ initialThemeType }: { initialThemeType: ThemeMode }) {
         <ToastHost />
         <NotificationHost />
         <UserInteractionHost />
+        <PluginDialogHost />
         <PendingUserInteractionIndicator />
         <BrowserNotificationHost />
         <BrowserNotificationGuide />

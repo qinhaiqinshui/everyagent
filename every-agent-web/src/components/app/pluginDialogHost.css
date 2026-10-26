@@ -1,0 +1,53 @@
+/**
+ * 插件模态对话框宿主样式（PluginDialogHost）。
+ * 类名前缀 plugin-dialog；复用宿主 UI Token 变量，不硬编码颜色/圆角。
+ * 壳对齐 task-wait 旧选择框的 fixed 居中模态浮层形态（遮罩 + 浮层 + 头部），
+ * 主体区域留给插件 Content 自绘。
+ */
+
+.plugin-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.plugin-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(480px, calc(100vw - 48px));
+  max-height: min(480px, calc(100vh - 96px));
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+  outline: none; /* 键盘焦点由浮层根承载（tabIndex=-1 程序聚焦） */
+}
+
+.plugin-dialog__header {
+  padding: 14px 16px 10px;
+}
+
+.plugin-dialog__title {
+  font-size: var(--text-md);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.plugin-dialog__desc {
+  margin-top: 4px;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.plugin-dialog__body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}

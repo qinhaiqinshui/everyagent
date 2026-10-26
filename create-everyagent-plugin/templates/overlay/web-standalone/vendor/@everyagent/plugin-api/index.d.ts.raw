@@ -942,6 +942,29 @@ export interface ThemeDefinition {
 
 // ─── UI 注册表 ────────────────────────────────────────────────────────────
 
+/** 插件模态对话框主体内容组件的 props（宿主注入收口回调）。 */
+export interface PluginDialogProps<R = unknown> {
+  /**
+   * 收口当前对话框：close(result) resolve Promise 为 result；
+   * close(null) 视为取消（resolve null）。
+   */
+  close: (result: R | null) => void
+}
+
+/**
+ * 插件模态对话框请求（由 `ctx.ui.showDialog` 传入）。
+ * 宿主负责遮罩 / 居中浮层 / Esc / 点遮罩取消 / 焦点管理；
+ * 插件 Content 组件只负责渲染主体内容与调用 close() 收口。
+ */
+export interface PluginDialogRequest<R = unknown> {
+  /** 模态标题。 */
+  title: string
+  /** 标题下副标题（可选）。 */
+  description?: string
+  /** 主体内容组件（props = PluginDialogProps<R>）。 */
+  Content: ComponentType<PluginDialogProps<R>>
+}
+
 export interface UiRegistry {
   registerSidebarItem(def: UiSidebarItemDefinition): Disposable
   registerWorkspaceTabType(def: UiWorkspaceTabTypeDefinition): Disposable
@@ -1026,6 +1049,24 @@ export interface UiRegistry {
    * 宿主委托 antd message（带主题/上下文），未注册时降级静态 message。
    */
   showToast(message: string, type?: 'success' | 'error' | 'info' | 'warning'): void
+  /**
+   * 弹出全局模态对话框并挂起等待用户收口，返回 Promise。
+   *
+   * 与 showToast 一样由宿主**全局挂载一次**（不依附任何 composer / 标签页），
+   * 故在任意上下文（草稿态、真实任务、文件页等）调用都能可靠弹出——
+   * 这是相对 `composer_above_panel`（依附输入框上方插槽，会随 composer 挂载
+   * 而漏挂）的根本优势，适合瞬态模态交互（如「选择要等待的任务」）。
+   *
+   * 形态对齐 `kind_views`：宿主出模态壳（遮罩 + 居中浮层 + Esc/点遮罩 = 取消 +
+   * 焦点管理），插件出主体 `Content` 组件（接收 `close(result)` prop 收口；
+   * `result` 即 resolve 值，`close(null)` / Esc / 点遮罩 resolve null）。
+   *
+   * @param request.title        模态标题
+   * @param request.description  标题下副标题（可选）
+   * @param request.Content      主体内容组件，props 注入 `close(result)`
+   * @returns 用户收口值；取消 / Esc / 点遮罩 / 插件卸载 → null
+   */
+  showDialog<R = unknown>(request: PluginDialogRequest<R>): Promise<R | null>
 }
 
 // ─── PluginContext / PluginModule ─────────────────────────────────────────

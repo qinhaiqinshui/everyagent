@@ -18,6 +18,7 @@ import type {
   FileExplorerAction,
   PluginDiffTabInput,
   PluginActiveTabInfo,
+  PluginDialogRequest,
   SearchTypeDefinition,
   UiEditorContextMenuActionDefinition,
   ComposerChipActionDefinition,
@@ -27,6 +28,7 @@ import type {
 } from '@everyagent/plugin-api'
 import { appendComposerTextQueued, getComposerBridge, getShellBridge } from './pluginRuntimeBridge'
 import { activeTabMirror } from './activeTabMirror'
+import { openDialog } from './dialogBridge'
 import { buildOpaqueTokenText } from '@/composerToken/composerOpaqueToken'
 import { antdMessage } from '@/utils/appAntdBridge'
 import type {
@@ -261,6 +263,11 @@ export interface RealPluginDispatcher {
    * 供插件在非 React 上下文（如 slash select 回调）向用户反馈瞬态结果。
    */
   showToast: (message: string, type?: 'success' | 'error' | 'info' | 'warning') => void
+  /**
+   * 弹出全局模态对话框并挂起等待用户收口（委托 plugin/dialogBridge store；
+   * 渲染由 PluginDialogHost 全局挂载承接，不依附任何 composer/标签页）。
+   */
+  showDialog: <R = unknown>(request: PluginDialogRequest<R>) => Promise<R | null>
 }
 
 export const pluginDispatcher: RealPluginDispatcher = {
@@ -495,5 +502,8 @@ export const pluginDispatcher: RealPluginDispatcher = {
   },
   showToast(message, type = 'info') {
     antdMessage(type, message)
+  },
+  showDialog(request) {
+    return openDialog(request)
   },
 }

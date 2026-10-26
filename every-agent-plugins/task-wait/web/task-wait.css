@@ -1,49 +1,19 @@
 /**
- * 任务等待插件样式（选择框浮层 + trace 行），类名前缀统一自管：
- * - task-wait-picker*  → 选择框（fixed 居中模态浮层 + 半透明遮罩）
+ * 任务等待插件样式（showDialog 主体内容 + trace 行），类名前缀统一自管：
+ * - task-wait-picker*  → 选择框主体（列表 / 徽标 / 底部取消；模态壳——遮罩 /
+ *   浮层 / 头部 / Esc——由宿主 PluginDialogHost 统一提供，见 pluginDialogHost.css）
  * - task-wait-trace*   → 等待 trace 行视图
  * 复用宿主 UI Token 变量，不硬编码颜色/圆角；不依赖 antd。
  */
 
-/* ─── 选择框浮层 ─────────────────────────────────────────────────────── */
+/* ─── 选择框主体（showDialog Content） ──────────────────────────────── */
 
-.task-wait-picker-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 1000;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(0, 0, 0, 0.45);
-}
-
-.task-wait-picker {
+.task-wait-picker__body {
   display: flex;
   flex-direction: column;
-  width: min(480px, calc(100vw - 48px));
-  max-height: min(420px, calc(100vh - 96px));
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
-  overflow: hidden;
-  outline: none; /* 键盘焦点由浮层根承载（tabIndex=-1 程序聚焦） */
-}
-
-.task-wait-picker__header {
-  padding: 14px 16px 10px;
-}
-
-.task-wait-picker__title {
-  font-size: var(--text-md);
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.task-wait-picker__desc {
-  margin-top: 4px;
-  font-size: var(--text-xs);
-  color: var(--text-muted);
+  flex: 1;
+  min-height: 0;
+  outline: none;
 }
 
 .task-wait-picker__list {
