@@ -146,8 +146,10 @@
   cursor: pointer;
 }
 
+/* 文件名:可收缩(flex-shrink 1 + min-width 0),超长时省略号截断——若不可收缩,
+   长文件名会把「打开文件」按钮撑出行宽,溢出的文字直接盖在右侧路径按钮上(内容重叠)。 */
 .task-file-changes__name {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
   min-width: 0;
   font-weight: 600;
   white-space: nowrap;
