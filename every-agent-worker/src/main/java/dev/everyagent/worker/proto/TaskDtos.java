@@ -43,7 +43,7 @@ public final class TaskDtos {
     @JsonIgnoreProperties(ignoreUnknown = true)
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record UsageSummary(long inputTokens, long outputTokens, long totalTokens,
-            Long contextWindowTokens, String model) {
+            long cacheReadTokens, Long contextWindowTokens, String model) {
     }
 
     /**

@@ -88,7 +88,7 @@ export interface TaskAgentLedgerItem {
   /** 最近一次 AI 返回的活动快照。 */
   latestActivity?: { reasoning?: string; content?: string; error?: string; createdAt?: number; updatedAt?: number } | null;
   /** 累计用量。 */
-  usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number } | null;
+  usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number; cacheHitTokens?: number } | null;
   lastText?: string;
   /** 最近一轮上下文快照。 */
   context?: { inputTokens?: number; contextWindowTokens?: number; model?: string } | null;

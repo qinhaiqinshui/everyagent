@@ -110,9 +110,9 @@ class TaskEventsRoundSeqTest {
         usageData.put("model", "gpt");
         usageData.put("contextWindowTokens", 100_000L);
         usageData.set("round", Json.toJson(
-                new dev.everyagent.plugin.api.event.Usage(10, 20, 30)));
+                new dev.everyagent.plugin.api.event.Usage(10, 20, 30, 0)));
         usageData.set("total", Json.toJson(
-                new dev.everyagent.plugin.api.event.Usage(10, 20, 30)));
+                new dev.everyagent.plugin.api.event.Usage(10, 20, 30, 0)));
         long u = e.emit(EmitEvent.of(SnowflakeId.next(), Events.USAGE, "agent-a",
                 null, null, null, null, usageData, EmitEvent.Mode.REPLACE));
         assertTrue(u > m, "usage 独立雪花 seq 不与 message 共享");

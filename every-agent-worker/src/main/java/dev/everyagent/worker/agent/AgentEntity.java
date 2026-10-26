@@ -514,9 +514,10 @@ public final class AgentEntity implements Agent {
         long in = u.getPromptTokens() == null ? 0 : u.getPromptTokens();
         long out = u.getCompletionTokens() == null ? 0 : u.getCompletionTokens();
         long total = u.getTotalTokens() == null ? in + out : u.getTotalTokens();
+        long cacheRead = u.getCacheReadInputTokens() == null ? 0 : u.getCacheReadInputTokens();
         if (in == 0 && out == 0) {
             return;
         }
-        usage.updateAndGet(old -> old.plus(new Usage(in, out, total)));
+        usage.updateAndGet(old -> old.plus(new Usage(in, out, total, cacheRead)));
     }
 }

@@ -8,14 +8,15 @@ import com.fasterxml.jackson.annotation.JsonInclude;
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 @JsonInclude(JsonInclude.Include.NON_NULL)
-public record Usage(long inputTokens, long outputTokens, long totalTokens) {
+public record Usage(long inputTokens, long outputTokens, long totalTokens,
+        long cacheReadTokens) {
 
     public static Usage zero() {
-        return new Usage(0, 0, 0);
+        return new Usage(0, 0, 0, 0);
     }
 
     public Usage plus(Usage other) {
         return new Usage(inputTokens + other.inputTokens, outputTokens + other.outputTokens,
-                totalTokens + other.totalTokens);
+                totalTokens + other.totalTokens, cacheReadTokens + other.cacheReadTokens);
     }
 }

@@ -439,11 +439,12 @@ public final class TaskEntry implements TaskRuntime {
             return; // 防御:发射侧保证 round 非零,异常形态直接丢弃
         }
         long total = round.path("totalTokens").asLong(0);
+        long cacheRead = round.path("cacheReadTokens").asLong(0);
         long ctxWindow = data.path("contextWindowTokens").asLong(0);
         String model = data.path("model").asString("");
         String agentId = r.agentId() == null ? "" : r.agentId();
         // 每 agent 最近一轮 → 任务级聚合(锁内单线程维护,投影串行)
-        usageRoundByAgent.put(agentId, new Usage(in, out, total > 0 ? total : in + out));
+        usageRoundByAgent.put(agentId, new Usage(in, out, total > 0 ? total : in + out, cacheRead));
         usageWindowByAgent.put(agentId,
                 ctxWindow > 0 ? ctxWindow : WorkerConfig.DEFAULT_CONTEXT_WINDOW_TOKENS);
         // 压缩冷启动种子(§7.5):仅携带 fullViewEstTokens 的轮次(= 全量未压缩发送视图)更新;
@@ -476,16 +477,18 @@ public final class TaskEntry implements TaskRuntime {
         long sumIn = 0;
         long sumOut = 0;
         long sumTotal = 0;
+        long sumCacheRead = 0;
         for (Usage u : usageRoundByAgent.values()) {
             sumIn += u.inputTokens();
             sumOut += u.outputTokens();
             sumTotal += u.totalTokens();
+            sumCacheRead += u.cacheReadTokens();
         }
         long sumWindow = 0;
         for (Long w : usageWindowByAgent.values()) {
             sumWindow += w;
         }
-        recordUsage(new Usage(sumIn, sumOut, sumTotal), sumWindow, model);
+        recordUsage(new Usage(sumIn, sumOut, sumTotal, sumCacheRead), sumWindow, model);
     }
 
     /**
@@ -507,6 +510,9 @@ public final class TaskEntry implements TaskRuntime {
                 item.put("inputTokens", u.inputTokens());
                 item.put("outputTokens", u.outputTokens());
                 item.put("totalTokens", u.totalTokens());
+                if (u.cacheReadTokens() > 0) {
+                    item.put("cacheReadTokens", u.cacheReadTokens());
+                }
                 Long w = usageWindowByAgent.get(e.getKey());
                 if (w != null && w > 0) {
                     item.put("contextWindowTokens", w);
@@ -552,8 +558,9 @@ public final class TaskEntry implements TaskRuntime {
                     continue; // 防御:无用量快照的条目不入数据基
                 }
                 long total = item.path("totalTokens").asLong(0);
+                long cacheRead = item.path("cacheReadTokens").asLong(0);
                 long window = item.path("contextWindowTokens").asLong(0);
-                usageRoundByAgent.put(e.getKey(), new Usage(in, out, total > 0 ? total : in + out));
+                usageRoundByAgent.put(e.getKey(), new Usage(in, out, total > 0 ? total : in + out, cacheRead));
                 usageWindowByAgent.put(e.getKey(),
                         window > 0 ? window : WorkerConfig.DEFAULT_CONTEXT_WINDOW_TOKENS);
                 // 压缩冷启动种子(§7.5)成对回灌:无种子字段的旧任务/压缩视图收尾的运行天然跳过
@@ -580,6 +587,7 @@ public final class TaskEntry implements TaskRuntime {
             return null;
         }
         return new UsageSummary(u.inputTokens(), u.outputTokens(), u.totalTokens(),
+                u.cacheReadTokens(),
                 contextWindowTokens, usageModel.isEmpty() ? null : usageModel);
     }
 
@@ -591,8 +599,9 @@ public final class TaskEntry implements TaskRuntime {
         long in = usage.path("inputTokens").asLong(0);
         long out = usage.path("outputTokens").asLong(0);
         long total = usage.path("totalTokens").asLong(0);
+        long cacheRead = usage.path("cacheReadTokens").asLong(0);
         if (in > 0 || out > 0 || total > 0) {
-            lastUsage = new Usage(in, out, total > 0 ? total : in + out);
+            lastUsage = new Usage(in, out, total > 0 ? total : in + out, cacheRead);
         }
         long ctx = usage.path("contextWindowTokens").asLong(0);
         if (ctx > 0) {

@@ -194,6 +194,16 @@ export function AgentInfoHoverCard({ item, anchorEl, onMouseEnter, onMouseLeave 
           <dd>{meta?.outputTokens != null ? formatTokenCount(meta.outputTokens) : '—'}</dd>
         </div>
         <div className="nagent-agent-card__row">
+          <dt>缓存命中 tokens</dt>
+          <dd>{meta?.cacheHitTokens != null ? formatTokenCount(meta.cacheHitTokens) : '—'}</dd>
+        </div>
+        <div className="nagent-agent-card__row">
+          <dt>缓存命中率</dt>
+          <dd>{meta?.inputTokens != null && meta.inputTokens > 0 && meta?.cacheHitTokens != null
+            ? `${((meta.cacheHitTokens / meta.inputTokens) * 100).toFixed(1)}%`
+            : '—'}</dd>
+        </div>
+        <div className="nagent-agent-card__row">
           <dt>合计 tokens</dt>
           <dd>{meta?.totalTokens != null ? formatTokenCount(meta.totalTokens) : '—'}</dd>
         </div>

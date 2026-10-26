@@ -858,6 +858,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
         inputTokens: sumMeta((meta) => meta.inputTokens),
         outputTokens: sumMeta((meta) => meta.outputTokens),
         totalTokens: sumMeta((meta) => meta.totalTokens),
+        cacheHitTokens: sumMeta((meta) => meta.cacheHitTokens),
         contextUsed,
         contextWindow,
         updatedAt: usage?.lastUpdatedAt ?? sumMeta((meta) => meta.updatedAt),

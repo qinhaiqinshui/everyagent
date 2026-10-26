@@ -236,8 +236,10 @@ public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
             long in = round.getPromptTokens() == null ? 0 : round.getPromptTokens();
             long outTok = round.getCompletionTokens() == null ? 0 : round.getCompletionTokens();
             if (in != 0 || outTok != 0) {
+                long cacheRead = round.getCacheReadInputTokens() == null ? 0 : round.getCacheReadInputTokens();
                 Usage roundUsage = new Usage(in, outTok,
-                        round.getTotalTokens() == null ? in + outTok : round.getTotalTokens());
+                        round.getTotalTokens() == null ? in + outTok : round.getTotalTokens(),
+                        cacheRead);
                 // 先把本轮累计进实体,再发射 usage:同一帧的 total 即含本轮的真实累计
                 // (usage 事件 total 载荷 / 台账 usage / agent.done 用量的共同供体)。
                 a.addUsage(round);
