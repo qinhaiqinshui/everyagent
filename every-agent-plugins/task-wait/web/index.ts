@@ -107,9 +107,11 @@ function slashItem(ctx: PluginContext): PluginSlashCommandItem {
         sctx?.workspace,
         sctx?.taskId,
       )
-      // 没有进行中任务（或拉取失败）→ 空 token：宿主清掉触发段、不插入任何内容
-      //（= 相当于没使用 `/`，规格 §1 的「选择失败」路径）
+      // 没有进行中任务（或拉取失败）→ 提示用户后返回空 token：宿主清掉触发段、
+      // 不插入任何内容（= 相当于没使用 `/`，规格 §1 的「选择失败」路径）。
+      // 此前静默返回空 token，用户无任何反馈，体验上「没反应」——改走全局轻提示。
       if (tasks.length === 0) {
+        ctx.ui.showToast('当前工作区没有进行中的任务', 'info')
         return [{ token: '', position: 'inline' }]
       }
       const picked = await pickerStore.open(tasks)

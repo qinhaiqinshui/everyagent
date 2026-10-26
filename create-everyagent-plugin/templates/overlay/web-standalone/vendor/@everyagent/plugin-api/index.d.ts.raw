@@ -1018,6 +1018,14 @@ export interface UiRegistry {
   buildComposerToken(input: { kind: string; label: string; summary?: string; payload?: Record<string, unknown> }): string
   /** 用 rawContent（可能含 opaque token 串）替换整个草稿（编辑重发回填用）。 */
   setComposerRawContent(rawContent: string): void
+  /**
+   * 全局轻提示（对标宿主 showToast / antd message）。
+   *
+   * 供插件在非 React 上下文（如 slash select 回调）向用户反馈操作结果——
+   * 如「没有可等待的任务」等无法以组件态承载的瞬态提示。
+   * 宿主委托 antd message（带主题/上下文），未注册时降级静态 message。
+   */
+  showToast(message: string, type?: 'success' | 'error' | 'info' | 'warning'): void
 }
 
 // ─── PluginContext / PluginModule ─────────────────────────────────────────

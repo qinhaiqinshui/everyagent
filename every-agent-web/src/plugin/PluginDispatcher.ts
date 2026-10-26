@@ -28,6 +28,7 @@ import type {
 import { appendComposerTextQueued, getComposerBridge, getShellBridge } from './pluginRuntimeBridge'
 import { activeTabMirror } from './activeTabMirror'
 import { buildOpaqueTokenText } from '@/composerToken/composerOpaqueToken'
+import { antdMessage } from '@/utils/appAntdBridge'
 import type {
   UiSidebarItemDefinition,
   UiWorkspaceTabTypeDefinition,
@@ -255,6 +256,11 @@ export interface RealPluginDispatcher {
   }) => string
   /** 用 rawContent（可能含 opaque token 串）替换整个草稿（编辑重发回填用）。 */
   setComposerRawContent: (rawContent: string) => void
+  /**
+   * 全局轻提示（委托宿主 antd message；未注册时降级静态 message）。
+   * 供插件在非 React 上下文（如 slash select 回调）向用户反馈瞬态结果。
+   */
+  showToast: (message: string, type?: 'success' | 'error' | 'info' | 'warning') => void
 }
 
 export const pluginDispatcher: RealPluginDispatcher = {
@@ -486,5 +492,8 @@ export const pluginDispatcher: RealPluginDispatcher = {
   },
   setComposerRawContent(rawContent) {
     getComposerBridge()?.setRawContent(rawContent)
+  },
+  showToast(message, type = 'info') {
+    antdMessage(type, message)
   },
 }
