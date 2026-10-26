@@ -225,7 +225,7 @@ has_children: false
 
 跟踪轮次内文件变更并落盘插件私有数据，前端出轮次尾面板（入口 132 行，两侧都值得通读）。
 - 关键文件：`~plugins/file-change/src/main/java/dev/everyagent/plugin/filechange/FileChangePlugin.java:30-36`；`~plugins/file-change/web/index.ts:22`。
-- 值得看：`task.fileChanges` RPC 读插件私有数据（[持久化与插件私有状态](../backend/persistence-and-state.md)的 §7.15.2 范本）；`addRoundClosedListener` 非 register\* 服务通道的全仓唯一使用者；`ui.round_tail_panels` 唯一使用者；展开的文件变更行是**行内双点击目标**的最小样本（图标 → `ctx.ui.openFileTab` 开文件标签 / 文件名 → `ctx.ui.openDiffTab` 开 diff 标签 / 删除的文件不渲染图标，见 [UI 扩展点](../web/ui-extensions.md) §14）。
+- 值得看：`task.fileChanges` RPC 读插件私有数据（[持久化与插件私有状态](../backend/persistence-and-state.md)的 §7.15.2 范本）；`addRoundClosedListener` 非 register\* 服务通道的全仓唯一使用者；`ui.round_tail_panels` 唯一使用者；展开的文件变更行是**行内双点击目标**的最小样本（文件名（含图标）→ `ctx.ui.openFileTab` 开文件标签 / 右侧完整路径 → `ctx.ui.openDiffTab` 开 diff 标签 / 删除的文件禁用打开文件入口，见 [UI 扩展点](../web/ui-extensions.md) §14）。
 
 ### git（Git 操作）
 

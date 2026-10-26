@@ -71,8 +71,8 @@
   gap: 4px;
 }
 
-/* 文件行 = 「图标槽 + diff 主按钮」两个并列项(行内有两个不同点击目标,按钮不能相互嵌套,
-   故行本身不再是按钮)。悬停整行高亮,行内两个点击目标各自另有自己的 hover 反馈。 */
+/* 文件行 = 「打开文件按钮(图标槽+文件名) + diff 路径按钮(完整路径) + A/M/D 标签」三个并列项
+   (行内有两个不同点击目标,按钮不能相互嵌套,故行本身不是按钮)。悬停整行高亮。 */
 .task-file-changes__row {
   display: flex;
   align-items: center;
@@ -89,7 +89,37 @@
   color: var(--text-primary);
 }
 
-/* 图标槽:固定宽度;删除的文件不渲染图标(按钮缺席)时槽位仍占宽,各行文件名纵向对齐。 */
+/* 打开文件按钮(图标槽 + 文件名):点击打开该文件的文件标签页。按内容宽度、可收缩
+   (长文件名省略号截断),把剩余行宽让给 diff 路径按钮。删除的文件禁用(不给入口),
+   但按钮仍渲染占位,保证各行结构一致。 */
+.task-file-changes__open {
+  flex: 0 1 auto;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+
+.task-file-changes__open:hover:not(:disabled) {
+  color: var(--text-primary);
+}
+
+.task-file-changes__open:disabled {
+  cursor: default;
+  color: var(--text-muted);
+}
+
+/* 图标槽:固定宽度;删除的文件不渲染图标时槽位仍占宽,各行文件名纵向对齐。 */
 .task-file-changes__icon-slot {
   flex: 0 0 auto;
   display: inline-flex;
@@ -97,37 +127,15 @@
   justify-content: center;
   width: 16px;
   height: 16px;
-}
-
-/* 文件图标按钮:点击打开该文件的文件标签页(与「点文件名看 diff」并列的第二个点击目标)。 */
-.task-file-changes__open {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  margin: 0;
-  padding: 0;
-  border: none;
-  border-radius: 3px;
-  background: transparent;
   color: var(--text-muted);
-  cursor: pointer;
-  transition: color 0.15s ease;
 }
 
-.task-file-changes__open:hover {
-  color: var(--text-primary);
-}
-
-/* diff 主按钮:占满图标槽之后的整行(文件名 + 路径 + A/M/D 标签都在它里面),
-   点击打开 diff 标签——即原「点整行看 diff」行为的落点,颜色/字体全部继承所在行。 */
+/* diff 路径按钮:占满「打开文件」按钮之后的剩余行宽,点击打开 diff 标签。 */
 .task-file-changes__diff {
   flex: 1 1 auto;
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 8px;
   margin: 0;
   padding: 0;
   border: none;
