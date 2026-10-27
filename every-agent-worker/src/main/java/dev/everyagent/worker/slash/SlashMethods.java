@@ -46,7 +46,7 @@ import tools.jackson.databind.node.ObjectNode;
  *   <li>{@code mention.query}:`@` 文件搜索。浏览模式列当前目录顶层;搜索模式广度优先
  *       收集后按匹配质量排序(文件名连续命中 &gt; 路径连续命中 &gt; 子序列;前缀/词首
  *       加成,子序列按跨度扣分),隐藏规则对齐前端
- *       {@code shouldHideWorkspacePath}(/plugins、.git),返回最多 10 条
+ *       {@code shouldHideWorkspacePath}(/plugins + 构建产物/依赖/VCS/IDE 目录段),返回最多 10 条
  *       (用户约束,避免传多余数据)。搜索模式在内置四档打分结果之后按 order() 升序
  *       增补聚合插件 {@code SuggestionProvider} 的 {@code suggest} 建议(§8.5 能力
  *       接口扩展,去重键 kind+path、总条数仍截断 10;浏览模式不经 provider)。</li>
@@ -592,7 +592,18 @@ public class SlashMethods {
         return children;
     }
 
-    /** 隐藏规则(对齐前端 shouldHideWorkspacePath):/plugins 前缀 + .git 段。 */
+    /**
+     * 默认隐藏的目录段(对齐前端 {@code INTERNAL_DIR_NAMES}):VCS / IDE 元数据 +
+     * 构建产物 / 依赖目录。这些目录扇出极大(如 {@code node_modules}),若不隐藏,
+     * BFS 收集预算 {@link #MAX_SEARCH_NODES} 会被其整棵子树吃光,浅层源码文件
+     * (如 {@code src/main/resources/application-dev.yml})根本轮不到被评估。
+     */
+    private static final Set<String> HIDDEN_DIR_NAMES = Set.of(
+            ".git", ".idea", ".vscode",
+            "node_modules", "target", "dist", "build", "release", "out", "bin",
+            "__pycache__");
+
+    /** 隐藏规则(对齐前端 shouldHideWorkspacePath):/plugins 前缀 + 隐藏目录段。 */
     private static boolean shouldHide(String rel) {
         if (rel == null || rel.isEmpty()) {
             return false;
@@ -601,7 +612,7 @@ public class SlashMethods {
             return true;
         }
         for (String seg : rel.split("/")) {
-            if (".git".equals(seg)) {
+            if (HIDDEN_DIR_NAMES.contains(seg)) {
                 return true;
             }
         }
