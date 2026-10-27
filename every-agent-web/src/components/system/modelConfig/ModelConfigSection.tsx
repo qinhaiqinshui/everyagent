@@ -1,11 +1,13 @@
 /**
- * 设置页「模型配置」区块(独立组件;表格见 ModelConfigTable,添加对话框见 AddModelConfigDialog)。
+ * 设置页「模型配置」区块(独立组件;表格见 ModelConfigTable,添加/编辑对话框见 ModelConfigFormDialog)。
  *
  * - 数据源:modelConfigs 服务(按 worker 分份,config.get 校准;apiKey 为掩码);
  *   增删成功后 worker 广播 config.changed{keys:["models"]},列表自动刷新;
  * - 模型配置按 worker 各自维护(写 worker 侧 application-worker.yaml 的 worker.models 段),
- *   故按 worker 分组展示;每组表格上方有「添加」「删除」两个按钮:
- *   - 添加:弹 AddModelConfigDialog(厂家预设自动带出 baseUrl;baseUrl/fullUrl 二选一);
+ *   故按 worker 分组展示;每组表格上方有「添加」「编辑」「删除」三个按钮:
+ *   - 添加:弹 ModelConfigFormDialog(添加模式;厂家预设自动带出 baseUrl;baseUrl/fullUrl 二选一);
+ *   - 编辑:选中表格一行后编辑(或双击行),弹 ModelConfigFormDialog(编辑模式;
+ *     id 只读、apiKey 留空=保持不变),rpc config.model.update;容灾池条目不支持表单编辑;
  *   - 删除:选中表格一行(radio)后删除,确认后 rpc config.model.remove;
  * - 「重新读取」按钮:手动热加载(应用外部手改 application-worker.yaml 的场景);
  * - 所有变更仅影响后续新建任务,运行中任务使用创建时冻结的快照。
@@ -88,6 +90,40 @@ function WorkerModelGroup({ workerId, workerLabel }: { workerId: string; workerL
     }
   }
 
+  const selectedModel = selectedId ? models.find((m) => m.configId === selectedId) ?? null : null
+  /** 容灾池条目(provider=model-pool / members 非空)不支持表单编辑,请在 YAML 中维护。 */
+  const selectedIsPool = !!selectedModel
+    && (selectedModel.provider === 'model-pool' || (selectedModel.members?.length ?? 0) > 0)
+
+  const openEdit = (record: ModelConfigInfo) => {
+    if (record.provider === 'model-pool' || (record.members?.length ?? 0) > 0) return
+    setEditingModel(record)
+    setEditOpen(true)
+  }
+
+  const handleEdit = async (values: ModelConfigFormValues) => {
+    if (editSubmitting) return
+    setEditSubmitting(true)
+    try {
+      await hubSession.rpcTo(workerId, 'config.model.update', {
+        configId: values.configId,
+        provider: values.provider,
+        baseUrl: values.baseUrl ?? null,
+        fullUrl: values.fullUrl ?? null,
+        model: values.model,
+        apiKey: values.apiKey, // 空串 = 保持原 key(worker 侧语义)
+      })
+      showToast('已更新模型配置「' + values.configId + '」', 'success')
+      setEditOpen(false)
+      setEditingModel(null)
+      void modelConfigs.refreshFor(workerId)
+    } catch (error) {
+      showToast('更新模型配置失败:' + errorMessage(error), 'error')
+    } finally {
+      setEditSubmitting(false)
+    }
+  }
+
   return (
     <div style={groupStyle}>
       <div style={groupHeaderStyle}>
@@ -103,19 +139,45 @@ function WorkerModelGroup({ workerId, workerLabel }: { workerId: string; workerL
           type="button"
           variant="secondary"
           size="sm"
+          disabled={!selectedModel || selectedIsPool || editSubmitting}
+          title={selectedIsPool ? '容灾池条目请在 YAML 中维护' : undefined}
+          onClick={() => selectedModel && openEdit(selectedModel)}
+        >
+          编辑
+        </Button>
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
           disabled={!selectedId || deleting}
           onClick={() => setDeleteConfirmOpen(true)}
         >
           删除
         </Button>
       </div>
-      <ModelConfigTable models={models} selectedConfigId={selectedId} onSelect={setSelectedId} />
-      <AddModelConfigDialog
+      <ModelConfigTable
+        models={models}
+        selectedConfigId={selectedId}
+        onSelect={setSelectedId}
+        onEdit={openEdit}
+      />
+      <ModelConfigFormDialog
         open={addOpen}
         existingIds={models.map((m) => m.configId)}
         submitting={submitting}
         onCancel={() => setAddOpen(false)}
         onSubmit={handleAdd}
+      />
+      <ModelConfigFormDialog
+        open={editOpen}
+        editing={editingModel}
+        existingIds={models.map((m) => m.configId)}
+        submitting={editSubmitting}
+        onCancel={() => {
+          setEditOpen(false)
+          setEditingModel(null)
+        }}
+        onSubmit={handleEdit}
       />
       <ConfirmDialog
         open={deleteConfirmOpen}
