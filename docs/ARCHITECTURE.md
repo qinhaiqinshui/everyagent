@@ -241,7 +241,7 @@ worker 端 `RpcDispatcher` 注册方法;应答回**请求来源连接**的 `evt`
 | `task.run{taskId, metadata:{editSeq}}`(消息编辑重发) | 编辑已发送的用户消息:**无独立 RPC**(历史方法 `task.message.edit` 已退役),统一走 `task.run` 携带 `metadata.editSeq`,由 task-edit-resend 插件的 `EditResendNode`(order=877,§7.14.1)截断 seq > 该消息的所有磁盘事件(仅 *.jsonl/rounds.jsonl,**不删插件数据文件**——agents.json/file-changes/ 残留陈旧条目被接受,task 核心不感知插件文件名;后续可增加截断事件通知由插件自清)、原地更新该消息内容、广播 `message.edited` 同步事件、冷启动重跑(不写新 user.message,对话历史已含编辑后的消息);任务运行中拒绝 |
 | `config.get` | 模型配置读取(Spring 配置承载,见 §7.17;apiKey 恒为掩码——前 4 + `…` + 后 4,明文不出 worker) |
 | `config.reload` | 重新读取模型配置(重新解析 worker.models,应用用户在外部 YAML 中的修改);广播 `config.changed{keys:["models"]}` |
-| `config.model.add` / `config.model.remove` | 模型配置增删(设置页「模型配置」表格):add 参数 `{configId, provider, baseUrl?, fullUrl?, model, apiKey?, params?, isDefault?}`(configId 非空且不重复、model 非空、baseUrl/fullUrl **二选一**(两者都填或都不填 → `BAD_PARAMS`),否则 `BAD_PARAMS`),remove 参数 `configId`(不存在 → `NOT_FOUND`);把结果整表原子落盘 `<homeDir>/application-worker.yaml` 的 `worker.models` 段(保留文件内其他配置键)+ 热重建内存索引 + 广播 `config.changed{keys:["models"]}`;仅影响后续新建任务,运行中任务用创建时冻结的快照 |
+| `config.model.add` / `config.model.update` / `config.model.remove` | 模型配置增删改(设置页「模型配置」表格):add 参数 `{configId, provider, baseUrl?, fullUrl?, model, apiKey?, params?, isDefault?}`(configId 非空且不重复、model 非空、baseUrl/fullUrl **二选一**(两者都填或都不填 → `BAD_PARAMS`),否则 `BAD_PARAMS`),update 参数同 add 但按 `configId` 定位已存在条目(不存在 → `NOT_FOUND`);`apiKey` 留空/缺省 = 保持原 key 不变(明文不出 worker,前端仅见掩码),`params`/`isDefault` 缺省同样保留原值,其余字段整条覆盖;remove 参数 `configId`(不存在 → `NOT_FOUND`);三者均把结果整表原子落盘 `<homeDir>/application-worker.yaml` 的 `worker.models` 段(保留文件内其他配置键)+ 热重建内存索引 + 广播 `config.changed{keys:["models"]}`;仅影响后续新建任务,运行中任务用创建时冻结的快照 |
 | `skill.list` | 该 worker 的全量 skill 清单 `[{id, name, description, knowledgePath, blacklist?, whitelist?}]`——数据源 = `skillsDir` 目录扫描(唯一真相源),每项附各自的按工作区暴露配置(黑白名单并存,黑名单优先);供设置页「Skill 列表」表格(按 worker 分组展示,不同 worker 的 skillsDir 不同、同名 id 非同一 skill,不跨 worker 合并;§7.17) |
 | `skill.exposure.set` | 设置某 skill 的暴露配置(参数 `skillId` + `blacklist:[root,...]` + `whitelist:[root,...]`):`skillId` 须在当前目录扫描结果内(否则 `NOT_FOUND`),`blacklist`/`whitelist` 逐项须为该 worker 已注册工作区 root(normalize 后字符串相等,未注册项 `BAD_PARAMS` 拒绝);**黑名单**:列出的工作区不暴露;**白名单**:非空时仅列出的工作区暴露;**黑名单优先**:同时命中黑白名单按黑名单处理;两个清单都空 = 恢复默认(删除键);`AtomicFiles` 原子落盘 `<homeDir>/skill-exposure.json` 后广播 `config.changed{keys:["skills"]}`。`/` 菜单不受影响(永远全量);运行中任务不受影响(skill 注入发生在 run 开始;§7.17) |
 | `workspaces.list` / `workspaces.add` / `workspaces.remove` / `workspaces.addExternalRoot` | 工作区注册表 CRUD(多工作区并行);addExternalRoot = 注册工作区外部授权根(`@` 弹窗 `+` 显式选择路径,§7.17) |
@@ -795,7 +795,7 @@ TaskManager 构造参数从 23 降至 15（SubAgentManager 从 11 降至 4），
 | 承接组件 | 层 | 职责 |
 |---|---|---|
 | `AgentFactory`（agent 层） | agent 层 | 主/子 agent 装配（模型/工具/沙箱/权限聚合） |
-| `ConfigRpcHandler` | 基础设施 | config.get / config.reload / config.model.add / config.model.remove / skill.list / skill.exposure.set RPC（自注册） |
+| `ConfigRpcHandler` | 基础设施 | config.get / config.reload / config.model.add / config.model.update / config.model.remove / skill.list / skill.exposure.set RPC（自注册） |
 | `SlashTaskCallbacks` | 基础设施 | slash 任务 token 建后回调 |
 | `EventSink`（接口） | 基础设施 | `fanout(channelNamer, event, ...)` 扇出发布——无调用者语义，HubPool 实现；task 层广播任务状态、未来工作流层广播流状态共用 |
 | `TaskMessageRouter` + `TaskInputHandler` | 基础设施 | worker 输入频道订阅与消息路由（TASK_INPUT/DIALOG_INSERT/ASK_REPLY）；接口在基础设施层定义、TaskManager 实现——依赖方向与 AgentContext 相同 |

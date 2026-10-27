@@ -19,7 +19,8 @@ import { modelConfigs } from '@/hub/modelConfigs'
 import { useAppUi } from '@/components/app/AppUiContext'
 import { workerDisplayName } from '@/settings/workerAliases'
 import ModelConfigTable from './ModelConfigTable'
-import AddModelConfigDialog, { type AddModelConfigValues } from './AddModelConfigDialog'
+import ModelConfigFormDialog, { type ModelConfigFormValues } from './ModelConfigFormDialog'
+import type { ModelConfigInfo } from '@/hub/modelConfigs'
 
 function errorMessage(error: unknown): string {
   if (error instanceof Error && error.message) return error.message
@@ -35,6 +36,9 @@ function WorkerModelGroup({ workerId, workerLabel }: { workerId: string; workerL
   const [submitting, setSubmitting] = React.useState(false)
   const [deleting, setDeleting] = React.useState(false)
   const [deleteConfirmOpen, setDeleteConfirmOpen] = React.useState(false)
+  const [editingModel, setEditingModel] = React.useState<ModelConfigInfo | null>(null)
+  const [editOpen, setEditOpen] = React.useState(false)
+  const [editSubmitting, setEditSubmitting] = React.useState(false)
 
   React.useEffect(() => modelConfigs.subscribeFor(workerId, setModels), [workerId])
 
@@ -45,7 +49,7 @@ function WorkerModelGroup({ workerId, workerLabel }: { workerId: string; workerL
     }
   }, [models, selectedId])
 
-  const handleAdd = async (values: AddModelConfigValues) => {
+  const handleAdd = async (values: ModelConfigFormValues) => {
     if (submitting) return
     setSubmitting(true)
     try {

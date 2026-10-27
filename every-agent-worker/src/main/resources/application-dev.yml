@@ -44,3 +44,5 @@ logging:
     dev.everyagent.worker.os: debug
     dev.everyagent.worker.task: debug
     dev.everyagent.worker.agent: debug
+    # HTTP 层请求/响应原始报文打印(排障缓存命中字段等,排查后调回 info):
+    dev.everyagent.worker.http.HttpRequestLoggingInterceptor: debug
