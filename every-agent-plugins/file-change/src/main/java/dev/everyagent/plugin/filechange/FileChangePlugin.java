@@ -52,7 +52,21 @@ public class FileChangePlugin implements EveryAgentPlugin {
         String taskId = ctx.strParam("taskId");
         String roundId = ctx.optStrParam("roundId", null);
         try {
-            Path dataDir = services.dataDirOf(taskId);
+            Path dataDir;
+            try {
+                dataDir = services.dataDirOf(taskId);
+            } catch (IllegalStateException e) {
+                // 新任务竞态:前端在 track()(建目录、登记 workspaceId)之前即发起 RPC,
+                // 此时任务目录尚未创建,自然无文件变更 → 返回空结果而非报错。
+                log.debug("[file-change] task.fileChanges 任务目录尚未创建(竞态),返回空 task={} round={}",
+                        taskId, roundId);
+                if (roundId == null || roundId.isBlank()) {
+                    ctx.ok(Json.obj().set("rounds", Json.arr()));
+                } else {
+                    ctx.ok(Json.obj().set("changes", Json.arr()));
+                }
+                return;
+            }
             if (dataDir == null) {
                 ctx.err("NOT_FOUND", "task 不存在: " + taskId);
                 return;
