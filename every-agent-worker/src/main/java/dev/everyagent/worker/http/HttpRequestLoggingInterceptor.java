@@ -68,11 +68,7 @@ public class HttpRequestLoggingInterceptor implements Interceptor {
             log.debug("==== HTTP REQUEST (#{}) ====\n{}",
                     seq.incrementAndGet(), describe(chain.request()));
         }
-        Response response = chain.proceed(chain.request());
-        if (log.isDebugEnabled()) {
-            log.debug("==== HTTP RESPONSE (#{}) ====\n{}", seq.get(), describeResponse(response));
-        }
-        return response;
+        return chain.proceed(chain.request());
     }
 
     /** 请求描述:方法 + URL + 脱敏请求头 + 完整 body(不截断)。 */
@@ -116,29 +112,5 @@ public class HttpRequestLoggingInterceptor implements Interceptor {
         Buffer buffer = new Buffer();
         body.writeTo(buffer);
         return buffer.readString(StandardCharsets.UTF_8);
-    }
-
-    /**
-     * 响应描述:状态码 + 响应头 + 响应体 peek(SSE 流式响应用 peekBody 读原始字节,
-     * 不消费原始 body,OpenAI SDK 仍能正常解析流)。打印全部字节(不截断),含流末 usage chunk。
-     */
-    private static String describeResponse(Response response) throws IOException {
-        StringBuilder sb = new StringBuilder();
-        sb.append(response.code()).append(' ').append(response.message()).append('\n');
-
-        // 响应头(全部打印,无敏感头)。
-        sb.append("headers:\n");
-        for (int i = 0; i < response.headers().size(); i++) {
-            sb.append("  ").append(response.headers().name(i)).append(": ")
-                    .append(response.headers().value(i)).append('\n');
-        }
-
-        // 响应体:peekBody 读原始字节(不消费原始流)。SSE 流式响应的 usage 在最后一个 data: chunk,
-        // peek 足够大的字节数覆盖整个响应(通常 < 64KB)。
-        if (response.body() != null) {
-            String bodyText = response.peekBody(65536).string();
-            sb.append("body:\n").append(bodyText).append('\n');
-        }
-        return sb.toString().stripTrailing();
     }
 }

@@ -232,22 +232,12 @@ public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
         // 本 advisor 至此不再触碰会话内存,只负责事件发射与 agent 层会计(§7.20 域中性)。
         // 实测 usage(末帧携带才发)
         org.springframework.ai.chat.metadata.Usage round = cr.getMetadata() == null ? null : cr.getMetadata().getUsage();
-        if (log.isDebugEnabled()) {
-            log.debug("[CacheToken] doAfterStream | metadata={} | usage={}",
-                    cr.getMetadata() == null ? "null" : "<present>",
-                    round == null ? "null" : "{prompt=" + round.getPromptTokens()
-                            + ", completion=" + round.getCompletionTokens()
-                            + ", cacheRead=" + round.getCacheReadInputTokens() + "}");
-        }
         if (round != null) {
             long in = round.getPromptTokens() == null ? 0 : round.getPromptTokens();
             long outTok = round.getCompletionTokens() == null ? 0 : round.getCompletionTokens();
             if (in != 0 || outTok != 0) {
-                // 缓存命中 token:先取标准 OpenAI 字段,再兜底厂商自定义字段(DeepSeek 等)
+                // 缓存命中 token:SSE 扫描表优先,标准字段/native/metadata 逐级兜底(见 CacheTokenExtractor)
                 long cacheRead = CacheTokenExtractor.extract(round, cr.getMetadata());
-                if (log.isDebugEnabled()) {
-                    log.debug("[CacheToken] 最终提取 cacheRead={} (agent={})", cacheRead, a.agentId);
-                }
                 Usage roundUsage = new Usage(in, outTok,
                         round.getTotalTokens() == null ? in + outTok : round.getTotalTokens(),
                         cacheRead);
@@ -262,10 +252,6 @@ public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
                 long fullViewEst = a.fullViewEstTokens();
                 if (fullViewEst > 0) {
                     usageData.put("fullViewEstTokens", fullViewEst);
-                }
-                if (log.isDebugEnabled()) {
-                    log.debug("[CacheToken] 发射 usage 事件 | round={} | total={}",
-                            roundUsage, a.usageRef().get());
                 }
                 usageData.set("round", Json.toJson(roundUsage));
                 usageData.set("total", Json.toJson(a.usageRef().get()));
