@@ -93,11 +93,11 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
    * 用户滚动控制标识（本次改造的核心单一语义）：
    * - false（默认）：只要线程内容长高（轮次内容新增/未闭合轮流式输出，经
    *   ResizeObserver 感知）就自动贴底；
-   * - true：用户点击了线程区域，视为在自行浏览，即使内容长高也不滚动；
+   * - true：用户触碰了线程区域（pointerdown：鼠标按下 / 手指触摸），视为在自行浏览，即使内容长高也不滚动；
    * - 用户滚回底部（距底 <= THREAD_SCROLL_TO_BOTTOM_THRESHOLD）→ 置回 false 恢复自动跟随。
    *
    * 程序化 scrollTo 绝不会把它置 true：scroll 事件只做「到底部 → false」，
-   * 置 true 只来自用户点击事件——让 scrollTo 自我关停不再需要。
+   * 置 true 只来自用户 pointerdown 事件——让 scrollTo 自我关停不再需要。
    */
   const userControllRef = React.useRef(false)
   // 用回调 ref 持有滚动容器节点：保证容器真正挂载后才绑定 scroll 监听。
@@ -122,7 +122,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
   }, [])
   // 「滚动到底部」按钮是否可见：用户远离底部时显示，回到底部自动隐藏。
   const [showScrollToBottom, setShowScrollToBottom] = React.useState(false)
-  /** 用户点击线程区域：立即接管滚动，暂停自动跟随。 */
+  /** 用户触碰线程区域（pointerdown：鼠标按下 / 手指触摸）：立即接管滚动，暂停自动跟随。 */
   const armUserScrollIntent = React.useCallback(() => {
     userControllRef.current = true
   }, [])
@@ -137,7 +137,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
     setShowScrollToBottom(distanceFromBottom > THREAD_SCROLL_TO_BOTTOM_THRESHOLD)
     // userControll 自动跟随：滚回底部 → 恢复自动跟随。
     // 这里只做「到底部 → false」，绝不因 scroll 事件置 true ——
-    // 置 true 只发生在用户点击（click）上，程序化 scrollTo 不会把跟随误关。
+    // 置 true 只发生在用户触碰（pointerdown）上，程序化 scrollTo 不会把跟随误关。
     if (distanceFromBottom <= THREAD_SCROLL_TO_BOTTOM_THRESHOLD) {
       userControllRef.current = false
     }
@@ -149,7 +149,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
     }
     if (prev) {
       prev.removeEventListener('scroll', handleThreadScroll)
-      prev.removeEventListener('click', armUserScrollIntent)
+      prev.removeEventListener('pointerdown', armUserScrollIntent)
       if (threadContentResizeObserverRef.current) {
         threadContentResizeObserverRef.current.disconnect()
         threadContentResizeObserverRef.current = null
@@ -161,7 +161,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
     }
     threadScrollRefNode.current = node
     if (node) {
-      node.addEventListener('click', armUserScrollIntent)
+      node.addEventListener('pointerdown', armUserScrollIntent)
       node.addEventListener('scroll', handleThreadScroll, { passive: true })
       // 首屏滚到底部交给下方 isActive 布局 effect。
       // 观察线程内容容器（滚动容器的唯一子节点 .nagent-thread）的尺寸变化。
