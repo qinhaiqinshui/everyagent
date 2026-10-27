@@ -12,6 +12,7 @@ import dev.everyagent.worker.modules.ConfigStore.ResolvedConfig;
 import dev.everyagent.worker.plugin.registry.ChatModelEnhancerRegistry;
 import dev.everyagent.worker.http.HttpRequestLoggingInterceptor;
 import dev.everyagent.worker.http.StreamTimeoutReleaseInterceptor;
+import dev.everyagent.worker.http.UsageCacheScanInterceptor;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.ai.openai.OpenAiChatOptions;
@@ -163,7 +164,10 @@ public class ChatModelFactory {
                                 .interceptor(HttpRequestLoggingInterceptor.SHARED)
                                 // 解除 okhttp callTimeout 总时长上限(§7.4.2):流式长思考不限总时长,
                                 // 静默由 readTimeout + model-length-guard 插件 stall 兜底。
-                                .interceptor(StreamTimeoutReleaseInterceptor.INSTANCE))
+                                .interceptor(StreamTimeoutReleaseInterceptor.INSTANCE)
+                                // SSE 流旁路扫描缓存命中 token(厂商 usage 字段在 SDK 流式解析中
+                                // 丢失,HTTP 层从原始字节提取,见该类 javadoc)
+                                .interceptor(UsageCacheScanInterceptor.INSTANCE))
                         .build());
         return raw;
     }

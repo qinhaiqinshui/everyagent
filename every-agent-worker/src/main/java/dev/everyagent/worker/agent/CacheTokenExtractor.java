@@ -1,5 +1,6 @@
 package dev.everyagent.worker.agent;
 
+import dev.everyagent.worker.http.UsageCacheScanInterceptor;
 import org.springframework.ai.chat.metadata.ChatResponseMetadata;
 import org.springframework.ai.chat.metadata.Usage;
 
@@ -55,7 +56,23 @@ public final class CacheTokenExtractor {
                     metadata == null ? "null" : formatMetadata(metadata));
         }
 
-        // 1. Spring AI 标准字段( getDefaultUsage 已提取时直接返回)
+        // 0. HTTP 层 SSE 原始流扫描结果(最可靠:绕过 SDK/Spring AI 解析,
+        //    UsageCacheScanInterceptor 在 OkHttp source 层直接扫原始 JSON 字节)。
+        //    key = ChatResponse.metadata.id(与响应 chunk JSON 的 id 同值)。
+        //    实测(2026-10):Spring AI 2.0.1 流式链路丢失 promptTokensDetails →
+        //    下面的标准字段/native 反射均拿不到,本路径是主要供体。
+        if (metadata != null && metadata.getId() != null && !metadata.getId().isEmpty()) {
+            Long scanned = UsageCacheScanInterceptor.take(metadata.getId());
+            if (log.isDebugEnabled()) {
+                log.debug("[CacheToken] SSE 扫描表 take(id={}) = {}", metadata.getId(), scanned);
+            }
+            if (scanned != null && scanned > 0) {
+                log.debug("[CacheToken] 命中 SSE 扫描结果 = {}", scanned);
+                return scanned;
+            }
+        }
+
+        // 1. Spring AI 标准字段(非流式/SDK 正常解析时可用)
         if (usage != null) {
             Long standard = usage.getCacheReadInputTokens();
             if (log.isDebugEnabled()) {
@@ -66,10 +83,7 @@ public final class CacheTokenExtractor {
             }
         }
 
-        // 2. 从 native usage 原始对象提取(绕过 Spring AI 中间层)
-        //    Spring AI getDefaultUsage() 从 CompletionUsage.promptTokensDetails().cachedTokens() 提取,
-        //    但流式聚合后 CompletionUsage 的 promptTokensDetails 可能为 empty(toString 不含该字段)。
-        //    直接从 native 对象尝试反射读取,确认 SDK 是否解析了该字段。
+        // 2. native usage 反射提取(SDK 对象解析成功但 Spring AI 未提取的场景)
         if (usage != null) {
             long fromNative = extractFromNativeUsage(usage.getNativeUsage());
             if (fromNative > 0) {
@@ -78,7 +92,7 @@ public final class CacheTokenExtractor {
             }
         }
 
-        // 3. metadata 额外字段(DeepSeek 等: Spring AI from() 把 ChatCompletion._additionalProperties 展平到 metadata)
+        // 3. metadata 额外字段(DeepSeek 等: Spring AI from() 把 additionalProperties 展平)
         if (metadata != null) {
             for (String key : VENDOR_CACHE_KEYS) {
                 Long value = tryGetLong(metadata, key);
@@ -101,22 +115,20 @@ public final class CacheTokenExtractor {
     /**
      * 从 Spring AI Usage.getNativeUsage() 返回的原始对象中提取缓存命中 token。
      *
-     * <p>native 对象类型取决于实现:
+     * <p>native 对象类型取决于实现(2026-10 实测):
      * <ul>
-     *   <li>DefaultUsage.getNativeUsage() → null(4 参数构造器)或原始 CompletionUsage(6 参数构造器)</li>
-     *   <li>流式聚合后的 DefaultUsage 通常 nativeUsage=null(getCumulativeUsage 传 null)</li>
+     *   <li><b>流式: java.util.HashMap</b>,只含 {promptTokens, totalTokens, completionTokens}
+     *       三个 key —— Spring AI 流式路径把 usage 转成精简 Map 时已丢弃
+     *       promptTokensDetails(缓存字段在此丢失,SSE 扫描拦截器是主提取路径);</li>
+     *   <li>非流式/直通: openai SDK CompletionUsage(反射 promptTokensDetails().cachedTokens());</li>
+     *   <li>getCumulativeUsage 聚合构造: null。</li>
      * </ul>
-     *
-     * <p>当 nativeUsage 为 null 时无法提取——这正是流式模式下缓存丢失的根因:
-     * Spring AI 的 UsageCalculator.getCumulativeUsage() 聚合时用 {@code new DefaultUsage(in, out, total, null, cacheRead, cacheWrite)}
-     * 构造,nativeUsage 传 null。如果原始 chunk 的 DefaultUsage.getCacheReadInputTokens() 已为 null
-     * (因为 CompletionUsage.promptTokensDetails() 在流式 chunk 中为 empty),则聚合后也为 null。
      */
     @SuppressWarnings("unchecked")
     private static long extractFromNativeUsage(Object nativeUsage) {
         if (nativeUsage == null) {
             if (log.isDebugEnabled()) {
-                log.debug("[CacheToken] nativeUsage = null(流式聚合后丢失原始对象)");
+                log.debug("[CacheToken] nativeUsage = null");
             }
             return 0;
         }
@@ -124,7 +136,28 @@ public final class CacheTokenExtractor {
             log.debug("[CacheToken] nativeUsage class={} toString={}", nativeUsage.getClass().getName(), nativeUsage);
         }
 
-        // 尝试从 CompletionUsage 提取 promptTokensDetails.cachedTokens
+        // Map 形态(Spring AI 流式精简转换): 尝试 promptTokensDetails 嵌套 key
+        // (实测三 key Map 无此字段,保留分支防未来 Spring AI 修复后带全量字段)
+        if (nativeUsage instanceof java.util.Map<?, ?> map) {
+            Object ptd = map.get("promptTokensDetails");
+            if (ptd instanceof java.util.Map<?, ?> ptdMap) {
+                Object cached = ptdMap.get("cachedTokens");
+                Long parsed = parseValue(cached);
+                if (parsed != null && parsed > 0) {
+                    return parsed;
+                }
+            }
+            // 顶级厂商字段(DeepSeek)
+            for (String key : VENDOR_CACHE_KEYS) {
+                Long parsed = parseValue(map.get(key));
+                if (parsed != null && parsed > 0) {
+                    return parsed;
+                }
+            }
+            return 0;
+        }
+
+        // openai SDK CompletionUsage 形态(反射)
         try {
             // CompletionUsage.promptTokensDetails() returns Optional<PromptTokensDetails>
             Method promptTokensDetails = nativeUsage.getClass().getMethod("promptTokensDetails");
