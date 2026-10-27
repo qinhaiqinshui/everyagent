@@ -25,6 +25,9 @@ import org.springframework.ai.chat.metadata.Usage;
  */
 public final class CacheTokenExtractor {
 
+    private static final org.slf4j.Logger log =
+            org.slf4j.LoggerFactory.getLogger(CacheTokenExtractor.class);
+
     private CacheTokenExtractor() {
     }
 
@@ -42,21 +45,68 @@ public final class CacheTokenExtractor {
      * @return 缓存命中 token 数,无数据返回 0
      */
     public static long extract(Usage usage, ChatResponseMetadata metadata) {
-        // 1. 标准 OpenAI 字段(智谱/Kimi/阿里云百炼/OpenAI 官方)
-        if (usage != null && usage.getCacheReadInputTokens() != null
-                && usage.getCacheReadInputTokens() > 0) {
-            return usage.getCacheReadInputTokens();
+        // ── debug: 打印 Spring AI 解析出的 usage 全貌 ──
+        if (log.isDebugEnabled()) {
+            log.debug("[CacheToken] extract 开始 | usage={} | metadata={}",
+                    usage == null ? "null" : formatUsage(usage),
+                    metadata == null ? "null" : formatMetadata(metadata));
         }
+
+        // 1. 标准 OpenAI 字段(智谱/Kimi/阿里云百炼/OpenAI 官方)
+        if (usage != null) {
+            Long standard = usage.getCacheReadInputTokens();
+            if (log.isDebugEnabled()) {
+                log.debug("[CacheToken] 标准 getCacheReadInputTokens() = {}", standard);
+            }
+            if (standard != null && standard > 0) {
+                log.debug("[CacheToken] 命中标准字段,返回 {}", standard);
+                return standard;
+            }
+        }
+
         // 2. 厂商自定义字段(DeepSeek 等)
         if (metadata != null) {
             for (String key : VENDOR_CACHE_KEYS) {
                 Long value = tryGetLong(metadata, key);
+                if (log.isDebugEnabled()) {
+                    log.debug("[CacheToken] metadata['{}'] = {}", key, value);
+                }
                 if (value != null && value > 0) {
+                    log.debug("[CacheToken] 命中厂商字段 '{}' = {}", key, value);
                     return value;
                 }
             }
         }
+
+        log.debug("[CacheToken] 所有来源均无缓存命中数据,返回 0");
         return 0;
+    }
+
+    /** 格式化 Spring AI Usage 用于 debug 日志。 */
+    private static String formatUsage(Usage u) {
+        return "{prompt=" + u.getPromptTokens()
+                + ", completion=" + u.getCompletionTokens()
+                + ", total=" + u.getTotalTokens()
+                + ", cacheRead=" + u.getCacheReadInputTokens()
+                + ", cacheWrite=" + u.getCacheWriteInputTokens()
+                + ", native=" + u.getNativeUsage()
+                + "}";
+    }
+
+    /** 格式化 ChatResponseMetadata 的 key 集合用于 debug 日志。 */
+    private static String formatMetadata(ChatResponseMetadata m) {
+        StringBuilder sb = new StringBuilder("{keys=[");
+        boolean first = true;
+        for (String key : m.keySet()) {
+            if (!first) {
+                sb.append(", ");
+            }
+            String val = String.valueOf(m.get(key));
+            sb.append(key).append("=").append(val);
+            first = false;
+        }
+        sb.append("]}");
+        return sb.toString();
     }
 
     /** 从 metadata 中安全提取 long 值(兼容 Long/Integer/Double/String/JsonValue)。 */
@@ -81,6 +131,11 @@ public final class CacheTokenExtractor {
             } catch (NumberFormatException e) {
                 return null;
             }
+        }
+        // JsonValue 或其他未知类型:尝试 toString 后 parse
+        if (log.isDebugEnabled()) {
+            log.debug("[CacheToken] metadata['{}'] 类型未匹配: {} (class={})",
+                    key, value, value.getClass().getName());
         }
         return null;
     }
