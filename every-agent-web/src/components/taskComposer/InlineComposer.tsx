@@ -117,6 +117,15 @@ export interface InlineComposerProps {
 export interface InlineComposerHandle {
   /** 聚焦输入框。 */
   focus: () => void
+  /**
+   * 把光标设置到「序列化文本偏移」处（用于异步操作后恢复光标位置）。
+   *
+   * 背景：`await` 期间浏览器可能清除 contentEditable 选区（尤其远程 RPC 耗时较长时），
+   * 之后 `root.focus()` 只会把光标落到内容开头（offset 0），而非之前的位置。
+   * 宿主在 `await` 前用 `editorCaretRef` 保存偏移，`await` 后调用本方法恢复，
+   * 再执行 `insertOpaqueToken` / `insertText` 等操作。
+   */
+  setCaretAtOffset: (offset: number) => void
   /** 在光标处插入一个胶囊。 */
   insertToken: (token: ChatComposerToken, deleteBefore?: number) => void
   /** 在指定偏移处插入一个胶囊（交互面板回填用）。 */
@@ -752,6 +761,12 @@ const InlineComposer = React.forwardRef<InlineComposerHandle, InlineComposerProp
   React.useImperativeHandle(ref, () => ({
     focus: () => {
       editorRef.current?.focus()
+    },
+    setCaretAtOffset: (offset: number) => {
+      const root = editorRef.current
+      if (!root) return
+      root.focus()
+      setCaretAtTextOffset(root, offset)
     },
     insertToken: (token: ChatComposerToken, deleteBefore = 0) => {
       const root = editorRef.current

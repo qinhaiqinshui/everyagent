@@ -516,7 +516,15 @@ export default function TaskComposerSurface({
     setSlashQuery('')
     setSlashActiveIndex(0)
     const deleteBefore = slashStart >= 0 ? slashQuery.length + 1 : 0
+    // 在 await 前保存光标偏移：entry.select() 对远程条目是网络 RPC（slash.select），
+    // await 期间浏览器可能清除 contentEditable 选区；之后 root.focus() 只会把光标
+    // 落到内容开头（offset 0），导致 deleteBackwardChars 从 offset 0 向前删（什么也删不掉），
+    // insertChipAtCaret 在 offset 0 插入（胶囊跑到最前面），原始 /query 残留。
+    const savedCaret = editorCaretRef.current
     const raw = await entry.select(entry, { taskId, workspace, workerId })
+    // 恢复光标到 await 前的位置，确保后续 deleteBackwardChars + insertChipAtCaret
+    // 在正确的位置执行。
+    editorRef.current?.setCaretAtOffset(savedCaret)
     const results = Array.isArray(raw) ? raw : [raw]
     let slashSegmentConsumed = false
     for (const result of results) {
@@ -529,7 +537,11 @@ export default function TaskComposerSurface({
         }
         if (isOpaqueTokenText(text)) {
           // 逐个 await:联动双胶囊(无人值守 + AI 审议)按顺序落盘,避免并行 RPC 竞态导致丢胶囊。
+          // 同样在 await 前后保存/恢复光标：onAddTaskScopeToken 也是异步 RPC，
+          // 后续若有 inline 结果需要正确光标位置。
+          const caretBeforeBottomAwait = editorCaretRef.current
           await onAddTaskScopeToken?.({ id: result.id ?? entry.id, token: text })
+          editorRef.current?.setCaretAtOffset(caretBeforeBottomAwait)
         }
         continue
       }
