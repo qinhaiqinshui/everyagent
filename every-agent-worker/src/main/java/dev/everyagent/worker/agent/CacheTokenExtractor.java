@@ -45,7 +45,6 @@ public final class CacheTokenExtractor {
      * @return 缓存命中 token 数,无数据返回 0
      */
     public static long extract(Usage usage, ChatResponseMetadata metadata) {
-        // ── debug: 打印 Spring AI 解析出的 usage 全貌 ──
         if (log.isDebugEnabled()) {
             log.debug("[CacheToken] extract 开始 | usage={} | metadata={}",
                     usage == null ? "null" : formatUsage(usage),
@@ -78,7 +77,9 @@ public final class CacheTokenExtractor {
             }
         }
 
-        log.debug("[CacheToken] 所有来源均无缓存命中数据,返回 0");
+        if (log.isDebugEnabled()) {
+            log.debug("[CacheToken] 所有来源均无缓存命中数据,返回 0");
+        }
         return 0;
     }
 

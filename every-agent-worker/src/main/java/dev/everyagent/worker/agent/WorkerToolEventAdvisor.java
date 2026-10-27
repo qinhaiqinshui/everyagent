@@ -233,7 +233,7 @@ public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
         // 实测 usage(末帧携带才发)
         org.springframework.ai.chat.metadata.Usage round = cr.getMetadata() == null ? null : cr.getMetadata().getUsage();
         if (log.isDebugEnabled()) {
-            log.debug("[CacheToken] WorkerToolEventAdvisor doAfterStream | metadata={} | usage={}",
+            log.debug("[CacheToken] doAfterStream | metadata={} | usage={}",
                     cr.getMetadata() == null ? "null" : "<present>",
                     round == null ? "null" : "{prompt=" + round.getPromptTokens()
                             + ", completion=" + round.getCompletionTokens()
@@ -245,7 +245,9 @@ public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
             if (in != 0 || outTok != 0) {
                 // 缓存命中 token:先取标准 OpenAI 字段,再兜底厂商自定义字段(DeepSeek 等)
                 long cacheRead = CacheTokenExtractor.extract(round, cr.getMetadata());
-                log.debug("[CacheToken] 最终提取 cacheRead={} (agent={})", cacheRead, a.agentId);
+                if (log.isDebugEnabled()) {
+                    log.debug("[CacheToken] 最终提取 cacheRead={} (agent={})", cacheRead, a.agentId);
+                }
                 Usage roundUsage = new Usage(in, outTok,
                         round.getTotalTokens() == null ? in + outTok : round.getTotalTokens(),
                         cacheRead);
@@ -261,8 +263,10 @@ public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
                 if (fullViewEst > 0) {
                     usageData.put("fullViewEstTokens", fullViewEst);
                 }
-                log.debug("[CacheToken] 发射 usage 事件 | round={} | total={}",
-                        roundUsage, a.usageRef().get());
+                if (log.isDebugEnabled()) {
+                    log.debug("[CacheToken] 发射 usage 事件 | round={} | total={}",
+                            roundUsage, a.usageRef().get());
+                }
                 usageData.set("round", Json.toJson(roundUsage));
                 usageData.set("total", Json.toJson(a.usageRef().get()));
                 a.emitter.emit(EmitEvent.of(SnowflakeId.next(), Events.USAGE,
