@@ -524,6 +524,9 @@ export default function TaskComposerSurface({
     const raw = await entry.select(entry, { taskId, workspace, workerId })
     // 恢复光标到 await 前的位置，确保后续 deleteBackwardChars + insertChipAtCaret
     // 在正确的位置执行。
+    // 但若 await 期间用户已开始 IME composition（中文输入法合成），不恢复光标——
+    // focus + removeAllRanges 会打断合成、光标被重置到 savedCaret（比当前位置靠左），
+    // 表现为输入中文时光标左移几个字。
     editorRef.current?.setCaretAtOffset(savedCaret)
     const results = Array.isArray(raw) ? raw : [raw]
     let slashSegmentConsumed = false
@@ -539,6 +542,7 @@ export default function TaskComposerSurface({
           // 逐个 await:联动双胶囊(无人值守 + AI 审议)按顺序落盘,避免并行 RPC 竞态导致丢胶囊。
           // 同样在 await 前后保存/恢复光标：onAddTaskScopeToken 也是异步 RPC，
           // 后续若有 inline 结果需要正确光标位置。
+          // composition 进行中不恢复（避免打断 IME 合成导致光标左移）。
           const caretBeforeBottomAwait = editorCaretRef.current
           await onAddTaskScopeToken?.({ id: result.id ?? entry.id, token: text })
           editorRef.current?.setCaretAtOffset(caretBeforeBottomAwait)

@@ -43,6 +43,18 @@ const IME_DEBUG =
 function dbg(...args: unknown[]): void {
   if (IME_DEBUG) console.log('[ime]', ...args)
 }
+
+// ── 文档级 IME composition 跟踪 ─────────────────────────────────────────────
+// composition 事件冒泡到 document，capture 阶段监听。
+// 当用户在其他元素（如 ask_user 的 <Input>）中输入中文时，InlineComposer 的
+// isComposingRef 不受影响；此全局标志覆盖文档中任何元素的 composition 状态，
+// 防止 setCaretAtOffset 的 root.focus() + sel.removeAllRanges() 打断外部合成
+// （focus 抢回 + 清除全局选区会终止 IME，光标被重置到 savedCaret 导致左移）。
+let globalComposing = false
+if (typeof document !== 'undefined') {
+  document.addEventListener('compositionstart', () => { globalComposing = true }, true)
+  document.addEventListener('compositionend', () => { globalComposing = false }, true)
+}
 /** 描述编辑器根节点的子节点结构（节点类型/文本内容）。 */
 function describeChildren(root: HTMLElement): string {
   return Array.from(root.childNodes)
@@ -767,6 +779,12 @@ const InlineComposer = React.forwardRef<InlineComposerHandle, InlineComposerProp
     setCaretAtOffset: (offset: number) => {
       const root = editorRef.current
       if (!root) return
+      // IME composition 进行中不打断（含文档级守卫）：
+      // focus + removeAllRanges 会终止合成、光标被重置到 savedCaret
+      // （比用户当前位置靠左），表现为输入中文时光标左移几个字。
+      // 全局守卫覆盖其他元素（如 ask_user 的 <Input>）中的 composition——
+      // 此时 isComposingRef 仍为 false，需靠 globalComposing 拦截。
+      if (isComposingRef.current || globalComposing) return
       root.focus()
       setCaretAtTextOffset(root, offset)
     },
