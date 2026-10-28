@@ -23,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # TODO: pin 到 commit SHA
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       # TODO: pin 到 commit SHA
       - uses: actions/setup-java@v4
         with:
@@ -43,7 +43,7 @@ jobs:
         working-directory: every-agent-web
     steps:
       # TODO: pin 到 commit SHA
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       # TODO: pin 到 commit SHA
       - uses: actions/setup-node@v4
         with:
@@ -63,7 +63,7 @@ jobs:
         working-directory: every-agent-desktop
     steps:
       # TODO: pin 到 commit SHA
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       # TODO: pin 到 commit SHA
       - uses: actions/setup-node@v4
         with:
