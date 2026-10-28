@@ -358,10 +358,11 @@ class ManagedStream {
     let afterSeq = page.afterSeq
     if (maxReal != null) {
       // 缓存是否从轮起点连续延伸:maxReal 只能证明「轮尾部」在 items,不能证明整轮已拉完。
-      // 终态任务打开时 loadRoundsIntoFolder 会预载 task.roundTail 的最后一页(≤200 条)到 items,
-      // 其中含轮终点最终回复(maxReal == endSeq)但前半缺失;若仅据 maxReal >= endSeq 判整轮取完,
-      // 展开轮详情会只渲染尾段、前半永久丢失(t_g656 回归:980 事件的大轮只显示末 200 条,
-      // 首条为孤立的 tool.result——对应 tool.call 未载入故无工具名)。
+      // live 任务打开时 loadRoundsIntoFolder 会预载 task.roundTail 的最后一页(≤200 条)到 items
+      // (桥接流式增量),其中含轮终点最终回复(maxReal == endSeq)但前半缺失;该轮闭合后展开,
+      // 若仅据 maxReal >= endSeq 判整轮取完,展开轮详情会只渲染尾段、前半永久丢失
+      // (t_g656 回归:980 事件的大轮只显示末 200 条,首条为孤立的 tool.result——
+      // 对应 tool.call 未载入故无工具名)。
       // 故额外要求 [startSeq, maxReal] 内已含轮起点 user.message(minReal <= startSeq),
       // 才认定缓存从起点连续覆盖到 maxReal。
       const minReal = this.folder.roundRealCeiling(startKey, String(BigInt(String(maxReal)) + 1n))
@@ -470,21 +471,13 @@ class ManagedStream {
       } catch (error) {
         console.warn(`[taskStream] 拉取未闭合尾轮尾部事件失败(${this.taskId}):`, error)
       }
-    } else if (!res.live && lastRound?.startSeq) {
-      // 终态任务:hidden 期间 ask_user 超时的 ask.resolved 可能未被推送(DataPusher 已停),
-      // 拉最后一轮尾部事件补分发到 askStore,确保弹窗被 settle 关闭。
-      try {
-        const { events } = await fetchTaskRoundTail(client, this.workerId, {
-          taskId: this.taskId,
-          startSeq: lastRound.startSeq,
-          limit: 200,
-        })
-        for (const item of events) {
-          this.foldWireEvent(item)
-        }
-      } catch (error) {
-        console.warn(`[taskStream] 拉取终态任务尾轮尾部事件失败(${this.taskId}):`, error)
-      }
+    } else if (!res.live) {
+      // 终态任务:hidden 期间 ask_user 超时/作答的 ask.resolved 未推送到前端(DataPusher
+      // 已停)。直接清理本任务残留的挂起 ask——任务已终态,一切 pending ask 必已落定。
+      // clearAsksOfTask 按 taskId 过滤,不影响其他任务的弹窗。
+      // 旧做法拉尾段 200 条事件折入 items 只为找 ask.resolved 分发到 askStore,副作用是
+      // 尾段事件污染 items(含轮终点最终回复),展开轮详情时懒加载缓存误判整轮已覆盖。
+      clearAsksOfTask(this.taskId)
     }
     this.notify()
   }
