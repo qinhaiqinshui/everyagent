@@ -45,7 +45,7 @@ jobs:
       # TODO: pin 到 commit SHA
       - uses: actions/checkout@v5
       # TODO: pin 到 commit SHA
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           # package.json 无 engines 字段,取默认 22(LTS)
           node-version: 22
@@ -65,7 +65,7 @@ jobs:
       # TODO: pin 到 commit SHA
       - uses: actions/checkout@v5
       # TODO: pin 到 commit SHA
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
