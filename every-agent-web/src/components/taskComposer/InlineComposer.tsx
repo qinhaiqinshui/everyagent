@@ -566,6 +566,7 @@ const InlineComposer = React.forwardRef<InlineComposerHandle, InlineComposerProp
   }, [updateEmptyState])
 
   const reportCaret = React.useCallback(() => {
+    if (isComposingRef.current) return
     const root = editorRef.current
     if (!root) return
     const text = serializeEditor(root)
@@ -576,6 +577,7 @@ const InlineComposer = React.forwardRef<InlineComposerHandle, InlineComposerProp
   const handleInput = React.useCallback(() => {
     const root = editorRef.current
     dbg('input composing=', isComposingRef.current, 'caret=', root ? describeCaret(root) : '-', 'children=', root ? describeChildren(root) : '-')
+    if (isComposingRef.current) return
     emitFromDom()
     reportCaret()
   }, [emitFromDom, reportCaret])
@@ -845,6 +847,12 @@ const InlineComposer = React.forwardRef<InlineComposerHandle, InlineComposerProp
         isComposingRef.current = false
         const root = editorRef.current
         dbg('compositionend caret=', root ? describeCaret(root) : '-', 'children=', root ? describeChildren(root) : '-')
+        // composition 结束后显式同步 state：handleInput 在 composition 期间被跳过，
+        // 此处确保最终文本（候选词上屏后的 DOM）立即序列化上报，不依赖随后的 input 事件
+        // （某些浏览器/IME 下 input 可能先于 compositionend 到达，此时 handleInput 仍判
+        // isComposing=true 而跳过；这里兜底保证 state 与 DOM 一致）。
+        emitFromDom()
+        reportCaret()
       }}
       onPaste={handlePaste}
       onKeyUp={reportCaret}
