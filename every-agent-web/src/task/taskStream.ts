@@ -357,12 +357,23 @@ class ManagedStream {
     const maxReal = this.folder.roundRealFloor(startKey, endKey)
     let afterSeq = page.afterSeq
     if (maxReal != null) {
-      // 完整覆盖:权威最终回复已在 items(真实) → 整轮已拉完,不 RPC。
-      if (endKey != null && cmpSeq(maxReal, endKey) >= 0) {
+      // 缓存是否从轮起点连续延伸:maxReal 只能证明「轮尾部」在 items,不能证明整轮已拉完。
+      // 终态任务打开时 loadRoundsIntoFolder 会预载 task.roundTail 的最后一页(≤200 条)到 items,
+      // 其中含轮终点最终回复(maxReal == endSeq)但前半缺失;若仅据 maxReal >= endSeq 判整轮取完,
+      // 展开轮详情会只渲染尾段、前半永久丢失(t_g656 回归:980 事件的大轮只显示末 200 条,
+      // 首条为孤立的 tool.result——对应 tool.call 未载入故无工具名)。
+      // 故额外要求 [startSeq, maxReal] 内已含轮起点 user.message(minReal <= startSeq),
+      // 才认定缓存从起点连续覆盖到 maxReal。
+      const minReal = this.folder.roundRealCeiling(startKey, String(BigInt(String(maxReal)) + 1n))
+      const coveredFromStart = minReal != null && cmpSeq(minReal, startKey) <= 0
+      // 完整覆盖:从轮起点连续延伸到权威最终回复 → 整轮已拉完,不 RPC。
+      if (coveredFromStart && endKey != null && cmpSeq(maxReal, endKey) >= 0) {
         return { lastSeq: maxReal, hasMore: false, fromCache: true }
       }
-      // 部分覆盖:把 afterSeq 提升到已覆盖点,从缺口续拉(不整页重拉)。
-      if (cmpSeq(maxReal, afterSeq) > 0) {
+      // 部分覆盖:仅在缓存从轮起点连续延伸时,才把 afterSeq 提升到已覆盖点从缺口续拉(不整页重拉);
+      // 尾段预载(coveredFromStart=false)说明前半缺失,必须从 afterSeq(轮起点)重新前向扫,
+      // 折入时按 seq 去重,与已缓存的尾段天然合并不重复。
+      if (coveredFromStart && cmpSeq(maxReal, afterSeq) > 0) {
         afterSeq = maxReal
       }
     }
