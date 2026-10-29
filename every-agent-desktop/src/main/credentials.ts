@@ -12,11 +12,13 @@
  *   (实测优先级高于 jar 内默认值与 ~/.everyagent/application-worker.yaml 用户覆盖),
  *   使 worker 连接本机 hub 的 api-key/hub-key 与 hub 凭据恒一致。
  *   Spring 对 list 属性跨配置文件整表替换、不合并——desktop-worker.yml 若只写本机
- *   一条,用户在 application-worker.yaml 里自配的远程 hub 会被整体覆盖丢失(表现为
- *   远程 hub 侧 worker 恒离线)。故生成时读取用户文件合并:hubs[0] 恒为本机条目
- *   (worker /admin 认证与 hubs[0].api-key 比对,不可移位),远程条目原序追加,
+ *   一条,旧 worker 上用户在 application-worker.yaml 里自配的远程 hub 会被整体覆盖
+ *   丢失(表现为远程 hub 侧 worker 恒离线)。故生成时读取用户文件合并:hubs[0] 恒为
+ *   本机条目(worker /admin 认证与 hubs[0].api-key 比对,不可移位),远程条目原序追加,
  *   回环地址条目丢弃(本机连接由 desktop 独占供数),${HUB_KEY:默认值} 占位符还原为
  *   字面默认值(子进程 env 的 HUB_KEY 恒为本机随机密钥,占位符不还原必被解析成错误凭据)。
+ *   新 worker(2026-10 起)resolveHubs 按来源单独重读用户文件、非回环条目以用户文件
+ *   为准(快照仅兜底兼容旧 worker),快照过期不再吞掉用户配置。
  *
  * 落盘加密(safeStorage 迁移):desktop-config.json 中的密钥经 SecretCodec 编码后存储——
  * 生产装配为 Electron safeStorage(Windows DPAPI,绑定当前用户与机器;适配器在
@@ -337,10 +339,13 @@ export interface WorkerOverrideOptions {
 /**
  * 生成/刷新 worker 覆盖配置,返回其 file: URL(--spring.config.additional-location 参数用)。
  * 每次拉起 worker 前重写,保证与 desktop-config.json 当前值一致。
- * 列表语义(核心):Spring 对 list 属性跨配置文件整表替换、不合并——本文件优先级最高,
- * 故必须在此写全最终 hubs 列表:hubs[0]=本机条目(与 desktop-config.json 凭据同源,
- * /admin 认证与 hubs[0].api-key 比对,不可移位);用户 application-worker.yaml 的
- * worker.hubs 远程条目原序合并(回环条目剔除;${HUB_KEY:默认值} 还原为字面值)。
+ * 列表语义:Spring 对 list 属性跨配置文件整表替换、不合并,本文件优先级最高——
+ * hubs[0]=本机条目(与 desktop-config.json 凭据同源,/admin 认证与 hubs[0].api-key 比对,
+ * 不可移位);用户 application-worker.yaml 的 worker.hubs 远程条目仍原序合并进来
+ * (回环剔除;${HUB_KEY:默认值} 还原)——**新 worker(2026-10 起)对该快照仅作兜底**:
+ * 其 resolveHubs 会按来源单独重读用户文件,非回环条目一律以用户文件为准(快照过期不再
+ * 吞掉用户配置,worker.restart 等不经 desktop 的重启路径也能生效);快照保留是为兼容
+ * 旧 worker(旧版整表语义下删掉快照即丢远程条目)。
  * 用户文件不存在/不可读/结构未识别 → 退回仅本机条目并经 warn 告警(不阻塞启动)。
  * 值经 JSON.stringify 输出——JSON 字符串是合法的 YAML 双引号标量(转义规则子集兼容),
  * 用户自定义密钥含特殊字符时也不会破坏 YAML 结构。
@@ -385,11 +390,11 @@ export function writeWorkerOverrideYml(cfg: DesktopConfig, home: string, opts: W
   const content =
     '# 本文件由 Every Agent 桌面版自动生成,请勿手工编辑。\n' +
     '# 本机 hub 凭据与 desktop-config.json 保持一致,恒为 hubs[0](worker /admin 认证\n' +
-    '# 与 hubs[0].api-key 比对);其余条目自 application-worker.yaml 的 worker.hubs 合并\n' +
-    '# 而来——Spring 对 list 属性跨文件整表替换,此处必须写全最终列表,否则用户自配的\n' +
-    '# 远程 hub 会被本文件整体覆盖丢失;回环地址条目已剔除;${HUB_KEY:默认值} 占位符\n' +
-    '# 已还原为字面默认值(子进程 env 的 HUB_KEY 恒为本机随机密钥,占位符不还原会被\n' +
-    '# 解析成错误凭据)。\n' +
+    '# 与 hubs[0].api-key 比对);其余条目为 application-worker.yaml 的 worker.hubs 合并\n' +
+    '# 快照(回环地址已剔除;${HUB_KEY:默认值} 占位符已还原为字面值)。新 worker 对快照\n' +
+    '# 仅作兜底:非回环条目一律以 application-worker.yaml 为准(其 resolveHubs 按来源单独\n' +
+    '# 重读用户文件),改远程 hub 配置后直接重启 worker 即可生效,无需重启 desktop;\n' +
+    '# 快照保留仅为兼容旧 worker(Spring 对 list 跨文件整表替换,旧版删快照即丢远程条目)。\n' +
     'worker:\n' +
     '  hubs:\n' +
     hubsYml.join('\n') +

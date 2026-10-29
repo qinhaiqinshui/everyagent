@@ -11,8 +11,9 @@ worker:
   # 未显式配置即拒绝启动(resolveHubs 启动校验),不存在任何缺省密钥旁路。
   # 打包默认条目的三要素均可经环境变量注入(url 用 WORKER_HUB_URL,见 docker-compose/deploy.py);
   # 更完整的自定义(多 hub/多命名空间)写 ${EVERYAGENT_HOME}/application-worker.yaml 的
-  # worker.hubs 列表(整表替换本默认条目,优先级更高);桌面版由 desktop 生成的
-  # desktop-worker.yml 经 --spring.config.additional-location 注入,不受本默认值影响。
+  # worker.hubs 列表(优先级更高);桌面版由 desktop 生成的 desktop-worker.yml 经
+  # --spring.config.additional-location 注入(优先级最高,但仅其回环条目=本机 hub 生效,
+  # 非回环条目以用户 application-worker.yaml 为准,resolveHubs 多来源合并,详见 §7.17)。
   hubs:
     - url: ${WORKER_HUB_URL:ws://localhost:6101/ws}
       api-key: ${WORKER_API_KEY:}

@@ -95,7 +95,8 @@ public class HubPool implements EventSink {
             });
             conns.add(link);
         }
-        log.info("hub 池就绪:{} 条连接,workerId={}", conns.size(), props.getWorkerId());
+        log.info("hub 池就绪:{} 条连接,workerId={},hubs={}", conns.size(), props.getWorkerId(),
+                hubs.stream().map(WorkerProperties.HubConfig::getUrl).toList());
         for (HubLink c : conns) {
             c.start();
         }
