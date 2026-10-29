@@ -1112,7 +1112,7 @@ public interface AgentFactory {
 - **过程内容懒加载**:闭合轮展开 / 终态未闭合尾轮走前向分页(滚动到底部 forward sentinel 续拉 `LazyLoadSentinel`,拉到 endSeq 停);运行中尾轮 = 订阅实时流 + 初始「最后一页」(roundTail 200)+ 顶部 backward sentinel 上翻历史(到达 startSeq 停)。拉取层先查 items 缓存(`roundRealFloor`/`roundRealCeiling` 按 seq 区间求已覆盖边界),已覆盖不 RPC、部分覆盖从缺口续拉。
 - **分页状态 key = roundId**(轮次级稳定主键):运行中尾轮用 open 轮 `roundId`(worker 开轮即生成、跨闭合稳定),老 worker 缺失时回退 `'open'` 魔法串(must-ignore 双向兼容);backward 游标语义仍是 seq,仅 key 名变(每轮独立游标,轮换新开不再复用上一轮旧游标)。
 - **resync/编辑重发的 items 重建**:full 重载仍 reset items(编辑重发后旧轮次 seq 已过期,混排会顺序错乱),重建来源 = 尾段 wire 回放 + 实时推送 + **分页状态失效促重拉**——folder 暴露 `resetEpoch` 计数,轮面板观测到 epoch 变化即清空分页状态,已展开轮自动重新发起首页拉取(拉取层先查 items 缓存,缺才 RPC),避免 reset 误清已展开轮内容后无重拉路径。
-- 渲染层任务线程按 **seq 键控增量 upsert**(多子 agent 并发/重连回放不丢事件;大整数 seq 用 BigInt 精确比较);`userControll` 自动滚动(默认 false = 收到数据滚到距底 64px 停靠点而非真底——停靠距离大于"到底"判定阈值 24px,程序滚动自身永不触发复位;用户触碰置 true,仅用户真实滚回底部复位)。
+- 渲染层任务线程按 **seq 键控增量 upsert**(多子 agent 并发/重连回放不丢事件;大整数 seq 用 BigInt 精确比较);`userControll` 自动滚动(默认 false = 收到数据贴底 scrollTop=scrollHeight;用户触碰线程区置 true 暂停跟随;scroll 事件不翻转该标识,恢复跟随仅由点击「滚动到底部」按钮等显式动作触发)。
 
 ### 8.4 通知
 

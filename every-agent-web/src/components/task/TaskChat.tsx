@@ -56,20 +56,10 @@ import '@/components/task/chatPanel.css'
 export { DRAFT_TASK_ID }
 
 /**
- * 距容器底部多少像素内视为「已滚到底部」：
- * 仅当用户真实滚回该范围才恢复自动跟随(userControll 置 false)。
+ * 距容器底部多少像素内视为「已贴近底部」：
+ * 仅用于「滚动到底部」按钮显隐(超出该距离才显示按钮)，不参与跟随状态判定。
  */
 const THREAD_SCROLL_TO_BOTTOM_THRESHOLD = 24
-
-/**
- * 程序自动跟随滚动的停靠点：距容器底部保留的像素距离(不滚到真底)。
- * 不变量：必须大于 THREAD_SCROLL_TO_BOTTOM_THRESHOLD——程序滚动的落点
- * (恰好距底 GAP)因此永远不会落入「视为已滚到底部」区间，「恢复自动跟随」
- * 只可能由用户真实的滚动操作触发，杜绝程序自动下滚把已被用户暂停的跟随
- * 自己「撞」回来。「滚动到底部」按钮同样只在距底超过该值时显示
- * (自动跟随停靠时按钮保持隐藏)。
- */
-const THREAD_AUTO_FOLLOW_BOTTOM_GAP = 64
 
 /**
  * Task 聊天页属性。
@@ -102,36 +92,34 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
   /**
    * 用户滚动控制标识（本次改造的核心单一语义）：
    * - false（默认）：只要线程内容长高（轮次内容新增/未闭合轮流式输出，经
-   *   ResizeObserver 感知）就自动滚到跟随停靠点(距底 THREAD_AUTO_FOLLOW_BOTTOM_GAP)；
+   *   ResizeObserver 感知）就自动贴底；
    * - true：用户触碰了线程区域（pointerdown：鼠标按下 / 手指触摸），视为在自行浏览，即使内容长高也不滚动；
-   * - 仅当用户真实滚回底部（距底 <= THREAD_SCROLL_TO_BOTTOM_THRESHOLD）→ 置回 false 恢复自动跟随。
-   *
-   * 程序自动滚动有意停在距底 GAP(> THRESHOLD)处，落点永不满足恢复条件；
-   * scroll 事件只做「到底部 → false」，置 true 只来自用户 pointerdown 事件。
+   * - 恢复只有显式动作：点击「滚动到底部」按钮。scroll 事件绝不翻转本标识
+   *   （不置 true 也不置 false）——用户手动滚动、程序自动滚动之间不存在
+   *   任何经 scroll 事件互相误触发的路径。
    */
   const userControllRef = React.useRef(false)
   // 用回调 ref 持有滚动容器节点：保证容器真正挂载后才绑定 scroll 监听。
   const threadScrollRefNode = React.useRef<HTMLDivElement | null>(null)
   // 观察线程内容容器尺寸变化：轮次卡片新增、未闭合轮流式输出、轮详情展开等都会
   // 异步撑高内容。用 ResizeObserver 跟随内容真实尺寸,只要自动跟随开启
-  // (userControll=false)就立即滚到停靠点。另配 MutationObserver 捕获流式文本逐字符增长
+  // (userControll=false)就立即贴底。另配 MutationObserver 捕获流式文本逐字符增长
   // 等「尺寸未变但 DOM 已变」的场景,双保险确保流式输出时刻滚动到位。
   const threadContentResizeObserverRef = React.useRef<ResizeObserver | null>(null)
   const threadContentMutationObserverRef = React.useRef<MutationObserver | null>(null)
   /**
-   * 滚到自动跟随停靠点：距底保留 THREAD_AUTO_FOLLOW_BOTTOM_GAP(而非真底)。
-   * 有意不写 scrollTop = scrollHeight：滚到真底的落点会满足「滚回底部 → 恢复
-   * 跟随」判定，程序自动下滚就能把已被用户暂停的跟随「撞」回来（用户向上滚动
-   * 时被反复拽回）。停靠在阈值之外(GAP > THREAD_SCROLL_TO_BOTTOM_THRESHOLD)
-   * 后，恢复跟随只可能来自用户真实的滚动操作。
-   * 仅在用户未手动接管滚动（userControll=false）时执行。
+   * 以输入框为锚点贴底：输入框（composer）固定在滚动容器下方,因此只要把滚动容器
+   * 滚到最底（scrollTop = scrollHeight），最新内容就恰好落在输入框上方，
+   * 底部流式状态行(轮播文字)也完整可见。
+   * 仅在用户未手动接管滚动（userControll=false）时执行；scroll 事件不参与
+   * 跟随状态翻转，故程序贴底的落点不引发任何副作用。
    */
   const scrollToBottomIfFollowing = React.useCallback(() => {
     const node = threadScrollRefNode.current
     if (!node || userControllRef.current) {
       return
     }
-    node.scrollTop = Math.max(0, node.scrollHeight - node.clientHeight - THREAD_AUTO_FOLLOW_BOTTOM_GAP)
+    node.scrollTop = node.scrollHeight
   }, [])
   // 「滚动到底部」按钮是否可见：用户远离底部时显示，回到底部自动隐藏。
   const [showScrollToBottom, setShowScrollToBottom] = React.useState(false)
@@ -144,19 +132,12 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
     if (!node) {
       return
     }
-    const distanceFromBottom = getDistanceFromBottom(node)
-    // 「滚动到底部」按钮显隐：独立于 userControll，距底超过跟随停靠距离(GAP)才
-    // 显示。自动跟随的停靠点(恰好距底 GAP)不会露出按钮，回到底部区域即隐藏。
+    // 只管「滚动到底部」按钮显隐：距底超过阈值显示、贴近底部隐藏。
     //（相同布尔值 setState 时 React 会 bail out，不产生多余重渲染。）
-    setShowScrollToBottom(distanceFromBottom > THREAD_AUTO_FOLLOW_BOTTOM_GAP)
-    // userControll 自动跟随：仅当用户真实滚回底部(距底 <= THRESHOLD，而 THRESHOLD
-    // < GAP)才恢复。程序自动滚动的落点恒为距底 GAP，永不落入该区间，
-    // 因此程序滚动永远不会自我恢复跟随。
-    // 这里只做「到底部 → false」，绝不因 scroll 事件置 true ——
-    // 置 true 只发生在用户触碰（pointerdown）上，程序化 scrollTo 不会把跟随误关。
-    if (distanceFromBottom <= THREAD_SCROLL_TO_BOTTOM_THRESHOLD) {
-      userControllRef.current = false
-    }
+    // 刻意不在这里碰 userControll：滚动位置(无论用户滚还是程序滚)绝不翻转
+    // 跟随状态——恢复跟随只有「滚动到底部」按钮这一个入口，杜绝程序贴底
+    // 与用户滚动之间任何互相误触发的路径。
+    setShowScrollToBottom(getDistanceFromBottom(node) > THREAD_SCROLL_TO_BOTTOM_THRESHOLD)
   }, [])
   const threadScrollRef = React.useCallback((node: HTMLDivElement | null) => {
     const prev = threadScrollRefNode.current
@@ -207,7 +188,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
       }
     }
   }, [armUserScrollIntent, handleThreadScroll, scrollToBottomIfFollowing])
-  /** 点击「滚动到底部」：用户显式动作，滚到真底并恢复自动跟随（userControll=false，后续流式跟随停靠在距底 GAP）。 */
+  /** 点击「滚动到底部」：滚到真底并恢复自动跟随（userControll=false，后续流式继续贴底）——恢复跟随的唯一入口。 */
   const handleScrollToBottom = React.useCallback(() => {
     const node = threadScrollRefNode.current
     if (!node) {
@@ -500,9 +481,8 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
   }, [agentId])
 
   // 进入任务 / 切回任务页：
-  // - 首次打开该任务标签时滚到真底并恢复自动跟随（userControll=false），
-  //   让用户直接看到最新消息（此时用户尚未交互，滚到真底不会引发跟随误判）；
-  //   后续流式跟随则停靠在距底 GAP 处。
+  // - 首次打开该任务标签时贴底并恢复自动跟随（userControll=false），
+  //   让用户直接看到最新消息。
   // - 之后切走到其他标签再切回，不动滚动条——原位置保持。
   const hasActivatedRef = React.useRef(false)
   React.useLayoutEffect(() => {
@@ -528,10 +508,10 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
     })
   }, [isActive])
 
-  // 流式数据驱动跟随补帧：每次收到 worker 推送（items 引用变更，含未闭合轮流式
-  // delta/thinking 折叠推进）且用户未接管滚动（userControll=false）时立即滚到
-  // 跟随停靠点(距底 GAP)。与 ResizeObserver / MutationObserver 互为冗余，
-  // 三者都只做幂等的同点位滚动，不会互相干扰。
+  // 流式数据驱动贴底补帧：每次收到 worker 推送（items 引用变更，含未闭合轮流式
+  // delta/thinking 折叠推进）且用户未接管滚动（userControll=false）时立即贴底，
+  // 确保最新内容稳定落在输入框上方。与 ResizeObserver / MutationObserver 互为冗余，
+  // 三者都只做幂等的 scrollTop=scrollHeight，不会互相干扰。
   React.useLayoutEffect(() => {
     if (userControllRef.current) {
       return
