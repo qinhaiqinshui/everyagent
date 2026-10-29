@@ -37,8 +37,8 @@ public final class ContextOverflow {
 
     private static final Logger log = LoggerFactory.getLogger(ContextOverflow.class);
 
-    /** 模型配置 params 未声明 contextWindowTokens 时采用的默认上下文窗口(与常见 256k 端点一致)。 */
-    public static final long DEFAULT_CONTEXT_WINDOW_TOKENS = 256_000;
+    /** 模型配置 params 未声明 contextWindowTokens 时采用的默认上下文窗口(100 万 token)。 */
+    public static final long DEFAULT_CONTEXT_WINDOW_TOKENS = 1_000_000;
 
     /** 上下文超限特征文案(大小写不敏感;命中任一即触发专项日志)。 */
     private static final Pattern[] OVERFLOW_PATTERNS = {

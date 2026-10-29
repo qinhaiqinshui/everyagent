@@ -16,10 +16,10 @@ public interface WorkerConfig {
     /**
      * 默认上下文窗口 token 数。
      *
-     * <p>原定义于 {@code ContextOverflow.DEFAULT_CONTEXT_WINDOW_TOKENS}（值 256_000），
+     * <p>原定义于 {@code ContextOverflow.DEFAULT_CONTEXT_WINDOW_TOKENS}（值 1_000_000），
      * 该类依赖 AgentEntity 无法搬入 plugin-api，故在此常量暴露供插件直接引用。
      */
-    long DEFAULT_CONTEXT_WINDOW_TOKENS = 256_000;
+    long DEFAULT_CONTEXT_WINDOW_TOKENS = 1_000_000;
 
     /** 限流/护栏/上下文压缩等配置域。 */
     Limits limits();
