@@ -783,6 +783,20 @@
   background: color-mix(in srgb, var(--accent-blue) 20%, var(--accent-blue-dim));
 }
 
+/* 任务列表标题胶囊渲染:覆盖 user-replay 的 pre-wrap/word-break,
+   强制单行 + nowrap,配合父级 overflow:hidden + text-overflow:ellipsis
+   实现侧边栏宽度自适应截断(拉宽可见更多内容)。 */
+.nagent-task-title-replay {
+  white-space: nowrap !important;
+  word-break: normal !important;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nagent-task-title-replay .nagent-inline-chip--replay {
+  pointer-events: none;
+}
+
 .nagent-msg__selection-summary {
   width: 100%;
   display: flex;

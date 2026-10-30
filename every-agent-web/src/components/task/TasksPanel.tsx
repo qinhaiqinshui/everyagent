@@ -19,6 +19,9 @@ import ConfirmDialog from '@/components/shared/ConfirmDialog'
 import PropertiesDialog from '@/components/shared/PropertiesDialog'
 import { buildWorkspacePropertyItems, getWorkspaceDisplayName } from '@/components/shared/workspacePropertyUtils'
 import { Checkbox } from 'antd'
+import { buildUserMessageReplaySegments } from '@/components/task/kindViews/userMessageView'
+import { getComposerChipView } from '@/composerToken/composerChipRenderer'
+import { stripTokensToLabels } from '@/composerToken/composerOpaqueToken'
 
 const runtimeService = getDefaultRuntimeService()
 
@@ -369,7 +372,7 @@ export default function TasksPanel({
   const handleOpenTask = React.useCallback((task: TaskListItemSnapshot) => {
     onSelect({
       taskId: task.taskId,
-      displayTitle: task.displayTitle,
+      displayTitle: stripTokensToLabels(task.displayTitle),
     })
   }, [onSelect])
 
@@ -418,6 +421,38 @@ export default function TasksPanel({
       }
     },
   })
+
+  /**
+   * 任务标题胶囊渲染:把 rawContent(含 opaque token)用与用户消息相同的胶囊渲染组件展示,
+   * 单行 nowrap + ellipsis,侧边栏拉宽时可见更多内容。
+   */
+  const renderTaskTitle = (task: TaskListItemSnapshot) => {
+    const segments = buildUserMessageReplaySegments({ rawContent: task.displayTitle })
+    if (segments.length === 0) {
+      return <span>{task.displayTitle}</span>
+    }
+    return (
+      <span className="nagent-msg__content nagent-msg__content--user-replay nagent-task-title-replay">
+        {segments.map((segment, index) => {
+          if (segment.type === 'text') {
+            return <span key={`text:${index}`}>{segment.value}</span>
+          }
+          const view = segment.token
+            ? getComposerChipView(segment.token)
+            : { tokenId: `tok:${index}`, label: segment.value }
+          return (
+            <span
+              key={`token:${index}:${view.tokenId}`}
+              className="nagent-inline-chip nagent-inline-chip--replay"
+              title={view.label || segment.value}
+            >
+              <span className="nagent-inline-chip__label">{view.label || segment.value}</span>
+            </span>
+          )
+        })}
+      </span>
+    )
+  }
 
   const renderTaskCard = (task: TaskListItemSnapshot, groupKey: string) => {
     // 高亮只跟随父级当前任务，避免本地状态滞后造成旧任务残留边框。
@@ -473,7 +508,7 @@ export default function TasksPanel({
             size="sm"
             onClick={() => onSelect({
               taskId: task.taskId,
-              displayTitle: task.displayTitle,
+              displayTitle: stripTokensToLabels(task.displayTitle),
             })}
           >
             打开
@@ -481,8 +516,8 @@ export default function TasksPanel({
         </div>
       ) : null}
       <div style={taskCardHeaderStyle}>
-        <div style={taskTitleStyle} title={task.displayTitle}>
-          {task.displayTitle}
+        <div style={taskTitleStyle} title={stripTokensToLabels(task.displayTitle)}>
+          {renderTaskTitle(task)}
         </div>
         {!batchActive ? (
           <span style={{ marginLeft: 'auto' }}>
@@ -730,7 +765,7 @@ export default function TasksPanel({
       <ConfirmDialog
         open={Boolean(singleDeleteTarget)}
         title="删除任务"
-        message={`确定要删除任务「${singleDeleteTarget?.displayTitle ?? ''}」吗？该操作不可恢复。`}
+        message={`确定要删除任务「${stripTokensToLabels(singleDeleteTarget?.displayTitle ?? '')}」吗？该操作不可恢复。`}
         confirmLabel={deleting ? '删除中...' : '删除'}
         danger
         onConfirm={async () => {

@@ -12,6 +12,7 @@ import type { WorkspaceTab, WorkspaceTaskChatTab } from '@/types'
 import type { UiWorkspaceTabTypeDefinition, WorkspaceTabCreateInput, WorkspaceTabRenderContext } from '@/plugin/types'
 import { TaskChatIcon } from '@/components/icon'
 import { taskStore } from '@/task/taskStore'
+import { stripTokensToLabels } from '@/composerToken/composerOpaqueToken'
 import { DRAFT_TASK_ID, setDraftPreset } from '@/components/task/taskChatDraft'
 import TaskChatTabLabel from '@/components/task/TaskChatTabLabel'
 import { createWorkspaceTaskChatTab } from '@/components/app/workspaceShellState'
@@ -68,7 +69,9 @@ export const taskChatTabType: UiWorkspaceTabTypeDefinition = {
       const title = input.title?.trim() || '新任务'
       return createWorkspaceTaskChatTab({ taskId: DRAFT_TASK_ID, title })
     }
-    const title = input.title?.trim() || taskStore.get(taskId)?.title || `任务 ${taskId.slice(0, 8)}`
+    const title = input.title?.trim()
+      || stripTokensToLabels(taskStore.get(taskId)?.title || '')
+      || `任务 ${taskId.slice(0, 8)}`
     return createWorkspaceTaskChatTab({
       taskId,
       title,

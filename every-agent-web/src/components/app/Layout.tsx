@@ -66,6 +66,7 @@ import { createLazyRouteComponent, scheduleLazyRoutePreload } from '@/components
 import { useHub } from '@/hub/HubProvider'
 import { hubSession } from '@/hub/session'
 import { taskStore } from '@/task/taskStore'
+import { stripTokensToLabels } from '@/composerToken/composerOpaqueToken'
 import { workspaceRegistry } from '@/hub/workspaceRegistry'
 import { DRAFT_TASK_ID, setDraftPreset } from '@/components/task/taskChatDraft'
 
@@ -714,7 +715,10 @@ function LayoutContent({ initialThemeType }: { initialThemeType: ThemeMode }) {
       })
     })
     const unsubscribeTaskFocus = domainEventBus.subscribe(DOMAIN_EVENTS.WORKSPACE_FOCUS_TASK_REQUESTED, ({ taskId }) => {
-      openTaskChatTab({ taskId, title: taskStore.get(taskId)?.title ?? `任务 ${taskId.slice(0, 8)}` })
+      openTaskChatTab({
+        taskId,
+        title: stripTokensToLabels(taskStore.get(taskId)?.title ?? '') || `任务 ${taskId.slice(0, 8)}`,
+      })
     })
     const unsubscribeReloadAllFilesRequested = domainEventBus.subscribe(DOMAIN_EVENTS.WORKSPACE_RELOAD_ALL_FILES_REQUESTED, () => {
       reloadAllOpenFileTabs()
