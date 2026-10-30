@@ -192,6 +192,32 @@ export function splitComposerRawContent(
 }
 
 /**
+ * 从原始输入中剥离 opaque token 外壳,替换为各自的 label 明文。
+ * 用于任务标题派生等场景:避免 `[[[[agent-token::::...]]]]` 原串出现在标题中。
+ *
+ * 遍历输入中所有 `[[[[...]]]]` 段,逐段尝试解析;解析成功则用 label 替换,
+ * 解析失败则丢弃该 token 段。最终 trim 返回。
+ */
+export function stripTokensToLabels(rawContent: string): string {
+  if (!rawContent) return rawContent
+  const re = /\[\[\[\[[\s\S]*?\]\]\]\]/g
+  let result = ''
+  let cursor = 0
+  let m: RegExpExecArray | null
+  while ((m = re.exec(rawContent))) {
+    result += rawContent.slice(cursor, m.index)
+    const parsed = parseOpaqueTokenText(m[0])
+    if (parsed) {
+      result += parsed.label
+    }
+    // 解析失败时不追加原串,直接跳过 token 段
+    cursor = m.index + m[0].length
+  }
+  result += rawContent.slice(cursor)
+  return result.trim()
+}
+
+/**
  * 提交给 AI 前，把正文里的命令/技能/文件占位（opaque token）替换成可读文本。
  *
  * 规则：

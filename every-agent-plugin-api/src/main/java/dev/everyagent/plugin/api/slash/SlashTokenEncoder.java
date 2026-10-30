@@ -121,6 +121,43 @@ public final class SlashTokenEncoder {
         return new ParsedToken(kind, label, summary, payload);
     }
 
+    /**
+     * 从原始输入中剥离 opaque token 外壳,替换为各自的 label 明文。
+     * 用于任务标题派生等场景:避免 {@code [[[[agent-token::::...]]]]} 原串出现在标题中。
+     *
+     * <p>遍历输入中所有 {@code [[[[...]]]]} 段,逐段尝试 {@link #parseToken};
+     * 解析成功则用 {@code label} 替换,解析失败则丢弃该 token 段。最终 trim 返回。
+     */
+    public static String stripTokensToLabels(String input) {
+        if (input == null || input.isEmpty()) {
+            return input;
+        }
+        StringBuilder sb = new StringBuilder();
+        int cursor = 0;
+        while (true) {
+            int start = input.indexOf(OPAQUE_PREFIX, cursor);
+            if (start < 0) {
+                sb.append(input, cursor, input.length());
+                break;
+            }
+            int end = input.indexOf(OPAQUE_SUFFIX, start + OPAQUE_PREFIX.length());
+            if (end < 0) {
+                sb.append(input, cursor, input.length());
+                break;
+            }
+            end += OPAQUE_SUFFIX.length();
+            sb.append(input, cursor, start);
+            String token = input.substring(start, end);
+            ParsedToken parsed = parseToken(token);
+            if (parsed != null) {
+                sb.append(parsed.label());
+            }
+            // 解析失败时不追加原串(已由 cursor/start 截断跳过),直接丢弃 token 段
+            cursor = end;
+        }
+        return sb.toString().trim();
+    }
+
     /** base64url 编码(UTF-8,去 = 填充,URL-safe)。 */
     public static String toBase64Url(String value) {
         return Base64.getUrlEncoder().withoutPadding()

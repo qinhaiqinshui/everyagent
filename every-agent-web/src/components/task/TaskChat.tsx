@@ -35,7 +35,7 @@ import { ComposerDraftBridgeContext, type ComposerDraftBridgeValue } from '@/plu
 import { setComposerBridge } from '@/plugin/pluginRuntimeBridge'
 import { useWorkspaceShell } from '@/components/app/WorkspaceShellContext'
 import { useResponsiveViewport } from '@/hooks/useResponsiveViewport'
-import { parseOpaqueTokenText, replaceComposerTokensForSubmission } from '@/composerToken/composerOpaqueToken'
+import { parseOpaqueTokenText, replaceComposerTokensForSubmission, stripTokensToLabels } from '@/composerToken/composerOpaqueToken'
 import { parseTaskScopeTokens, upsertTaskToken, removeTaskToken, applyTaskToken, cancelTaskToken, extractSlashId, listTaskTokens } from '@/slash/taskScopedTokens'
 import { slashCommandRegistry } from '@/slash/slashCommandRegistry'
 import { createSnowflakeId } from '@/utils/snowflakeId'
@@ -601,7 +601,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
           // 任务级底部 token 在任务创建后通过 slash.taskTokens.apply 逐个写入
           // (slash 层自管 slash-tokens.json,不走 task.run 参数)。
           const newTaskId = await taskQueryService.runTask(aiText, {
-            title: aiText.slice(0, 40),
+            title: stripTokensToLabels(aiText).slice(0, 40) || aiText.slice(0, 40),
             configId: selectedLlmConfigId || undefined,
             workspace: effectiveDraftWorkspace || undefined,
             workerId: draftWorkerId,
@@ -624,7 +624,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
           // 紧接着 closeWorkspaceTab 关闭草稿时,内部按旧闭包 activeWorkspaceTabId(草稿)
           // 重算 next-active 并覆盖激活,新任务标签刚被激活就被切走。
           shell.closeWorkspaceTab(`task:${DRAFT_TASK_ID}` as const)
-          shell.openTaskChatTab({ taskId: newTaskId, title: aiText.slice(0, 40) })
+          shell.openTaskChatTab({ taskId: newTaskId, title: stripTokensToLabels(aiText).slice(0, 40) || aiText.slice(0, 40) })
           return
         }
         if (isTaskRunning) {

@@ -70,4 +70,50 @@ class SlashTokenEncoderTest {
         assertNotNull(parsed, "ASCII payload token 必须可解析: " + opaque);
         assertEquals(".everyagent/attachments/paste-1.png", parsed.payload().path("path").asString());
     }
+
+    /** token 胶囊在用户消息前面:stripTokensToLabels 应剥离外壳,保留 label 明文。 */
+    @Test
+    void stripTokensToLabelsReplacesTokenWithLabel() {
+        String token = SlashTokenEncoder.buildToken("system.workspace_file", "📄 main.py",
+                null, Json.obj().put("path", "main.py"));
+        String input = token + " 帮我修改这个文件";
+        String result = SlashTokenEncoder.stripTokensToLabels(input);
+        assertEquals("📄 main.py 帮我修改这个文件", result);
+    }
+
+    /** 输入全是 token:stripTokensToLabels 应保留 label,不留原串。 */
+    @Test
+    void stripTokensToLabelsWithOnlyTokens() {
+        String token = SlashTokenEncoder.buildToken("system.workspace_file", "📄 main.py",
+                null, Json.obj().put("path", "main.py"));
+        String result = SlashTokenEncoder.stripTokensToLabels(token);
+        assertEquals("📄 main.py", result);
+    }
+
+    /** 无 token 的纯文本:stripTokensToLabels 应原样返回。 */
+    @Test
+    void stripTokensToLabelsWithPlainText() {
+        String input = "帮我修改这个文件";
+        String result = SlashTokenEncoder.stripTokensToLabels(input);
+        assertEquals("帮我修改这个文件", result);
+    }
+
+    /** 多个 token:stripTokensToLabels 应逐个替换为 label。 */
+    @Test
+    void stripTokensToLabelsWithMultipleTokens() {
+        String t1 = SlashTokenEncoder.buildToken("system.workspace_file", "📄 a.py",
+                null, Json.obj().put("path", "a.py"));
+        String t2 = SlashTokenEncoder.buildToken("system.workspace_file", "📄 b.py",
+                null, Json.obj().put("path", "b.py"));
+        String input = t1 + "和" + t2 + "都要改";
+        String result = SlashTokenEncoder.stripTokensToLabels(input);
+        assertEquals("📄 a.py和📄 b.py都要改", result);
+    }
+
+    /** null/空输入:stripTokensToLabels 应原样返回。 */
+    @Test
+    void stripTokensToLabelsWithNullOrEmpty() {
+        assertEquals(null, SlashTokenEncoder.stripTokensToLabels(null));
+        assertEquals("", SlashTokenEncoder.stripTokensToLabels(""));
+    }
 }

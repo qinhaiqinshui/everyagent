@@ -185,7 +185,12 @@ public final class TaskEntryCreateNode implements TaskLifecycleNode {
         String title = rc != null ? rc.optStrParam("title", null) : null;
         if (title == null || title.isEmpty()) {
             String input = impl.input();
-            title = input != null && input.length() > 40 ? input.substring(0, 40) + "…" : (input != null ? input : "任务");
+            // 剥离 opaque token 外壳,替换为 label 明文,避免 [[[[agent-token::::...]]]] 原串出现在标题中
+            String displayInput = dev.everyagent.plugin.api.slash.SlashTokenEncoder.stripTokensToLabels(input);
+            if (displayInput == null || displayInput.isEmpty()) {
+                displayInput = input != null ? input : "任务";
+            }
+            title = displayInput.length() > 40 ? displayInput.substring(0, 40) + "…" : displayInput;
         }
         String configId = rc != null ? rc.optStrParam("configId", null) : null;
         ResolvedConfig cfg = taskBootstrap.resolveConfig(configId);

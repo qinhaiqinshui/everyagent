@@ -13,6 +13,7 @@ import type { TaskStatus } from '@/task/types'
 import { taskStore, type TaskListEntry } from '@/task/taskStore'
 import { hubSession } from '@/hub/session'
 import { workspaceRegistry } from '@/hub/workspaceRegistry'
+import { stripTokensToLabels } from '@/composerToken/composerOpaqueToken'
 
 /** Task 列表展示快照(与 n 同形,attachedSkill* 恒为空)。 */
 export interface TaskListItemSnapshot {
@@ -124,7 +125,7 @@ export const taskQueryService = {
     })
     const taskId = String(result?.taskId ?? '')
     if (!taskId) throw new Error('worker 未返回 taskId')
-    taskStore.trackCreated(taskId, opts?.title || input.slice(0, 40), workspace, opts.workerId)
+    taskStore.trackCreated(taskId, opts?.title || stripTokensToLabels(input).slice(0, 40) || input.slice(0, 40), workspace, opts.workerId)
     return taskId
   },
 
