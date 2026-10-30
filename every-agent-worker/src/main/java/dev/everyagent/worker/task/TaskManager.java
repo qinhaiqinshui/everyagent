@@ -461,8 +461,11 @@ public class TaskManager implements TaskInputHandler, InteractionServiceImpl.Sta
         // 空批(未过滤口径)则不提供 nextSeq:前端据此判定「无更多」而非被 "0" 误导。
         ObjectNode result = Json.obj()
                 .put("hasMore", m.hasMore)
-                .put("firstSeq", m.events.isEmpty() ? 0 : m.events.get(0).seq())
-                .put("lastSeq", m.events.isEmpty() ? 0 : m.events.get(m.events.size() - 1).seq())
+                // firstSeq/lastSeq 一律字符串(空批 "0"):雪花大数以 JSON 数值下发在 JS 侧丢精度,
+                // 且 String(number) 会打印成非规范十进制(…176 → "…200")——不得作游标/比较键;
+                // 老消费方 asLong()/Number() 对字符串同样可解析,must-ignore 兼容(§7.13)。
+                .put("firstSeq", m.events.isEmpty() ? "0" : String.valueOf(m.events.get(0).seq()))
+                .put("lastSeq", m.events.isEmpty() ? "0" : String.valueOf(m.events.get(m.events.size() - 1).seq()))
                 .set("task", Json.obj().put("status", status))
                 .put("live", isLive);
         if (!rounds && !m.events.isEmpty()) {

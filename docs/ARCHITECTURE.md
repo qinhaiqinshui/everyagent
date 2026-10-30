@@ -583,7 +583,7 @@ wsl-bwrap 后端的 seccomp 内核级提权拦截已随 bwrap 后端删除而移
 - **窗口式背压(credit + ack)**:DataPusher 维护 `nextPushIndex`(每推一帧 +1)与 `ackedIndex`;`nextPushIndex - ackedIndex >= CREDIT_WINDOW(128)` 时**持续真阻塞**等待前端 ack——直到 ack / 连接断开 / 推送器销毁,无超时降级(全链端统一升级,无老前端兼容负担);每帧 ext 携带 `credit=true/creditIndex`;前端消费完一帧后经 worker 级 input 频道回 `stream.ack{taskId,creditIndex}`,worker 只路由释放窗口、不建推送器。多前端窗口独立,慢端不拖累快端。
 - **先订阅后首拉**:前端 `open()` 先 sub stream 再拉初始(rounds + roundTail),推送首扫与首拉重叠的部分前端按 seq 去重吸收。
 - **生命周期**:unsub/前端断连 → 销毁推送器;worker⇄hub 断链 → 清扫该连接推送器;任务再运行换新 EventLog → 换挂从头推;任务终态 → 收尾排水一次后空转。
-- **降级语义**:推送非阻塞,出站队列满丢帧 + WARN(事件日志是事实源);前端慢 → hub sink 溢出断连 → 重连 reconnect;漏帧由前端按需拉取补齐。
+- **降级语义**:推送非阻塞,出站队列满丢帧 + WARN(事件日志是事实源);前端慢 → hub sink 溢出断连 → 重连 reconnect;漏帧由前端**检测并按需拉取补齐**——每帧 `ext.creditIndex` 在推送器会话内从 0 严格递增且链路按序投递,前端按帧间**跳号**即可判定该区间帧被丢弃(出网过滤不占号:被过滤事件根本不进 `push()`,不产生 creditIndex);检出后以「缺口前一帧 seq → 缺口后首帧 seq」开区间发起 `task.poll` 区间补拉并按 seq 去重折入,否则丢帧将成为**会话期永久空洞**(上滚懒加载只向下覆盖、缓存检查按 items 连续性短路,都不会回访中段)。`creditIndex` **回退** = 新推送器会话(重连/visible 重订/任务再运行换挂,从 0 重新编号),前端重置基线不误报;误报方向(把新会话续号当跳号)只会触发一次幂等区间补拉,按 seq 去重吸收,无害。
 - **慢消费者三道防线**:① 真背压——窗口满即持续阻塞等待 ack,无超时降级;② `CREDIT_WINDOW(128)`——多任务同屏总积压 N×128 < hub 出口队列 1000;③ 前端 hidden 时对全部活跃 stream 频道主动 unsub 降载(hub 发 subscriber.leave → worker 销毁推送器,彻底不推),visible 时重 sub + 重拉校准——`visibilitychange` 只管订阅降载,不参与连接生死(连接生死唯一由心跳判定,§5.1)。
 
 **`task.poll { taskId, afterSeq?, beforeSeq?, limit?, mode?('events'|'rounds'), count?, waitMs? }`** 是任务流的**统一读取 RPC**:打开首拉、上滚分页、区间拉取、重连补齐、终局补拉、长轮询全部经它完成。
@@ -593,7 +593,7 @@ wsl-bwrap 后端的 seccomp 内核级提权拦截已随 bwrap 后端删除而移
 - `mode='events'`:按 afterSeq(增量)/beforeSeq(上滚)+ limit 精确窗口;afterSeq+beforeSeq 同给 = 开区间查询(前端展开轮次按 startSeq/endSeq 一次拉全一轮)。
 - `waitMs>0` 无增量时挂起虚拟线程等新事件(长轮询,与 askuser 同款底座)。
 - 回放只含持久事件(瞬态从未落盘):`message` 事件自带整轮 thinking + toolCalls,由它直接组装完成态。
-- **出网投影 + 分页游标(4 出网口之一)**:`task.poll`/`task.roundTail`/`task.rounds` 与 stream 推送一样,客户端可见形态经单点 `EgressProjector` 投影后下发(§5.3);`task.poll` 应答新增字符串字段 **`nextSeq`**——**未过滤口径**的推进游标(批尾原始 seq),供客户端分页推进,避免「过滤后空批 = 取完」的误判导致轮详情静默丢内容;`hasMore`/`firstSeq`/`lastSeq` 仍为 raw 语义。
+- **出网投影 + 分页游标(4 出网口之一)**:`task.poll`/`task.roundTail`/`task.rounds` 与 stream 推送一样,客户端可见形态经单点 `EgressProjector` 投影后下发(§5.3);`task.poll` 应答新增字符串字段 **`nextSeq`**——**未过滤口径**的推进游标(批尾原始 seq),供客户端分页推进,避免「过滤后空批 = 取完」的误判导致轮详情静默丢内容;`hasMore` 保持 raw 语义,`firstSeq`/`lastSeq` 同为 raw 口径且**一律字符串携带**(空批为 `"0"`)——雪花大数以 JSON 数值下发会在 JS 侧丢精度/打印成非规范十进制(如 `374476756863410176` → `"374476756863410200"`),不得再作游标或比较键。
 
 ### 7.14 子 Agent(进程内,模型工具)
 

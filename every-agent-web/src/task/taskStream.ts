@@ -208,6 +208,9 @@ class ManagedStream {
     this.view?.close()
     const view = new TaskPacketView(client, this.workerId, this.taskId)
     view.onEvent((event: TaskStreamEvent) => this.onEvent(event))
+    // 推送丢帧自愈(§7.13):creditIndex 跳号检出丢帧 → 区间补拉折叠补齐;不补拉则
+    // 丢帧是会话期永久空洞(上滚懒加载只向下覆盖,缓存检查按 items 连续性短路,不回访中段)。
+    view.onFramesLost((fromSeq, toSeq) => this.schedulePushReconcile(fromSeq, toSeq))
     this.view = view
     this.boundClient = client
     this.boundWorkerId = this.workerId
@@ -502,6 +505,81 @@ class ManagedStream {
       if (this.folder.ledger.seedAgents(res.agents, res.mainAgentId)) this.notify()
     } catch (error) {
       console.warn(`[taskStream] 拉取子 agent 台账失败(${this.taskId}):`, error)
+    }
+  }
+
+  // ---- 推送丢帧补拉(§7.13 降级语义的自愈半边) ----
+
+  /** 待补拉缺口下界(合并多缺口取最小;null=无待处理)。 */
+  private reconcileFrom: string | null = null
+  /** 待补拉缺口上界(合并多缺口取最大)。 */
+  private reconcileTo: string | null = null
+  /** 补拉进行中(单飞;期间新到的缺口并入待处理窗口,完成后续拉)。 */
+  private reconciling = false
+
+  /**
+   * 登记一个推送丢帧缺口(view.onFramesLost 回调):合并进待处理窗口
+   * (下界取最小、上界取最大)后触发单飞补拉。合并的意义:丢帧常成簇
+   * (出站队列溢出窗口),逐缺口补拉会放大 RPC 次数。
+   */
+  private schedulePushReconcile(fromSeq: number | string, toSeq: number | string): void {
+    const from = String(fromSeq)
+    const to = String(toSeq)
+    if (cmpSeq(from, to) >= 0) return // 防御:缺口两端 seq 非递增(理论不出现)
+    this.reconcileFrom = this.reconcileFrom == null || cmpSeq(from, this.reconcileFrom) < 0
+      ? from : this.reconcileFrom
+    this.reconcileTo = this.reconcileTo == null || cmpSeq(to, this.reconcileTo) > 0
+      ? to : this.reconcileTo
+    void this.flushPushReconcile()
+  }
+
+  /**
+   * 执行缺口补拉:task.poll 区间查询 (from, to) 分页拉全(view.loadForwardPage 无副作用,
+   * 不动推送游标),事件经 foldWireEvent 折入(与懒加载同口径,按 seq 去重幂等——已收到
+   * 的两端与重复补拉天然吸收)。补回的 message 是权威整轮,直接覆盖缺口处的流式残段。
+   * 失败仅 warn:不重排死循环——后续丢帧会再次触发;断连场景由 resync 全量校准兜底。
+   */
+  private async flushPushReconcile(): Promise<void> {
+    if (this.reconciling) return
+    const view = this.view
+    if (!view) {
+      this.reconcileFrom = null
+      this.reconcileTo = null
+      return
+    }
+    const from = this.reconcileFrom
+    const to = this.reconcileTo
+    if (from == null || to == null || cmpSeq(from, to) >= 0) {
+      this.reconcileFrom = null
+      this.reconcileTo = null
+      return
+    }
+    this.reconciling = true
+    this.reconcileFrom = null
+    this.reconcileTo = null
+    try {
+      let after = from
+      // hasMore 分页拼全缺口(单页 200;缺口通常远小于一页);游标不推进即退出防自旋。
+      for (let page = 0; page < 100; page++) {
+        const res = await view.loadForwardPage({ startSeq: from, endSeq: to, afterSeq: after })
+        for (const item of res.events) {
+          this.foldWireEvent(item)
+        }
+        if (!res.hasMore) break
+        const next = String(res.lastSeq)
+        if (cmpSeq(next, after) <= 0) break
+        after = next
+      }
+      console.warn(`[taskStream] 推送丢帧已补齐(${this.taskId}): 区间 (${from}, ${to})`)
+    } catch (error) {
+      console.warn(`[taskStream] 推送丢帧补拉失败(${this.taskId}) 区间 (${from}, ${to}):`, error)
+    } finally {
+      this.reconciling = false
+      this.notify()
+      // 补拉期间又登记了新缺口:立即续拉一轮。
+      if (this.reconcileFrom != null && this.reconcileTo != null) {
+        void this.flushPushReconcile()
+      }
     }
   }
 

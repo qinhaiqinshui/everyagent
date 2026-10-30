@@ -12,6 +12,13 @@
  * - 推送帧(stream 频道 msg):delta/thinking 走 operate=append,其余 replace;订阅时已在
  *   内存的回扫段标 ext.initial=true(历史回放语义,askStore 静默依赖)。折进缓冲并按形状
  *   增量回调 handler(形状同 TaskStreamEvent)。
+ * - 丢帧检测(§7.13 降级语义的自愈半边):每帧 ext.creditIndex 在推送器会话内从 0 严格
+ *   递增且链路按序投递,帧间跳号 = 该区间帧在 worker→hub/hub→前端链路被丢弃(出站队列
+ *   满丢帧等);检出即回调 onFramesLost(缺口前一帧 seq, 缺口后首帧 seq),由上层
+ *   (taskStream)发起 task.poll 区间补拉并折叠补齐——否则丢帧成为会话期永久空洞
+ *   (上滚懒加载只向下覆盖、缓存检查按 items 连续性短路,都不会回访中段)。
+ *   creditIndex 回退 = 新推送器会话(重连/visible 重订/任务再运行换挂,从 0 重新编号),
+ *   重置基线不误报;误报方向只会触发一次幂等补拉,按 seq 去重吸收,无害。
  * - resync():重连校准 = open()(hub-client 重连自动重发 sub → hub 发新 join → 新推送器,
  *   旧推送器经 hub 断线清理销毁);重建 view 后重新 open,仅重订阅。
  * - loadBefore(beforeSeq):上滚分页,向前拉取 seq < beforeSeq 的更早事件(prepend,
@@ -123,6 +130,16 @@ export class TaskPacketView {
   /** 批量 ack:待回报的最新 creditIndex(合并窗口内取大)。 */
   private pendingAckIndex: number | null = null
   private ackTimer: ReturnType<typeof setTimeout> | null = null
+  /**
+   * 丢帧检测基线:最近一帧的 creditIndex(推送器会话内从 0 严格递增;null=尚未建立,
+   * open()/close() 与 creditIndex 回退(新推送器会话)时重置)。与 ack 的
+   * pendingAckIndex 独立——ack 只报消费进度,这里做连续性对账。
+   */
+  private lastCreditIndex: number | null = null
+  /** 最近一帧携带 credit 时的 seq(丢帧区间补拉的下界)。 */
+  private lastCreditSeq: number | string | null = null
+  /** 推送丢帧回调(onFramesLost 注册;null=未注册,只检测不补拉)。 */
+  private framesLostHandler: ((fromSeq: number | string, toSeq: number | string) => void) | null = null
 
   constructor(
     private readonly client: HubClient,
@@ -138,6 +155,15 @@ export class TaskPacketView {
   }
 
   /**
+   * 注册推送丢帧回调(§7.13 降级语义):creditIndex 跳号检出丢帧时回调
+   * (fromSeq = 缺口前一帧 seq,toSeq = 缺口后首帧 seq),由上层发起 task.poll
+   * 区间补拉补齐。不注册则只检测不补拉(行为与旧版一致)。
+   */
+  onFramesLost(cb: (fromSeq: number | string, toSeq: number | string) => void): void {
+    this.framesLostHandler = cb
+  }
+
+  /**
    * 打开任务流:仅订阅 stream 频道(hub 发 subscriber.join → worker 建定向推送器,
    * 回扫内存日志尾段 + 实时推)收流式数据;初始数据加载(task.rounds + task.roundTail)
    * 由上层负责,本视图不发起任何 task.poll。
@@ -146,6 +172,9 @@ export class TaskPacketView {
   async open(): Promise<void> {
     this.closed = false
     this.generation++
+    // 新订阅 = 新推送器会话(creditIndex 从 0 重新编号):丢帧检测基线重置,防误报。
+    this.lastCreditIndex = null
+    this.lastCreditSeq = null
     this.subscribeStream()
   }
 
@@ -156,6 +185,8 @@ export class TaskPacketView {
     this.teardownStream()
     this.buffer.clear()
     this.lastSeq = null
+    this.lastCreditIndex = null
+    this.lastCreditSeq = null
     if (this.ackTimer) {
       clearTimeout(this.ackTimer)
       this.ackTimer = null
@@ -409,6 +440,12 @@ export class TaskPacketView {
     if (this.closed || !this.wired) return
     if (frame.channel !== this.streamCh) return
 
+    // 丢帧检测(§7.13):creditIndex 会话内严格递增且按序投递,帧间跳号 = 区间帧被丢弃。
+    // 出网过滤不占号(被过滤事件不进 push(),无 creditIndex),故跳号必为真实丢帧;
+    // 回退 = 新推送器会话(重连/visible 重订/再运行换挂),重置基线不误报。
+    // 放在 message.edited 等分支之前:编辑同步帧同样经 DataPusher 推送、占 credit 序号。
+    this.trackCreditContinuity(frame)
+
     // 消息编辑同步事件:截断本地缓冲(seq > editedSeq 的数据包全部移除),
     // 通知折叠器据此截断线程项(移除 editedSeq 处的旧 user.message
     
@@ -478,6 +515,45 @@ export class TaskPacketView {
         { taskId: this.taskId, creditIndex: idx },
       )
     }, ACK_BATCH_MS)
+  }
+
+  /**
+   * 推送丢帧对账(§7.13 降级语义的自愈半边):ext.creditIndex 由 WebSocketEmitter 在
+   * 推送器会话内严格递增分配(nextPushIndex++),hub 按连接顺序投递——正常应到的下一帧
+   * creditIndex 恒为「上一帧 + 1」;出现跳号 = 中间帧在 worker→hub/hub→前端链路被丢弃
+   * (出站队列满丢帧等)。被出网过滤的事件不经过 push()、不占号,跳号必为真实丢帧。
+   * 检出即回调 onFramesLost(缺口前一帧 seq, 缺口后首帧 seq)供上层区间补拉。
+   *
+   * <p>基线重置:open()/close() 显式清空;creditIndex < 已见最大值 = 新推送器会话
+   * (重连/visible 重订/任务再运行换挂,从 0 重新编号)——采用新会话编号不误报。
+   * 误报方向(把新会话续号当跳号)只会触发一次幂等区间补拉,按 seq 去重吸收,无害。
+   * seq 非递增帧(乱序/回放重叠,理论不出现)不触发补拉,只推进基线。
+   */
+  private trackCreditContinuity(frame: MsgFrame): void {
+    if (this.closed || !this.wired) return
+    const ext = (frame.ext ?? {}) as Record<string, unknown>
+    if (ext.credit !== true || typeof ext.creditIndex !== 'number') return
+    const seq = frame.seq
+    if (seq == null) return
+    const creditIndex = ext.creditIndex
+    if (this.lastCreditIndex != null) {
+      if (creditIndex < this.lastCreditIndex) {
+        // 回退:新推送器会话,重置基线(本帧即新会话基线)。
+        this.lastCreditIndex = creditIndex
+        this.lastCreditSeq = seq
+        return
+      }
+      if (creditIndex > this.lastCreditIndex + 1
+          && this.lastCreditSeq != null && compareSeq(seq, this.lastCreditSeq) > 0) {
+        // 跳号:区间 (lastCreditIndex, creditIndex) 的帧被丢弃 → 回调补拉缺口
+        // (fromSeq, toSeq) 两端均已收到,补拉按 seq 去重幂等。
+        this.framesLostHandler?.(this.lastCreditSeq, seq)
+      }
+    }
+    if (this.lastCreditIndex == null || creditIndex > this.lastCreditIndex) {
+      this.lastCreditIndex = creditIndex
+      this.lastCreditSeq = seq
+    }
   }
 
   /**
