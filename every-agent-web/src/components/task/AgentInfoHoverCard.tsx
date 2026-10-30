@@ -7,8 +7,8 @@
  * 定位:向上优先、空间不足向下、视口 8px margin 钳制,捕获阶段监听 scroll / resize
  * 实时贴合触发元素(胶囊或电池按钮)。
  * 内容:头部(状态圆点 + 短 ID + 标题;任务级汇总项为「全部 agent」+ 任务级汇总徽标)
- * 与明细行(agentId 等宽可折行 —— 汇总项不渲染该行、状态、创建时间、模型、累计 tokens
- * 入/出/合计、上下文用量 + 4px 进度条)。
+ * 与明细行(agentId 等宽可折行 —— 汇总项不渲染该行、状态、创建时间、更新时间、模型、
+ * 累计 tokens 入/出/合计、上下文用量 + 4px 进度条)。
  *
  * 触发方式由调用方决定:
  * - 胶囊场景:onMouseEnter/onMouseLeave 接入防抖关闭(openCard/scheduleClose)。
@@ -180,6 +180,10 @@ export function AgentInfoHoverCard({ item, anchorEl, onMouseEnter, onMouseLeave 
         <div className="nagent-agent-card__row">
           <dt>创建时间</dt>
           <dd>{meta?.createdAt != null ? new Date(meta.createdAt).toLocaleString() : '—'}</dd>
+        </div>
+        <div className="nagent-agent-card__row">
+          <dt>更新时间</dt>
+          <dd>{meta?.updatedAt != null ? new Date(meta.updatedAt).toLocaleString() : '—'}</dd>
         </div>
         <div className="nagent-agent-card__row">
           <dt>模型</dt>

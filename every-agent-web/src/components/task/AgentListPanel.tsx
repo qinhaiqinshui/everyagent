@@ -14,7 +14,7 @@
  * - 子 agent 胶囊底部 2px 上下文用量线(contextRatio,绿/黄/红按档位);父胶囊
  *   overflow:hidden + 圆角 999px 天然裁剪,100% 时线铺满下边框、两端收成贴合弧线。
  * - 悬停/聚焦胶囊弹出信息卡(AgentInfoHoverCard,portal 到 body):状态/标题/完整
- *   agentId/创建时间/模型/累计 tokens 与上下文用量(含 4px 进度条)。主 agent 同样
+ *   agentId/创建时间/更新时间/模型/累计 tokens 与上下文用量(含 4px 进度条)。主 agent 同样
  *   显示(数据源键 ''),标「主 agent」徽标、不渲染用量线。
  */
 import React from 'react'
