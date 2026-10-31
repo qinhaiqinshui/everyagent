@@ -8,6 +8,9 @@
 /** 文件选区引用胶囊的 kind；与后端 `SelectionReferenceToken.KIND` 逐字一致。 */
 export const SELECTION_KIND = 'file.selection'
 
+/** 文件资源管理器节点引用胶囊的 kind；与后端 `FileReferenceToken.KIND` 逐字一致。 */
+export const FILE_REFERENCE_KIND = 'file.reference'
+
 /** 右键「引用到AI对话框」时构造、随 opaque token 一起提交给 worker 的 payload 形状。 */
 export interface SelectionPayload {
   /** 所属工作区根（回切标签用，原样透传）。 */
@@ -71,4 +74,62 @@ export function readSelectionPayload(
   const rawStart = payload.startLine
   const startLine = typeof rawStart === 'number' && Number.isFinite(rawStart) ? rawStart : null
   return { workspaceRoot, filePath, startLine }
+}
+
+// ─── 文件资源管理器节点引用（file.reference） ────────────────────────────
+
+/** 资源管理器右键「引用到AI对话框」时构造的 payload 形状。 */
+export interface FileReferencePayload {
+  /** 所属工作区根（回切标签用，原样透传）。 */
+  workspaceRoot: string
+  /** 节点路径（工作区相对路径；目录节点也以此为准）。 */
+  path: string
+  /** 节点名称。 */
+  name: string
+  /** 节点类型：file 或 directory。 */
+  type: 'file' | 'directory'
+}
+
+/**
+ * 由资源管理器节点名称生成胶囊显示文字：取前 20 个字，超出加 `…`。
+ * 结果为空时兜底返回非空文案——`ctx.ui.appendComposerToken` 对空 label 会抛错。
+ */
+export function buildFileReferenceLabel(name: string, type: 'file' | 'directory'): string {
+  const trimmed = (name ?? '').trim()
+  if (trimmed.length === 0) {
+    return type === 'directory' ? '目录引用' : '文件引用'
+  }
+  const chars = Array.from(trimmed)
+  if (chars.length <= FILE_REFERENCE_LABEL_MAX_CHARS) {
+    return trimmed
+  }
+  return chars.slice(0, FILE_REFERENCE_LABEL_MAX_CHARS).join('') + '…'
+}
+
+/** 文件引用 label 最多取前 20 个字（文件名通常比选区文本短，允许更长）。 */
+const FILE_REFERENCE_LABEL_MAX_CHARS = 20
+
+/**
+ * 从胶囊 payload 中安全读取回跳所需字段。
+ *
+ * 缺 `workspaceRoot` / `path`（或非字符串 / 空串）→ 返回 null（调用方静默 no-op，不抛错）。
+ * 仅 file 类型回跳打开文件标签；directory 类型不做回跳（返回 path 但 isFile=false）。
+ */
+export function readFileReferencePayload(
+  payload: Record<string, unknown>,
+): { workspaceRoot: string; path: string; type: 'file' | 'directory' } | null {
+  if (!payload) {
+    return null
+  }
+  const workspaceRoot = payload.workspaceRoot
+  const path = payload.path
+  if (typeof workspaceRoot !== 'string' || workspaceRoot.length === 0) {
+    return null
+  }
+  if (typeof path !== 'string' || path.length === 0) {
+    return null
+  }
+  const rawType = payload.type
+  const type = rawType === 'file' || rawType === 'directory' ? rawType : 'file'
+  return { workspaceRoot, path, type }
 }
