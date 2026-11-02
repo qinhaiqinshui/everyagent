@@ -12,19 +12,18 @@
  *   - 禁 '@/...' 形式的宿主内部路径引用；
  *   - 产物必须是 web/index.js（webMain 只决定 hasWebMain，实际路径由宿主硬编码）。
  *
- * 本插件做四件事（全部经宿主通用扩展点，零菜单代码、零 DOM 操作、零 opaque 编码）：
+ * 本插件做三件事（全部经宿主通用扩展点，零菜单代码、零 DOM 操作、零 opaque 编码）：
  *   1) ui.editor_context_menu_actions → ctx.ui.registerEditorContextMenuAction()
  *      编辑器内容区右键「引用到AI对话框」：把选区经 ctx.ui.appendComposerToken 插入
  *      kind=file.selection 的胶囊（opaque token 编码由宿主单点负责）；打开草稿标签时
  *      带上 workspace 预设（= 选区所属文件的工作区根），新任务即挂靠该工作区
  *      （宿主 task 标签 createTab 的 `workspace` 参数 → 草稿预设，与任务页组「+」同范式）；
  *   2) ui.file_explorer_actions → ctx.ui.registerFileExplorerAction()
- *      资源管理器文件节点右键「引用到AI对话框」：把整个文件引用（无选区文本）
- *      经 ctx.ui.appendComposerToken 插入 kind=file.reference 的胶囊；
+ *      资源管理器文件节点右键「引用到AI对话框」：复用宿主 `@` 文件引用的
+ *      kind=system.workspace_file 生成等价胶囊（提交解析、胶囊点击打开文件均由宿主
+ *      核心内置，本插件零重复实现；仅文件节点显示，与 `@` 引用主用途一致）；
  *   3) ui.composer_chip_actions → ctx.ui.registerComposerChipAction()（file.selection）
- *      点击选区引用胶囊：切回原文件标签并定位选区起始行（经 ctx.ui.openFileTab）；
- *   4) ui.composer_chip_actions → ctx.ui.registerComposerChipAction()（file.reference）
- *      点击文件引用胶囊：打开该文件标签（经 ctx.ui.openFileTab）。
+ *      点击选区引用胶囊：切回原文件标签并定位选区起始行（经 ctx.ui.openFileTab）。
  */
 
 import type {
@@ -36,11 +35,10 @@ import type {
 } from '@everyagent/plugin-api'
 import {
   SELECTION_KIND,
-  FILE_REFERENCE_KIND,
+  WORKSPACE_FILE_KIND,
   buildSelectionLabel,
-  buildFileReferenceLabel,
+  buildWorkspaceFileTokenInput,
   readSelectionPayload,
-  readFileReferencePayload,
   type SelectionPayload,
 } from './token'
 
@@ -84,30 +82,31 @@ const selectionReferencePlugin: PluginModule = {
     }
     disposables.push(ctx.ui.registerEditorContextMenuAction(referenceAction))
 
-    // ② 文件资源管理器右键项：文件节点右键「引用到AI对话框」，把文件引用插入输入框草稿。
-    //    与选区引用不同，此处引用整个文件（无选区文本），胶囊 kind = file.reference。
+    // ② 资源管理器右键项：仅文件节点显示；点击把文件引用胶囊插入输入框草稿。
+    //    复用宿主 `@` 文件引用的 kind（system.workspace_file）生成完全等价的胶囊：
+    //    - 提交时宿主内置解析器把它还原为「 工作区相对路径 」明文交给 AI（不注入文件内容）；
+    //    - 点击胶囊时宿主核心注册的激活行为打开该文件标签（先注册者胜，插件无需也不应注册）。
+    //    payload 口径见 token.ts buildWorkspaceFileTokenInput（节点路径 → @ 引用三字段）。
     const fileExplorerAction: FileExplorerAction = {
       id: 'selection-reference.file-reference-to-ai',
       label: '引用到AI对话框',
       isVisible: (c) => c.type === 'file',
       invoke: (c) => {
+        const tokenInput = buildWorkspaceFileTokenInput(c.path, c.name)
         // 先打开新草稿任务标签页，再把文件引用胶囊写入该标签页草稿。
+        // workspace 预设 = 节点所属工作区根（与编辑器右键同范式，见 ① 内注释）。
         ctx.ui.openTab('task', { taskId: '__draft__', workspace: c.workspaceRoot }, '新任务')
         ctx.ui.appendComposerToken({
-          kind: FILE_REFERENCE_KIND,
-          label: buildFileReferenceLabel(c.name, c.type),
-          payload: {
-            workspaceRoot: c.workspaceRoot,
-            path: c.path,
-            name: c.name,
-            type: c.type,
-          },
+          kind: WORKSPACE_FILE_KIND,
+          label: tokenInput.label,
+          summary: tokenInput.summary,
+          payload: { ...tokenInput.payload },
         })
       },
     }
     disposables.push(ctx.ui.registerFileExplorerAction(fileExplorerAction))
 
-    // ③ 胶囊点击：切回该文件标签并定位选区起始行（仅 file 类型有回跳行为）。
+    // ③ 胶囊点击：切回该文件标签并定位选区起始行（仅 file.selection；@ 引用胶囊由宿主核心处理）。
     disposables.push(
       ctx.ui.registerComposerChipAction({
         kind: SELECTION_KIND,
@@ -120,24 +119,6 @@ const selectionReferencePlugin: PluginModule = {
           ctx.ui.openFileTab(p.workspaceRoot, p.filePath, {
             lineNumber: p.startLine ?? undefined,
           })
-        },
-      }),
-    )
-
-    // ④ 文件引用胶囊点击：打开该文件标签（仅 file 类型有回跳行为）。
-    disposables.push(
-      ctx.ui.registerComposerChipAction({
-        kind: FILE_REFERENCE_KIND,
-        pluginId: 'selection-reference',
-        onActivate: (c) => {
-          const p = readFileReferencePayload(c.token.payload)
-          if (!p) {
-            return // 缺字段 → 静默 no-op，不抛错
-          }
-          if (p.type === 'directory') {
-            return // 目录引用不支持回跳打开文件标签
-          }
-          ctx.ui.openFileTab(p.workspaceRoot, p.path)
         },
       }),
     )

@@ -17,13 +17,12 @@ import org.slf4j.LoggerFactory;
 /**
  * 选区引用 —— 后端插件入口类。
  *
- * <p>注册两个 {@code SlashTokenResolver}：
- * <ul>
- *   <li>{@code file.selection}（选区引用）：编辑器右键「引用到AI对话框」产生的胶囊，
- *       提交时展开为「文件名 + 路径 + 行号 + 选中原文」交给模型；</li>
- *   <li>{@code file.reference}（文件引用）：资源管理器节点右键「引用到AI对话框」产生的胶囊，
- *       提交时展开为「节点类型 + 节点名称 + 工作区相对路径」交给模型。</li>
- * </ul>
+ * <p>注册 {@code file.selection} 的 {@code SlashTokenResolver}：编辑器右键
+ * 「引用到AI对话框」产生的选区胶囊，提交时展开为
+ * 「文件名 + 路径 + 行号 + 选中原文」交给模型。
+ *
+ * <p>资源管理器右键的文件引用（`system.workspace_file`）复用宿主 `@` 引用的
+ * 内置提交解析器（前端 composerTokenRegistry），本插件后端不参与。
  *
  * <p>本类由 worker 以独立 {@code URLClassLoader} 加载（非 Spring 托管 bean），
  * 因此<b>禁用一切 Spring 注解</b>（@Component / @Autowired / @Resource 等都不生效）；
@@ -53,11 +52,8 @@ public class SelectionReferencePlugin implements EveryAgentPlugin {
 
         // 注册 Slash token 提交解析器（kind=file.selection）：用户提交含本 kind 胶囊的消息时，
         // 解析器把 payload 展开为「文件名 + 工作区相对路径 + 选中行号区间 + 完整选中原文」交给模型。
+        // （资源管理器右键的文件引用复用宿主 @ 引用的 system.workspace_file 内置解析器，无后端参与。）
         ctx.registerSlashTokenResolver(new SelectionSlashResolver());
-
-        // 注册 Slash token 提交解析器（kind=file.reference）：资源管理器节点右键引用整个文件时，
-        // 解析器把 payload 展开为「节点类型 + 节点名称 + 工作区相对路径」交给模型。
-        ctx.registerSlashTokenResolver(new FileReferenceSlashResolver());
 
         // ══════════ ctx.register* 全量目录（16 个）══════════
         //

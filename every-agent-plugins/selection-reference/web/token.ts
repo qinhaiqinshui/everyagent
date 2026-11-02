@@ -8,8 +8,14 @@
 /** 文件选区引用胶囊的 kind；与后端 `SelectionReferenceToken.KIND` 逐字一致。 */
 export const SELECTION_KIND = 'file.selection'
 
-/** 文件资源管理器节点引用胶囊的 kind；与后端 `FileReferenceToken.KIND` 逐字一致。 */
-export const FILE_REFERENCE_KIND = 'file.reference'
+/**
+ * 宿主 `@` 文件引用胶囊的 kind（`system.workspace_file`）。
+ *
+ * 资源管理器右键「引用到AI对话框」复用该 kind 生成与 `@` 引用完全等价的胶囊：
+ * 提交解析（还原为「 工作区相对路径 」明文）由宿主前端 composerTokenRegistry 内置，
+ * 胶囊点击（打开文件标签）由宿主 coreComposerChipActions 内置——本插件均无需注册。
+ */
+export const WORKSPACE_FILE_KIND = 'system.workspace_file'
 
 /** 右键「引用到AI对话框」时构造、随 opaque token 一起提交给 worker 的 payload 形状。 */
 export interface SelectionPayload {
@@ -76,60 +82,62 @@ export function readSelectionPayload(
   return { workspaceRoot, filePath, startLine }
 }
 
-// ─── 文件资源管理器节点引用（file.reference） ────────────────────────────
+// ─── 文件资源管理器节点引用（复用宿主 @ 引用 kind） ────────────────────────
 
-/** 资源管理器右键「引用到AI对话框」时构造的 payload 形状。 */
-export interface FileReferencePayload {
-  /** 所属工作区根（回切标签用，原样透传）。 */
-  workspaceRoot: string
-  /** 节点路径（工作区相对路径；目录节点也以此为准）。 */
+/** 宿主 `@` 文件引用 token 的 payload 形状（见宿主 workspaceFileToken.ts）。 */
+export interface WorkspaceFileTokenPayload {
+  /** 工作区内相对路径（无前导 `/`，交给 AI 的引用形式）。 */
   path: string
-  /** 节点名称。 */
-  name: string
-  /** 节点类型：file 或 directory。 */
-  type: 'file' | 'directory'
+  /** 文件名（相对路径最后一段）。 */
+  fileName: string
+  /** 完整业务路径（带前导 `/`，仅用于展示与点击打开）。 */
+  fullPath: string
 }
 
 /**
- * 由资源管理器节点名称生成胶囊显示文字：取前 20 个字，超出加 `…`。
- * 结果为空时兜底返回非空文案——`ctx.ui.appendComposerToken` 对空 label 会抛错。
- */
-export function buildFileReferenceLabel(name: string, type: 'file' | 'directory'): string {
-  const trimmed = (name ?? '').trim()
-  if (trimmed.length === 0) {
-    return type === 'directory' ? '目录引用' : '文件引用'
-  }
-  const chars = Array.from(trimmed)
-  if (chars.length <= FILE_REFERENCE_LABEL_MAX_CHARS) {
-    return trimmed
-  }
-  return chars.slice(0, FILE_REFERENCE_LABEL_MAX_CHARS).join('') + '…'
-}
-
-/** 文件引用 label 最多取前 20 个字（文件名通常比选区文本短，允许更长）。 */
-const FILE_REFERENCE_LABEL_MAX_CHARS = 20
-
-/**
- * 从胶囊 payload 中安全读取回跳所需字段。
+ * 由资源管理器节点上下文构造 `@` 文件引用胶囊的 payload 与展示字段。
  *
- * 缺 `workspaceRoot` / `path`（或非字符串 / 空串）→ 返回 null（调用方静默 no-op，不抛错）。
- * 仅 file 类型回跳打开文件标签；directory 类型不做回跳（返回 path 但 isFile=false）。
+ * `FileExplorerActionContext.path` 是带前导 `/` 的业务绝对路径（如 `/src/Foo.java`），
+ * 与 `@` 引用 payload 的口径转换：
+ * - `fullPath` = 节点路径原样（已是业务绝对形式）；
+ * - `path` = 去前导 `/` 的工作区相对路径（交给 AI）；
+ * - `label` = 节点名（胶囊展示，与 `@` 引用一致）。
+ *
+ * 归一化不依赖宿主 pathUtils：反斜杠归一、压重复分隔符、去首尾分隔符。
  */
-export function readFileReferencePayload(
-  payload: Record<string, unknown>,
-): { workspaceRoot: string; path: string; type: 'file' | 'directory' } | null {
-  if (!payload) {
-    return null
+export function buildWorkspaceFileTokenInput(nodePath: string, nodeName: string): {
+  label: string
+  summary: string
+  payload: WorkspaceFileTokenPayload
+} {
+  const fullPath = toBusinessPath(nodePath)
+  const rel = toWorkspaceRelativePath(nodePath)
+  return {
+    label: nodeName || rel.split('/').pop() || '文件',
+    summary: fullPath,
+    payload: {
+      path: rel,
+      fileName: nodeName || rel.split('/').pop() || '',
+      fullPath,
+    },
   }
-  const workspaceRoot = payload.workspaceRoot
-  const path = payload.path
-  if (typeof workspaceRoot !== 'string' || workspaceRoot.length === 0) {
-    return null
-  }
-  if (typeof path !== 'string' || path.length === 0) {
-    return null
-  }
-  const rawType = payload.type
-  const type = rawType === 'file' || rawType === 'directory' ? rawType : 'file'
-  return { workspaceRoot, path, type }
+}
+
+/** 归一化为业务绝对路径：反斜杠归一、压重复分隔符、补单个前导 `/`。 */
+function toBusinessPath(value: string): string {
+  const rel = toWorkspaceRelativePath(value)
+  return rel ? `/${rel}` : '/'
+}
+
+/**
+ * 归一化为工作区相对路径：反斜杠归一、去重复分隔符、去首尾分隔符。
+ * （对齐宿主 normalizeWorkspaceRelativePath 的输出形态，插件内自实现以免依赖宿主内部路径。）
+ */
+function toWorkspaceRelativePath(value: string): string {
+  return (value ?? '')
+    .replace(/\\/g, '/')
+    .replace(/\/+/g, '/')
+    .split('/')
+    .filter(Boolean)
+    .join('/')
 }
