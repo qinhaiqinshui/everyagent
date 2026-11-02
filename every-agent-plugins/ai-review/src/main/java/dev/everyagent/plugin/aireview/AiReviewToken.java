@@ -54,23 +54,17 @@ public final class AiReviewToken {
     /**
      * 扫描文本命中 {@code ai.review} token 时返回其 {@code enabled} 值;
      * 未命中(无 token / 非本 kind / 解析失败)返回 {@code null}。
+     * 段扫描走 {@link SlashTokenEncoder#scanTokens}(深度平衡配对,嵌套 token 整体成段)。
      */
     public static Boolean enabledOf(String text) {
         if (text == null || text.isEmpty()) {
             return null;
         }
-        int idx = text.indexOf(SlashTokenEncoder.OPAQUE_PREFIX);
-        while (idx >= 0) {
-            int end = text.indexOf(SlashTokenEncoder.OPAQUE_SUFFIX, idx);
-            if (end < 0) {
-                break;
-            }
-            String opaque = text.substring(idx, end + SlashTokenEncoder.OPAQUE_SUFFIX.length());
+        for (String opaque : SlashTokenEncoder.scanTokens(text)) {
             SlashTokenEncoder.ParsedToken parsed = SlashTokenEncoder.parseToken(opaque);
             if (parsed != null && KIND.equals(parsed.kind())) {
                 return parsed.payload().path("enabled").asBoolean(false);
             }
-            idx = text.indexOf(SlashTokenEncoder.OPAQUE_PREFIX, end);
         }
         return null;
     }

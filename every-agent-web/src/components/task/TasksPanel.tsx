@@ -19,6 +19,8 @@ import ConfirmDialog from '@/components/shared/ConfirmDialog'
 import PropertiesDialog from '@/components/shared/PropertiesDialog'
 import { buildWorkspacePropertyItems, getWorkspaceDisplayName } from '@/components/shared/workspacePropertyUtils'
 import { Checkbox } from 'antd'
+import TokenRichText from '@/composerToken/TokenRichText'
+import { stripTokensToLabels } from '@/composerToken/composerOpaqueToken'
 
 const runtimeService = getDefaultRuntimeService()
 
@@ -369,7 +371,7 @@ export default function TasksPanel({
   const handleOpenTask = React.useCallback((task: TaskListItemSnapshot) => {
     onSelect({
       taskId: task.taskId,
-      displayTitle: task.displayTitle,
+      displayTitle: stripTokensToLabels(task.displayTitle),
     })
   }, [onSelect])
 
@@ -418,6 +420,21 @@ export default function TasksPanel({
       }
     },
   })
+
+  /**
+   * 任务标题胶囊渲染:把 rawContent(含 opaque token 串,嵌套整体成段)交给公共组件
+   * TokenRichText 渲染(与用户消息视图/插件弹窗同一套渲染逻辑);singleLine 单行
+   * 截断(含嵌套胶囊逐层压回单行),侧边栏拉宽时可见更多内容;胶囊不可交互
+   * (点击语义归任务行打开)。
+   */
+  const renderTaskTitle = (task: TaskListItemSnapshot) => (
+    <TokenRichText
+      text={task.displayTitle}
+      className="nagent-task-title-replay"
+      singleLine
+      interactive={false}
+    />
+  )
 
   const renderTaskCard = (task: TaskListItemSnapshot, groupKey: string) => {
     // 高亮只跟随父级当前任务，避免本地状态滞后造成旧任务残留边框。
@@ -473,7 +490,7 @@ export default function TasksPanel({
             size="sm"
             onClick={() => onSelect({
               taskId: task.taskId,
-              displayTitle: task.displayTitle,
+              displayTitle: stripTokensToLabels(task.displayTitle),
             })}
           >
             打开
@@ -481,8 +498,8 @@ export default function TasksPanel({
         </div>
       ) : null}
       <div style={taskCardHeaderStyle}>
-        <div style={taskTitleStyle} title={task.displayTitle}>
-          {task.displayTitle}
+        <div style={taskTitleStyle} title={stripTokensToLabels(task.displayTitle)}>
+          {renderTaskTitle(task)}
         </div>
         {!batchActive ? (
           <span style={{ marginLeft: 'auto' }}>
@@ -730,7 +747,7 @@ export default function TasksPanel({
       <ConfirmDialog
         open={Boolean(singleDeleteTarget)}
         title="删除任务"
-        message={`确定要删除任务「${singleDeleteTarget?.displayTitle ?? ''}」吗？该操作不可恢复。`}
+        message={`确定要删除任务「${stripTokensToLabels(singleDeleteTarget?.displayTitle ?? '')}」吗？该操作不可恢复。`}
         confirmLabel={deleting ? '删除中...' : '删除'}
         danger
         onConfirm={async () => {

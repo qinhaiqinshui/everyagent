@@ -33,13 +33,14 @@ export interface AgentMetaSnapshot {
   inputTokens?: number      // 累计
   outputTokens?: number
   totalTokens?: number      // 累计
+  cacheHitTokens?: number   // 累计缓存命中 tokens
   contextUsed?: number      // 最近一轮 prompt tokens
   contextWindow?: number
   updatedAt?: number
 }
 
-/** worker Usage DTO:{inputTokens,outputTokens,totalTokens}(零值视为缺失)。 */
-export function readUsage(value: unknown): { inputTokens: number; outputTokens: number; totalTokens: number } | null {
+/** worker Usage DTO:{inputTokens,outputTokens,totalTokens,cacheReadTokens}(零值视为缺失)。 */
+export function readUsage(value: unknown): { inputTokens: number; outputTokens: number; totalTokens: number; cacheHitTokens: number } | null {
   if (!value || typeof value !== 'object') {
     return null
   }
@@ -47,10 +48,11 @@ export function readUsage(value: unknown): { inputTokens: number; outputTokens: 
   const inputTokens = typeof v.inputTokens === 'number' ? v.inputTokens : 0
   const outputTokens = typeof v.outputTokens === 'number' ? v.outputTokens : 0
   const totalTokens = typeof v.totalTokens === 'number' ? v.totalTokens : inputTokens + outputTokens
+  const cacheHitTokens = typeof v.cacheReadTokens === 'number' ? v.cacheReadTokens : 0
   if (inputTokens <= 0 && outputTokens <= 0) {
     return null
   }
-  return { inputTokens, outputTokens, totalTokens }
+  return { inputTokens, outputTokens, totalTokens, cacheHitTokens }
 }
 
 /**
@@ -141,6 +143,7 @@ export class AgentLedger {
       inputTokens: patch.inputTokens ?? prev?.inputTokens,
       outputTokens: patch.outputTokens ?? prev?.outputTokens,
       totalTokens: patch.totalTokens ?? prev?.totalTokens,
+      cacheHitTokens: patch.cacheHitTokens ?? prev?.cacheHitTokens,
       contextUsed: patch.contextUsed ?? prev?.contextUsed,
       contextWindow: patch.contextWindow ?? prev?.contextWindow,
       updatedAt: prev?.updatedAt != null && patch.updatedAt != null
@@ -196,6 +199,7 @@ export class AgentLedger {
         inputTokens: usage?.inputTokens,
         outputTokens: usage?.outputTokens,
         totalTokens: usage?.totalTokens,
+        cacheHitTokens: usage?.cacheHitTokens,
         contextUsed: typeof context?.inputTokens === 'number' ? context.inputTokens : undefined,
         contextWindow: typeof context?.contextWindowTokens === 'number' ? context.contextWindowTokens : undefined,
         model: context && typeof context.model === 'string' && context.model.length > 0 ? context.model : undefined,
@@ -218,6 +222,7 @@ function sameAgentMeta(a: AgentMetaSnapshot | undefined, b: AgentMetaSnapshot): 
     && a.inputTokens === b.inputTokens
     && a.outputTokens === b.outputTokens
     && a.totalTokens === b.totalTokens
+    && a.cacheHitTokens === b.cacheHitTokens
     && a.contextUsed === b.contextUsed
     && a.contextWindow === b.contextWindow
     && a.updatedAt === b.updatedAt

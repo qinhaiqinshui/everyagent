@@ -12,6 +12,7 @@
 
 import React from 'react'
 import { taskStore } from '@/task/taskStore'
+import { stripTokensToLabels } from '@/composerToken/composerOpaqueToken'
 import TaskStatusDot from '@/components/task/TaskStatusDot'
 
 /**
@@ -40,7 +41,7 @@ export default function TaskChatTabLabel({
   return (
     <span className="launcher-tab-label">
       <TaskStatusDot status={entry.status} size={13} />
-      <span className="launcher-tab-label__title">{entry.title}</span>
+      <span className="launcher-tab-label__title">{stripTokensToLabels(entry.title)}</span>
     </span>
   )
 }

@@ -27,8 +27,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * 只落盘、不推前端;换挂新日志时游标归零从头推,前端按 seq 去重,重复无害。
  *
  * <p>定向与降级:用来源连接 pub,ext.target=sessionId 让 hub 只投递给该前端会话(天然定向
- * 到该 hub);pub 非阻塞,出站队列满即丢帧(事件日志是事实源,前端 3s 兜底轮询/重连 resync
- * 自愈)。前端 unsub/断线(leave)时销毁。
+ * 到该 hub);pub 非阻塞,出站队列满即丢帧(事件日志是事实源)。丢帧自愈 = 前端按
+ * ext.creditIndex 跳号检测丢帧并经 task.poll 区间补拉(§7.13 降级语义),另有重连/visible
+ * 重订触发的 resync 全量校准兜底。前端 unsub/断线(leave)时销毁。
  */
 public class DataPusher implements EventLogReader.Listener {
 

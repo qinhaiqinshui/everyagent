@@ -33,7 +33,7 @@ class RerunRestoreNodeTest {
         if (window > 0) {
             data.put("contextWindowTokens", window);
         }
-        data.set("round", Json.toJson(new Usage(in, out, in + out)));
+        data.set("round", Json.toJson(new Usage(in, out, in + out, 0)));
         t.events.emit(EmitEvent.of(SnowflakeId.next(), Events.USAGE, agentId,
                 null, null, null, null, data, EmitEvent.Mode.REPLACE));
     }

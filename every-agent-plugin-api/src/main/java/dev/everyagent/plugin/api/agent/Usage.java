@@ -6,15 +6,17 @@ package dev.everyagent.plugin.api.agent;
  * <p>与 worker 的 {@code TaskDtos.Usage} 结构一致,供 {@link AgentContext#usage()} 返回。
  * 不可变记录,通过 {@link #plus(Usage)} 累加。
  */
-public record Usage(long inputTokens, long outputTokens, long totalTokens) {
+public record Usage(long inputTokens, long outputTokens, long totalTokens,
+        long cacheReadTokens) {
 
     public static Usage zero() {
-        return new Usage(0, 0, 0);
+        return new Usage(0, 0, 0, 0);
     }
 
     public Usage plus(Usage other) {
         return new Usage(inputTokens + other.inputTokens,
                 outputTokens + other.outputTokens,
-                totalTokens + other.totalTokens);
+                totalTokens + other.totalTokens,
+                cacheReadTokens + other.cacheReadTokens);
     }
 }

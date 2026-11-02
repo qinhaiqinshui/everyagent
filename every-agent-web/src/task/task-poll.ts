@@ -31,6 +31,11 @@ export interface TaskPollEvent {
 /** task.poll 最终 rpc.ok 的 result。 */
 export interface TaskPollResult {
   hasMore: boolean;
+  /**
+   * 批次首/末事件的原始 seq(raw 口径;空批为 "0")。wire 上**一律字符串**——雪花 ID 超
+   * 2^53,JSON 数值在 JS 丢精度且 String(number) 打印非规范十进制(…176 → "…200"),
+   * 不得作游标或比较键;分页游标用 nextSeq。number 仅为兼容旧后端保留。
+   */
   firstSeq: number | string;
   lastSeq: number | string;
   /**
@@ -88,7 +93,7 @@ export interface TaskAgentLedgerItem {
   /** 最近一次 AI 返回的活动快照。 */
   latestActivity?: { reasoning?: string; content?: string; error?: string; createdAt?: number; updatedAt?: number } | null;
   /** 累计用量。 */
-  usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number } | null;
+  usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number; cacheHitTokens?: number } | null;
   lastText?: string;
   /** 最近一轮上下文快照。 */
   context?: { inputTokens?: number; contextWindowTokens?: number; model?: string } | null;

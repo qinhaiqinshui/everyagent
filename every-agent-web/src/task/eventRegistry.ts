@@ -191,6 +191,7 @@ registerEventKind('usage', {
       inputTokens: total?.inputTokens,
       outputTokens: total?.outputTokens,
       totalTokens: total?.totalTokens,
+      cacheHitTokens: total?.cacheHitTokens,
       updatedAt: ts,
     })
     return true
@@ -231,6 +232,7 @@ registerEventKind('agent.done', {
       inputTokens: doneUsage?.inputTokens,
       outputTokens: doneUsage?.outputTokens,
       totalTokens: doneUsage?.totalTokens,
+      cacheHitTokens: doneUsage?.cacheHitTokens,
       updatedAt: ts,
     })
     return true

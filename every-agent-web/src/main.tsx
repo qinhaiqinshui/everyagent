@@ -33,6 +33,7 @@ import { workspaceRegistry } from './hub/workspaceRegistry'
 import { modelConfigs } from './hub/modelConfigs'
 import { userPreferences } from './settings/userPreferences'
 import { registerRemoteSlashProvider } from './slash/remoteSlashProvider'
+import { registerPluginSlashProvider } from './slash/pluginSlashProvider'
 import { applyDesktopBootstrapIfPresent, isDesktop } from '@/platform/desktopBootstrap'
 import { hubSession } from './hub/session'
 import { setNotificationAdapter } from '@/notification'
@@ -79,6 +80,8 @@ userPreferences.wire()
 
 // `/` 斜杠命令数据源下沉 worker(slash.list RPC,动态注册)。
 registerRemoteSlashProvider()
+// `/` 插件数据源(ui.slash_command_providers 扩展点本地桥接;无插件注册时零条目)。
+registerPluginSlashProvider()
 
 // Web 插件启动：worker 连接就绪后从 worker 拉取已激活插件清单并动态加载。
 // onReconnect 在每次 worker 连接（含重连）时触发，loadPlugins 幂等（重复调用安全）。

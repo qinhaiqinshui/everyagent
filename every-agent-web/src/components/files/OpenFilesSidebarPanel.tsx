@@ -13,6 +13,7 @@ import {
 } from '@/query/workspaceExplorerTreeUtils'
 import { workspaceRegistry, type WorkspaceEntry } from '@/hub/workspaceRegistry'
 import { antdConfirm } from '@/utils/appAntdBridge'
+import { copyText } from '@/utils/clipboard'
 import { normalizeWorkspaceRelativePath, toBusinessAbsolutePath } from '@/platform/fs/pathUtils'
 import { workspaceGateway } from '@/platform/fs/workspaceGateway'
 import { workspaceExplorerCommandService } from '@/services/workspaceExplorerCommandService'
@@ -28,7 +29,7 @@ import ConfirmDialog from '../shared/ConfirmDialog'
 import PropertiesDialog, { type PropertyItem } from '../shared/PropertiesDialog'
 import { buildWorkspacePropertyItems, getWorkspaceDisplayName } from '../shared/workspacePropertyUtils'
 import MoreActionsButton, { type MoreActionItem } from '../shared/MoreActionsButton'
-import { DownloadIcon, FilePlusIcon, FileTextIcon, FolderArrowOutIcon, FolderPlusIcon, MagnifierCheckIcon, UploadIcon, ChevronDownIcon, TerminalIcon } from '../shared/AppGlyphs'
+import { CopyIcon, DownloadIcon, FilePlusIcon, FileTextIcon, FolderArrowOutIcon, FolderPlusIcon, MagnifierCheckIcon, UploadIcon, ChevronDownIcon, TerminalIcon } from '../shared/AppGlyphs'
 import SidebarScrollArea from '../shared/SidebarScrollArea'
 import WorkspaceExplorerTree from './WorkspaceExplorerTree'
 import WorkspacePathPicker from '@/components/shared/ui/WorkspacePathPicker'
@@ -995,6 +996,25 @@ function WorkspaceGroupPanel({
       icon: <FolderArrowOutIcon size={13} />,
       onSelect: () => handleRequestRevealInOs(resolveActionTarget(target)),
     })
+    items.push({
+      key: 'copy-relative-path',
+      label: '复制相对路径',
+      icon: <CopyIcon size={13} />,
+      onSelect: () => {
+        const relPath = normalizeWorkspaceRelativePath(resolveActionTarget(target).path)
+        void copyText(relPath).then(() => showToast('已复制相对路径', 'success'))
+      },
+    })
+    items.push({
+      key: 'copy-absolute-path',
+      label: '复制绝对路径',
+      icon: <CopyIcon size={13} />,
+      onSelect: () => {
+        const actionTarget = resolveActionTarget(target)
+        const absPath = joinWorkspaceDiskPath(actionTarget.workspaceRoot, actionTarget.path)
+        void copyText(absPath).then(() => showToast('已复制绝对路径', 'success'))
+      },
+    })
     // 插件注册的文件树右键动作(ui.file_explorer_actions 扩展点):
     // 按 isVisible 过滤后追加到内置菜单项尾部(与 FileExplorerAction 类型注释的约定一致)。
     // 插件动作不支持多节点:上下文取选中集合的第一个节点;无注册动作时不解析,避免逐行建树查找。
@@ -1017,8 +1037,8 @@ function WorkspaceGroupPanel({
         })
       }
     }
-   return items
-  }, [handleBatchDownload, handleOpenFile, handleRequestBatchMove, handleRequestCreate, handleRequestDownload, handleRequestMove, handleRequestOpenTerminal, handleRequestProperties, handleRequestRenameTarget, handleRequestRevealInOs, handleRequestSearch, handleRequestUpload, resolveActionTarget])
+  return items
+  }, [handleBatchDownload, handleOpenFile, handleRequestBatchMove, handleRequestCreate, handleRequestDownload, handleRequestMove, handleRequestOpenTerminal, handleRequestProperties, handleRequestRenameTarget, handleRequestRevealInOs, handleRequestSearch, handleRequestUpload, resolveActionTarget, showToast])
 
   const rootMoreActionItems = React.useMemo<MoreActionItem[]>(() => [
     {

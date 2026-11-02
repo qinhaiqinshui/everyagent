@@ -84,7 +84,14 @@ class WorkerHubE2eTest {
     // 静态块先于测试上下文加载(含 @DynamicPropertySource 解析),保证 worker 首次连接即指向真实 hub。
     // hub 是 WebFlux 应用,worker 测试类 classpath 同时有 servlet 依赖会被推导成 SERVLET,
     // 必须显式 REACTIVE 才能走 Netty + reactive 路由(/ws);端口取 WebServer 实际绑定值。
+    // 另:classpath application.yml 的 spring.config.import(optional:file:${worker.home-dir}/
+    // application-worker.yaml)在 ConfigData 阶段解析占位符,早于 @DynamicPropertySource 注入——
+    // 仅靠 props() 设 home-dir 拦不住 import 吸入开发机真实 ~/.everyagent/application-worker.yaml
+    //(真实 worker.models/hubs 污染测试 context;hubs 污染曾致 E2E 池多出一条真实远程 hub 连接,
+    // 2026-10)。系统属性优先级高于一切 ConfigData,静态块又先于 context 创建,双条件确保
+    // import 指向本测试的隔离系统目录(内无该文件 → optional 静默跳过,测试与开发机配置彻底隔离)。
     static {
+        System.setProperty("worker.home-dir", HOME_DIR.toString());
         hubApp = new SpringApplicationBuilder(HubApplication.class)
                 .web(WebApplicationType.REACTIVE)
                 .run("--server.port=0", "--hub.hub-key=" + HUB_KEY);
@@ -99,6 +106,9 @@ class WorkerHubE2eTest {
             hubApp.close();
         }
         TestCleanup.deleteAll();
+        // 回收静态块的系统属性副作用:surefire 同 JVM 串行执行多个测试类,
+        // worker.home-dir 残留会把后续测试类的系统目录(含 ConfigStore 落盘)指向本类已清理的临时目录
+        System.clearProperty("worker.home-dir");
     }
 
     @TestConfiguration(proxyBeanMethods = false)
@@ -130,6 +140,15 @@ class WorkerHubE2eTest {
         // 系统目录每次运行唯一:models.json 不落真实用户主目录,持久化工作区选择也不跨运行串状态
         r.add("worker.home-dir", () -> HOME_DIR.toString());
         r.add("worker.workspace-root", () -> "target/test-ws-e2e");
+        // 测试自带默认模型条目:系统属性已把 spring.config.import 指向隔离目录(见静态块),
+        // 真实用户文件的 worker.models 不再被吸入——此前 E2E 隐性依赖开发机 ~/.everyagent/
+        // application-worker.yaml 的模型配置(无该文件的机器上必挂);ChatModelFactory 已被
+        // 上方 Cfg 打桩,此处条目仅供 ConfigStore 解析默认模型(config.get / task.run 需要)。
+        r.add("worker.models[0].config-id", () -> "e2e-model");
+        r.add("worker.models[0].provider", () -> "openai");
+        r.add("worker.models[0].model", () -> "fake-model");
+        r.add("worker.models[0].api-key", () -> "test-key-e2e");
+        r.add("worker.models[0].is-default", () -> "true");
     }
 
     @Autowired

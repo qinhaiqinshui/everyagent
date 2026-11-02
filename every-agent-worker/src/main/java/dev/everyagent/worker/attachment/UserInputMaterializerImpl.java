@@ -19,9 +19,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.regex.Matcher;
-import java.util.regex.Pattern;
-
-/**
+import java.util.regex.Pattern;/**
  * {@link UserInputMaterializer} 默认实现（核心单一实现；轮次节点与「插入到当前对话」共用）。
  *
  * <p>解析 rawContent 中的文件引用 token → 按扩展名分发 {@link FileReferenceHandler} →
@@ -36,9 +34,6 @@ import java.util.regex.Pattern;
 public class UserInputMaterializerImpl implements UserInputMaterializer {
 
     private static final Logger log = LoggerFactory.getLogger(UserInputMaterializerImpl.class);
-
-    /** opaque token 边界（4 连符号定界，与 SlashTokenResolveAdvisor 一致）。 */
-    private static final Pattern TOKEN_RE = Pattern.compile("\\[\\[\\[\\[[\\s\\S]*?\\]\\]\\]\\]");
 
     private static final String KIND_WORKSPACE_FILE = "system.workspace_file";
     private static final String KIND_EXTERNAL_FILE = "system.external_file";
@@ -59,9 +54,9 @@ public class UserInputMaterializerImpl implements UserInputMaterializer {
         // 处理器 SPI 形参是 FileReferenceContext（与 ExecContext 成员集合相同的标记子类型，
         // 详见其类注释）——插件侧只面对 ExecContext，转换在核心这一处完成。
         FileReferenceContext refCtx = new FileReferenceView(exec);
-        Matcher matcher = TOKEN_RE.matcher(rawContent);
-        while (matcher.find()) {
-            String opaque = matcher.group();
+        // 段扫描走 SlashTokenEncoder.scanTokens（深度平衡配对，嵌套 token 整体成段，
+        // 不被内层 ]]]] 截断——原非贪婪正则在嵌套场景会错切）
+        for (String opaque : SlashTokenEncoder.scanTokens(rawContent)) {
             SlashTokenEncoder.ParsedToken token = SlashTokenEncoder.parseToken(opaque);
             if (token == null) {
                 continue;

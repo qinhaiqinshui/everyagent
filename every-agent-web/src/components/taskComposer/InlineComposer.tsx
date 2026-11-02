@@ -1,6 +1,6 @@
 import React from 'react'
 import type { ChatComposerToken } from '@/types'
-import { splitComposerRawContent, parseOpaqueTokenText } from '@/composerToken/composerOpaqueToken'
+import { splitComposerRawContent, parseOpaqueTokenText, stripTokensToLabels } from '@/composerToken/composerOpaqueToken'
 import { buildTokenForPastedFile } from '@/services/pastedFileService'
 import { createSnowflakeId } from '@/utils/snowflakeId'
 import { openSlashItemDetail } from './SlashItemDetailPopover'
@@ -42,6 +42,18 @@ const IME_DEBUG =
   typeof localStorage !== 'undefined' && localStorage.getItem('ime_debug') === '1'
 function dbg(...args: unknown[]): void {
   if (IME_DEBUG) console.log('[ime]', ...args)
+}
+
+// ── 文档级 IME composition 跟踪 ─────────────────────────────────────────────
+// composition 事件冒泡到 document，capture 阶段监听。
+// 当用户在其他元素（如 ask_user 的 <Input>）中输入中文时，InlineComposer 的
+// isComposingRef 不受影响；此全局标志覆盖文档中任何元素的 composition 状态，
+// 防止 setCaretAtOffset 的 root.focus() + sel.removeAllRanges() 打断外部合成
+// （focus 抢回 + 清除全局选区会终止 IME，光标被重置到 savedCaret 导致左移）。
+let globalComposing = false
+if (typeof document !== 'undefined') {
+  document.addEventListener('compositionstart', () => { globalComposing = true }, true)
+  document.addEventListener('compositionend', () => { globalComposing = false }, true)
 }
 /** 描述编辑器根节点的子节点结构（节点类型/文本内容）。 */
 function describeChildren(root: HTMLElement): string {
@@ -117,6 +129,15 @@ export interface InlineComposerProps {
 export interface InlineComposerHandle {
   /** 聚焦输入框。 */
   focus: () => void
+  /**
+   * 把光标设置到「序列化文本偏移」处（用于异步操作后恢复光标位置）。
+   *
+   * 背景：`await` 期间浏览器可能清除 contentEditable 选区（尤其远程 RPC 耗时较长时），
+   * 之后 `root.focus()` 只会把光标落到内容开头（offset 0），而非之前的位置。
+   * 宿主在 `await` 前用 `editorCaretRef` 保存偏移，`await` 后调用本方法恢复，
+   * 再执行 `insertOpaqueToken` / `insertText` 等操作。
+   */
+  setCaretAtOffset: (offset: number) => void
   /** 在光标处插入一个胶囊。 */
   insertToken: (token: ChatComposerToken, deleteBefore?: number) => void
   /** 在指定偏移处插入一个胶囊（交互面板回填用）。 */
@@ -170,9 +191,14 @@ function mapNonZwToActual(text: string, nonZwPos: number): number {
 
 /** 生成单个胶囊的 HTML 字符串（统一样式，无逐类图标/配色）。 */
 function chipHtml(token: ChatComposerToken): string {
-  const label = escapeHtml(token.label)
+  // 展示 label 拍平：label 内嵌 opaque 串（嵌套 token，如「等待任务」胶囊嵌目标
+  // 任务标题）时，contenteditable 胶囊内无法内联渲染嵌套胶囊，拍平为 label 明文；
+  // 序列化只读 data-opaque（见 buildRawContentFromEditor），展示拍平不影响回传，
+  // data-label 仍保留原始 label 供消费方按需读取。
+  const displayLabel = token.label.includes('[[[[') ? stripTokensToLabels(token.label) : token.label
+  const label = escapeHtml(displayLabel)
   return (
-    `<span class="nagent-inline-chip" contenteditable="false"` +
+    `<span class="nagent-inline-chip" contenteditable="false" title="${escapeAttr(displayLabel)}"` +
     ` data-token-id="${escapeAttr(token.id)}"` +
     ` data-opaque="${escapeAttr(token.opaqueText)}" data-label="${escapeAttr(token.label)}">` +
     `<span class="nagent-inline-chip__label">${label}</span>` +
@@ -557,6 +583,7 @@ const InlineComposer = React.forwardRef<InlineComposerHandle, InlineComposerProp
   }, [updateEmptyState])
 
   const reportCaret = React.useCallback(() => {
+    if (isComposingRef.current) return
     const root = editorRef.current
     if (!root) return
     const text = serializeEditor(root)
@@ -567,6 +594,7 @@ const InlineComposer = React.forwardRef<InlineComposerHandle, InlineComposerProp
   const handleInput = React.useCallback(() => {
     const root = editorRef.current
     dbg('input composing=', isComposingRef.current, 'caret=', root ? describeCaret(root) : '-', 'children=', root ? describeChildren(root) : '-')
+    if (isComposingRef.current) return
     emitFromDom()
     reportCaret()
   }, [emitFromDom, reportCaret])
@@ -753,6 +781,18 @@ const InlineComposer = React.forwardRef<InlineComposerHandle, InlineComposerProp
     focus: () => {
       editorRef.current?.focus()
     },
+    setCaretAtOffset: (offset: number) => {
+      const root = editorRef.current
+      if (!root) return
+      // IME composition 进行中不打断（含文档级守卫）：
+      // focus + removeAllRanges 会终止合成、光标被重置到 savedCaret
+      // （比用户当前位置靠左），表现为输入中文时光标左移几个字。
+      // 全局守卫覆盖其他元素（如 ask_user 的 <Input>）中的 composition——
+      // 此时 isComposingRef 仍为 false，需靠 globalComposing 拦截。
+      if (isComposingRef.current || globalComposing) return
+      root.focus()
+      setCaretAtTextOffset(root, offset)
+    },
     insertToken: (token: ChatComposerToken, deleteBefore = 0) => {
       const root = editorRef.current
       if (!root) return
@@ -830,6 +870,12 @@ const InlineComposer = React.forwardRef<InlineComposerHandle, InlineComposerProp
         isComposingRef.current = false
         const root = editorRef.current
         dbg('compositionend caret=', root ? describeCaret(root) : '-', 'children=', root ? describeChildren(root) : '-')
+        // composition 结束后显式同步 state：handleInput 在 composition 期间被跳过，
+        // 此处确保最终文本（候选词上屏后的 DOM）立即序列化上报，不依赖随后的 input 事件
+        // （某些浏览器/IME 下 input 可能先于 compositionend 到达，此时 handleInput 仍判
+        // isComposing=true 而跳过；这里兜底保证 state 与 DOM 一致）。
+        emitFromDom()
+        reportCaret()
       }}
       onPaste={handlePaste}
       onKeyUp={reportCaret}

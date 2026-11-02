@@ -1,7 +1,7 @@
 /**
  * 应用根布局(hub 版,自 n 分支裁剪)。
  *
- * 职责保持 n 的边界:维护壳层 UI 状态(标签/侧边栏/滚动保持),业务数据
+ * 职责保持 n 的边界:维护壳层 UI 状态(标签/侧边栏),业务数据
  * 读取留给子组件。相比 n 的变化:
  * - 启动台/日志/扩展页移除(运行时已下沉 worker);顶层页只剩 设置;
  * - 任务入口从「启动台聚焦」改为直接打开任务聊天标签;
@@ -35,6 +35,7 @@ import AntdAppBridge from './AntdAppBridge'
 import ToastHost from './ToastHost'
 import NotificationHost from './NotificationHost'
 import UserInteractionHost from './UserInteractionHost'
+import PluginDialogHost from './PluginDialogHost'
 import PendingUserInteractionIndicator from './PendingUserInteractionIndicator'
 import BrowserNotificationHost from './BrowserNotificationHost'
 import BrowserNotificationGuide from './BrowserNotificationGuide'
@@ -65,6 +66,7 @@ import { createLazyRouteComponent, scheduleLazyRoutePreload } from '@/components
 import { useHub } from '@/hub/HubProvider'
 import { hubSession } from '@/hub/session'
 import { taskStore } from '@/task/taskStore'
+import { stripTokensToLabels } from '@/composerToken/composerOpaqueToken'
 import { workspaceRegistry } from '@/hub/workspaceRegistry'
 import { DRAFT_TASK_ID, setDraftPreset } from '@/components/task/taskChatDraft'
 
@@ -336,64 +338,8 @@ function LayoutContent({ initialThemeType }: { initialThemeType: ThemeMode }) {
     showToast: (message, type) => showToast(message, type),
   }), [updateSelectedFilePath, showToast])
 
-  const tabPanelNodes = React.useRef<Map<string, HTMLDivElement>>(new Map())
-  const tabScrollPositions = React.useRef<Map<string, { top: number; left: number }>>(new Map())
-  const activeWorkspaceTabIdRef = React.useRef(activeWorkspaceTabId)
-  React.useEffect(() => {
-    activeWorkspaceTabIdRef.current = activeWorkspaceTabId
-  }, [activeWorkspaceTabId])
-
-  const findTabScrollContainer = React.useCallback((tabId: string): HTMLElement | null => {
-    const root = tabPanelNodes.current.get(tabId)
-    if (!root) return null
-    let best: HTMLElement | null = null
-    let bestScrollHeight = -1
-    const walk = (element: HTMLElement) => {
-      const computed = getComputedStyle(element)
-      const canScrollY = computed.overflowY === 'auto' || computed.overflowY === 'scroll' || computed.overflow === 'auto' || computed.overflow === 'scroll'
-      if (canScrollY && element.scrollHeight > element.clientHeight + 1) {
-        if (element.scrollHeight > bestScrollHeight) {
-          bestScrollHeight = element.scrollHeight
-          best = element
-        }
-      }
-      for (const child of Array.from(element.children) as HTMLElement[]) {
-        walk(child)
-      }
-    }
-    walk(root)
-    return best
-  }, [])
-
-  const recordTabScroll = React.useCallback((tabId: string) => {
-    const container = findTabScrollContainer(tabId)
-    if (container) {
-      tabScrollPositions.current.set(tabId, { top: container.scrollTop, left: container.scrollLeft })
-    }
-  }, [findTabScrollContainer])
-
-  const restoreTabScroll = React.useCallback((tabId: string) => {
-    const position = tabScrollPositions.current.get(tabId)
-    if (!position) return
-    const container = findTabScrollContainer(tabId)
-    if (!container) return
-    const maxTop = Math.max(0, container.scrollHeight - container.clientHeight)
-    container.scrollTop = Math.min(position.top, maxTop)
-    container.scrollLeft = position.left
-  }, [findTabScrollContainer])
-
-  React.useLayoutEffect(() => {
-    if (activeWorkspaceTabId) {
-      restoreTabScroll(activeWorkspaceTabId)
-    }
-  }, [activeWorkspaceTabId, restoreTabScroll])
-
   const activateWorkspaceTab = React.useCallback((tab: WorkspaceTab | null, options?: { collapseSidebar?: boolean }) => {
     if (!tab) return
-    const leavingId = activeWorkspaceTabIdRef.current
-    if (leavingId && leavingId !== tab.id) {
-      recordTabScroll(leavingId)
-    }
     setActiveWorkspaceTabId(tab.id)
     getTabDefinition(tab)?.onActivate?.(tab, tabRenderCtx)
     if (options?.collapseSidebar && isMobile) {
@@ -769,7 +715,10 @@ function LayoutContent({ initialThemeType }: { initialThemeType: ThemeMode }) {
       })
     })
     const unsubscribeTaskFocus = domainEventBus.subscribe(DOMAIN_EVENTS.WORKSPACE_FOCUS_TASK_REQUESTED, ({ taskId }) => {
-      openTaskChatTab({ taskId, title: taskStore.get(taskId)?.title ?? `任务 ${taskId.slice(0, 8)}` })
+      openTaskChatTab({
+        taskId,
+        title: stripTokensToLabels(taskStore.get(taskId)?.title ?? '') || `任务 ${taskId.slice(0, 8)}`,
+      })
     })
     const unsubscribeReloadAllFilesRequested = domainEventBus.subscribe(DOMAIN_EVENTS.WORKSPACE_RELOAD_ALL_FILES_REQUESTED, () => {
       reloadAllOpenFileTabs()
@@ -1045,13 +994,6 @@ function LayoutContent({ initialThemeType }: { initialThemeType: ThemeMode }) {
           {workspaceTabs.map((tab) => (
             <div
               key={tab.id}
-              ref={(node) => {
-                if (node) {
-                  tabPanelNodes.current.set(tab.id, node)
-                } else {
-                  tabPanelNodes.current.delete(tab.id)
-                }
-              }}
               style={{
                 ...workspaceBodyStyle,
                 display: tab.id === activeWorkspaceTabId ? 'flex' : 'none',
@@ -1066,6 +1008,7 @@ function LayoutContent({ initialThemeType }: { initialThemeType: ThemeMode }) {
         <ToastHost />
         <NotificationHost />
         <UserInteractionHost />
+        <PluginDialogHost />
         <PendingUserInteractionIndicator />
         <BrowserNotificationHost />
         <BrowserNotificationGuide />

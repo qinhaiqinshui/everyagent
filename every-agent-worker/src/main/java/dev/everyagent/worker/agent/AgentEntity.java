@@ -507,7 +507,7 @@ public final class AgentEntity implements Agent {
         return usage;
     }
 
-    public void addUsage(org.springframework.ai.chat.metadata.Usage u) {
+    public void addUsage(org.springframework.ai.chat.metadata.Usage u, long cacheRead) {
         if (u == null) {
             return;
         }
@@ -517,6 +517,6 @@ public final class AgentEntity implements Agent {
         if (in == 0 && out == 0) {
             return;
         }
-        usage.updateAndGet(old -> old.plus(new Usage(in, out, total)));
+        usage.updateAndGet(old -> old.plus(new Usage(in, out, total, cacheRead)));
     }
 }

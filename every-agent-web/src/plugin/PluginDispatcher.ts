@@ -18,15 +18,20 @@ import type {
   FileExplorerAction,
   PluginDiffTabInput,
   PluginActiveTabInfo,
+  PluginDialogRequest,
   SearchTypeDefinition,
   UiEditorContextMenuActionDefinition,
   ComposerChipActionDefinition,
   UiSettingsSectionDefinition,
   ThemeDefinition,
+  PluginSlashCommandProviderDefinition,
 } from '@everyagent/plugin-api'
+import type { ComponentType } from 'react'
 import { appendComposerTextQueued, getComposerBridge, getShellBridge } from './pluginRuntimeBridge'
 import { activeTabMirror } from './activeTabMirror'
-import { buildOpaqueTokenText } from '@/composerToken/composerOpaqueToken'
+import { openDialog } from './dialogBridge'
+import { buildOpaqueTokenText, stripTokensToLabels } from '@/composerToken/composerOpaqueToken'
+import { antdMessage } from '@/utils/appAntdBridge'
 import type {
   UiSidebarItemDefinition,
   UiWorkspaceTabTypeDefinition,
@@ -41,6 +46,7 @@ import type {
 import type { FileContentEditorDescriptor } from '@/components/files/file-tab-types'
 import { registerTraceType as registerToTraceRegistry, unregisterTraceType as unregisterFromTraceRegistry } from './traceTypeRegistry'
 import { outputBlockRegistry } from './outputBlockRegistry'
+import HostTokenRichText from '@/composerToken/TokenRichText'
 import {
   ExtensionRegistry,
   ExtensionRegistryFactory,
@@ -53,6 +59,7 @@ const EXT_UI_SIDEBAR_ITEMS = 'ui.sidebar_items'
 const EXT_UI_WORKSPACE_TAB_TYPES = 'ui.workspace_tab_types'
 const EXT_UI_FILE_SIDEBAR_PANELS = 'ui.file_sidebar_panels'
 const EXT_UI_COMPOSER_ABOVE_PANEL = 'ui.composer_above_panel'
+const EXT_UI_SLASH_COMMAND_PROVIDERS = 'ui.slash_command_providers'
 const EXT_UI_TOOL_CALL_VIEWS = 'ui.tool_call_views'
 const EXT_UI_KIND_VIEWS = 'ui.kind_views'
 const EXT_UI_USER_MESSAGE_ACTIONS = 'ui.user_message_actions'
@@ -156,6 +163,10 @@ export interface RealPluginDispatcher {
   registerFileSidebarPanel: (def: UiFileSidebarPanelDefinition) => Disposable
   /** 注册输入框上方面板。 */
   registerComposerAbovePanel: (def: UiComposerAbovePanelDefinition) => Disposable
+  /** 注册 slash 命令 provider（由 `ui.slash_command_providers` 扩展点产出）。 */
+  registerSlashCommandProvider: (def: PluginSlashCommandProviderDefinition) => Disposable
+  /** 同步获取插件注册的 slash 命令 provider 列表（供 `/` 菜单桥接拉取条目）。 */
+  listSlashCommandProviders: () => PluginSlashCommandProviderDefinition[]
   /** 注册工具调用视图接管。 */
   registerToolCallView: (def: ToolCallViewDefinition) => Disposable
   /**
@@ -237,8 +248,38 @@ export interface RealPluginDispatcher {
     payload?: Record<string, unknown>
     spaced?: boolean
   }) => void
+  /**
+   * 构造一枚胶囊的 opaque token 串并返回（与 `appendComposerToken` 同源单点编码，
+   * 只是不追加草稿）。`kind`/`label` 为空时由 `buildOpaqueTokenText` 抛错。
+   */
+  buildComposerToken: (input: {
+    kind: string
+    label: string
+    summary?: string
+    payload?: Record<string, unknown>
+  }) => string
   /** 用 rawContent（可能含 opaque token 串）替换整个草稿（编辑重发回填用）。 */
   setComposerRawContent: (rawContent: string) => void
+  /**
+   * 全局轻提示（委托宿主 antd message；未注册时降级静态 message）。
+   * 供插件在非 React 上下文（如 slash select 回调）向用户反馈瞬态结果。
+   */
+  showToast: (message: string, type?: 'success' | 'error' | 'info' | 'warning') => void
+  /**
+   * 弹出全局模态对话框并挂起等待用户收口（委托 plugin/dialogBridge store；
+   * 渲染由 PluginDialogHost 全局挂载承接，不依附任何 composer/标签页）。
+   */
+  showDialog: <R = unknown>(request: PluginDialogRequest<R>) => Promise<R | null>
+  /**
+   * 宿主注入的「token 富文本」渲染组件（声明见 @everyagent/plugin-api UiRegistry）：
+   * 把可含 opaque token 串的文本渲染为「文本段 + 内联胶囊」（嵌套递归）。
+   * 与用户消息回放 / 任务列表标题同一实现（composerToken/TokenRichText.tsx）；
+   * getter 惰性解引用，避免与本模块（TokenRichText 经由 pluginDispatcher 查胶囊
+   * 激活动作）之间的模块初始化环。
+   */
+  readonly TokenRichText?: ComponentType<{ text: string; className?: string; interactive?: boolean; singleLine?: boolean }>
+  /** 把可含 opaque token 串（嵌套递归）的文本拍平为纯 label 明文。 */
+  toPlainText: (text: string) => string
 }
 
 export const pluginDispatcher: RealPluginDispatcher = {
@@ -263,6 +304,8 @@ export const pluginDispatcher: RealPluginDispatcher = {
       case EXT_UI_FILE_SIDEBAR_PANELS:
         return getRegistry<T>(extensionPoint).getAll()
       case EXT_UI_COMPOSER_ABOVE_PANEL:
+        return getRegistry<T>(extensionPoint).getAll()
+      case EXT_UI_SLASH_COMMAND_PROVIDERS:
         return getRegistry<T>(extensionPoint).getAll()
       case EXT_UI_TOOL_CALL_VIEWS:
         return getRegistry<T>(extensionPoint).getAll()
@@ -323,6 +366,12 @@ export const pluginDispatcher: RealPluginDispatcher = {
   },
   registerComposerAbovePanel(def) {
     return getRegistry<UiComposerAbovePanelDefinition>(EXT_UI_COMPOSER_ABOVE_PANEL).register('', def)
+  },
+  registerSlashCommandProvider(def) {
+    return getRegistry<PluginSlashCommandProviderDefinition>(EXT_UI_SLASH_COMMAND_PROVIDERS).register('', def)
+  },
+  listSlashCommandProviders() {
+    return getRegistry<PluginSlashCommandProviderDefinition>(EXT_UI_SLASH_COMMAND_PROVIDERS).getAll()
   },
   registerToolCallView(def) {
     return getRegistry<ToolCallViewDefinition>(EXT_UI_TOOL_CALL_VIEWS).register('', def)
@@ -452,7 +501,31 @@ export const pluginDispatcher: RealPluginDispatcher = {
     const spaced = input.spaced ?? true
     appendComposerTextQueued(spaced ? ` ${opaqueText} ` : opaqueText)
   },
+  buildComposerToken(input) {
+    // 与 appendComposerToken 同源单点编码，只返回串不追加草稿；kind/label 为空时由它抛错。
+    return buildOpaqueTokenText(input.kind, {
+      label: input.label,
+      summary: input.summary,
+      payload: input.payload ?? {},
+    })
+  },
   setComposerRawContent(rawContent) {
     getComposerBridge()?.setRawContent(rawContent)
+  },
+  showToast(message, type = 'info') {
+    antdMessage(type, message)
+  },
+  showDialog(request) {
+    return openDialog(request)
+  },
+
+  // 宿主注入的 token 渲染能力（声明见 @everyagent/plugin-api UiRegistry）：
+  // TokenRichText getter 惰性解引用——该组件经 pluginDispatcher 查胶囊激活动作，
+  // 惰性取用避开模块初始化环；toPlainText 直连宿主拍平函数（嵌套递归）。
+  get TokenRichText(): ComponentType<{ text: string; className?: string; interactive?: boolean; singleLine?: boolean }> {
+    return HostTokenRichText
+  },
+  toPlainText(text) {
+    return stripTokensToLabels(text)
   },
 }

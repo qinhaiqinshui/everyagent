@@ -2,13 +2,21 @@ package dev.everyagent.worker.config;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.core.env.ConfigurableEnvironment;
+import org.springframework.core.env.Environment;
+import org.springframework.core.env.EnumerablePropertySource;
+import org.springframework.core.env.PropertySource;
 
 import dev.everyagent.plugin.api.config.WorkerConfig;
 
 import java.util.ArrayList;import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * worker 配置(架构 §5.1)。
@@ -25,6 +33,14 @@ public class WorkerProperties implements WorkerConfig {
     private String workerId = "company-pc";
     /** 多 hub 注册列表(hubs 为唯一入口;空 = 不连任何 hub)。 */
     private List<HubConfig> hubs = new ArrayList<>();
+    /**
+     * Spring 环境(可选注入,非配置属性):resolveHubs 据此按 PropertySource 粒度识别
+     * 「用户文件 application-worker.yaml 来源」的 worker.hubs 原始定义——桌面场景
+     * desktop-worker.yml(additional-location,优先级最高)整表覆盖了用户列表,
+     * 需单独重绑该来源才能拿回用户意图(多来源合并,见 {@link #resolveHubs()})。
+     * 测试可置 null(等价"无用户文件定义",维持绑定结果)。
+     */
+    private Environment environment;
     /** 系统目录(架构 §5.9):模型配置/默认工作区/workspaces/沙箱;空 = ~/.everyagent。 */
     private String homeDir = "";
     /** 默认工作区(init 时注册进注册表)。空 = <系统目录>/defaultworkspace。 */
@@ -209,30 +225,187 @@ public class WorkerProperties implements WorkerConfig {
      * 解析生效的 hub 列表(hubs 为唯一入口;空列表 = 不连任何 hub)。
      * url 为空的条目静默跳过(与既有语义一致);url 有效但 api-key 或 hub-key 缺失 → 抛异常
      * (HubPool @PostConstruct 随之失败,worker 拒绝启动——凭据必填,不再有"空 = 不携带"旁路)。
+     *
+     * <p><b>多来源合并(桌面场景)</b>:desktop-worker.yml 经 --spring.config.additional-location
+     * 注入、优先级最高,Spring 对列表跨文件整表覆盖——其内嵌的用户条目快照(desktop 拉起 worker
+     * 前合并写入)会盖掉用户 application-worker.yaml 的最新配置;而 worker.restart(worker 自拉起)
+     * 等路径不会触发 desktop 重写该文件,快照随即过期(2026-10「配置多 hub 只连上一个」即此:
+     * 用户文件的远程 hub 条目被过期快照整表吞掉,池里只剩本机一条)。故当用户文件显式定义了
+     * worker.hubs 时按语义拆分:<b>回环条目</b>(本机 hub,desktop 注入、恒 hubs[0],/admin 认证
+     * 与其 api-key 比对)保留绑定结果,<b>非回环条目一律以用户文件为准</b>(忽略高优先级来源的
+     * 过期快照;与 desktop 生成侧"回环剔除"语义互为成对)。用户文件未定义 worker.hubs
+     * (纯 jar/docker 部署、仅 env 注入)→ 维持整表覆盖现状,行为不变。
      */
     public List<HubConfig> resolveHubs() {
+        List<HubConfig> userFile = bindUserFileHubs();
+        if (userFile == null) {
+            List<HubConfig> bound = validEntries(hubs);
+            validateHubCredentials(bound, "worker.hubs");
+            return bound;
+        }
+        List<HubConfig> merged = new ArrayList<>();
+        for (HubConfig h : validEntries(hubs)) {
+            if (isLoopbackHubUrl(h.getUrl())) {
+                merged.add(h);
+            }
+        }
+        int loopbackCount = merged.size();
+        for (HubConfig h : validEntries(userFile)) {
+            if (!isLoopbackHubUrl(h.getUrl())) {
+                merged.add(h);
+            }
+        }
+        validateHubCredentials(merged, "worker.hubs(多来源合并后)");
+        log.info("worker.hubs 多来源合并:回环条目 {} 条(绑定结果,本机 hub)+ 非回环条目 {} 条"
+                        + "(application-worker.yaml);高优先级来源的非回环条目已忽略,以用户文件为准",
+                loopbackCount, merged.size() - loopbackCount);
+        return merged;
+    }
+
+    /** 有效条目过滤:丢弃 null 与 url 为 null/blank 的项(既有静默跳过语义)。 */
+    private static List<HubConfig> validEntries(List<HubConfig> list) {
         List<HubConfig> out = new ArrayList<>();
-        if (hubs != null) {
-            for (int i = 0; i < hubs.size(); i++) {
-                HubConfig h = hubs.get(i);
-                if (h == null || h.getUrl() == null || h.getUrl().isBlank()) {
-                    continue;
-                }
-                boolean apiKeyBlank = h.getApiKey() == null || h.getApiKey().isBlank();
-                boolean hubKeyBlank = h.getHubKey() == null || h.getHubKey().isBlank();
-                if (apiKeyBlank || hubKeyBlank) {
-                    throw new IllegalStateException("worker.hubs[" + i + "](" + h.getUrl()
-                            + ") 缺" + (apiKeyBlank ? " api-key" : "") + (hubKeyBlank ? " hub-key" : "")
-                            + ":两者均必填(hub 强校验 hubKey,apiKey 定义数据归属),缺配置拒绝启动"
-                            + "(fail-closed:已移除打包默认密钥)。配置方式(任选):①环境变量 "
-                            + "WORKER_API_KEY / HUB_KEY(对应打包默认的 worker.hubs[0] 条目,url 用 WORKER_HUB_URL);"
-                            + "②${EVERYAGENT_HOME}/application-worker.yaml 的 worker.hubs 列表(整表替换,优先级更高);"
-                            + "③启动参数 --worker.hubs[0].api-key=... / --worker.hubs[0].hub-key=...");
-                }
+        if (list == null) {
+            return out;
+        }
+        for (HubConfig h : list) {
+            if (h != null && h.getUrl() != null && !h.getUrl().isBlank()) {
                 out.add(h);
             }
         }
         return out;
+    }
+
+    /** 凭据校验(fail-closed):url 有效但 api-key/hub-key 缺失 → 抛异常拒绝启动(文案含配置指引)。 */
+    private static void validateHubCredentials(List<HubConfig> list, String keyDesc) {
+        for (int i = 0; i < list.size(); i++) {
+            HubConfig h = list.get(i);
+            boolean apiKeyBlank = h.getApiKey() == null || h.getApiKey().isBlank();
+            boolean hubKeyBlank = h.getHubKey() == null || h.getHubKey().isBlank();
+            if (apiKeyBlank || hubKeyBlank) {
+                throw new IllegalStateException(keyDesc + "[" + i + "](" + h.getUrl()
+                        + ") 缺" + (apiKeyBlank ? " api-key" : "") + (hubKeyBlank ? " hub-key" : "")
+                        + ":两者均必填(hub 强校验 hubKey,apiKey 定义数据归属),缺配置拒绝启动"
+                        + "(fail-closed:已移除打包默认密钥)。配置方式(任选):①环境变量 "
+                        + "WORKER_API_KEY / HUB_KEY(对应打包默认的 worker.hubs[0] 条目,url 用 WORKER_HUB_URL);"
+                        + "②${EVERYAGENT_HOME}/application-worker.yaml 的 worker.hubs 列表"
+                        + "(桌面场景非回环条目以本文件为准,详见 docs/ARCHITECTURE.md §7.17);"
+                        + "③启动参数 --worker.hubs[0].api-key=... / --worker.hubs[0].hub-key=...");
+            }
+        }
+    }
+
+    /** 用户级配置文件来源标记:Spring ConfigData 来源名含该子串即候选,再经路径精确锚定。 */
+    private static final String USER_OVERRIDE_SOURCE_MARKER = "application-worker.yaml";
+
+    /**
+     * worker.hubs[n].<field> 扁平键形态(ConfigData 加载 YAML 后的键形式;
+     * 兼容连字符与驼峰两种字段拼写,与 Spring 松散绑定的常见形态一致)。
+     */
+    private static final Pattern HUB_ENTRY_KEY =
+            Pattern.compile("^worker\\.hubs\\[(\\d+)]\\.(url|api-key|hub-key|apiKey|hubKey)$");
+
+    /**
+     * 从 Environment 中单独提取「用户文件 application-worker.yaml 来源」的 worker.hubs 原始列表。
+     * Spring 的最终绑定值是多来源覆盖后的结果,拿不回被 desktop-worker.yml 盖掉的用户定义;
+     * 这里按 PropertySource 粒度直接读该来源的扁平键(YAML 列表项即 {@code worker.hubs[0].url}
+     * 等键;值经 resolvePlaceholders 还原 ${...} 占位符)。
+     *
+     * <p>来源必须**精确锚定**为当前生效系统目录(resolveHomeDir)下的 application-worker.yaml:
+     * ConfigData 来源名形如 {@code Config resource 'file [<路径>]' via location '...'}——
+     * 仅文件名匹配不够(测试场景 spring.config.import 占位符解析早于 @DynamicPropertySource,
+     * 会意外吸入开发机真实用户文件,把测试池污染成两条连接,2026-10 E2E 回归即此)。
+     *
+     * @return null = 未找到锚定路径下定义了 worker.hubs 的来源(文件不存在/无该键)→ 维持现状;
+     *         空列表不会出现(YAML 空列表不产生任何扁平键,等价"未定义")。
+     */
+    private List<HubConfig> bindUserFileHubs() {
+        if (!(environment instanceof ConfigurableEnvironment ce)) {
+            return null;
+        }
+        java.nio.file.Path userFile = resolveHomeDir().resolve(USER_OVERRIDE_SOURCE_MARKER);
+        for (PropertySource<?> ps : ce.getPropertySources()) {
+            if (!isUserOverrideSource(ps, userFile)
+                    || !(ps instanceof EnumerablePropertySource<?> eps)) {
+                continue;
+            }
+            Map<Integer, HubConfig> byIndex = new TreeMap<>();
+            for (String key : eps.getPropertyNames()) {
+                Matcher m = HUB_ENTRY_KEY.matcher(key);
+                if (!m.matches()) {
+                    continue;
+                }
+                Object raw = eps.getProperty(key);
+                if (raw == null) {
+                    continue;
+                }
+                String value = ce.resolvePlaceholders(raw.toString());
+                HubConfig h = byIndex.computeIfAbsent(Integer.parseInt(m.group(1)), i -> new HubConfig());
+                switch (m.group(2)) {
+                    case "url" -> h.setUrl(value);
+                    case "api-key", "apiKey" -> h.setApiKey(value);
+                    case "hub-key", "hubKey" -> h.setHubKey(value);
+                    default -> { /* 不可能:正则已限定 */ }
+                }
+            }
+            if (!byIndex.isEmpty()) {
+                return new ArrayList<>(byIndex.values());
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 来源是否为「home-dir 下 application-worker.yaml」的 ConfigData 文件来源:
+     * 来源名须含 'file [<路径>]' 形态(标准 ConfigData 外部文件来源名)且路径与锚定路径吻合
+     * (Windows 路径大小写不敏感由 Path.equals 语义覆盖);非该形态的来源一律不算
+     * (防御:未知来源不参与"以用户文件为准"的合并决策)。
+     */
+    private boolean isUserOverrideSource(PropertySource<?> ps, java.nio.file.Path userFile) {
+        String name = ps.getName();
+        if (name == null || !name.contains(USER_OVERRIDE_SOURCE_MARKER)) {
+            return false;
+        }
+        int s = name.indexOf("'file [");
+        int e = s < 0 ? -1 : name.indexOf("]'", s);
+        if (s < 0 || e < 0) {
+            return false;
+        }
+        try {
+            java.nio.file.Path p = java.nio.file.Path.of(name.substring(s + "'file [".length(), e))
+                    .toAbsolutePath().normalize();
+            return p.equals(userFile);
+        } catch (Exception ex) {
+            return false;
+        }
+    }
+
+    /**
+     * 回环 hub 地址判定(与 desktop credentials.isLoopbackWsUrl 同集):
+     * 本机 hub 连接由 desktop 独占注入(desktop-worker.yml 恒 hubs[0]),用户文件里的
+     * 回环条目剔除(防重复、防凭据错配,与 desktop 生成侧剔除逻辑成对)。
+     */
+    static boolean isLoopbackHubUrl(String url) {
+        if (url == null || url.isBlank()) {
+            return false;
+        }
+        try {
+            String host = java.net.URI.create(url.trim()).getHost();
+            if (host == null) {
+                return false;
+            }
+            String h = host.toLowerCase();
+            return h.equals("localhost") || h.equals("127.0.0.1") || h.equals("[::1]")
+                    || h.equals("::1") || h.equals("0.0.0.0");
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
+    /** Spring 容器注入(可选):无容器环境(纯单测)保持 null → resolveHubs 维持绑定结果语义。 */
+    @Autowired(required = false)
+    void setEnvironment(Environment environment) {
+        this.environment = environment;
     }
 
     /** 系统目录绝对路径;配置为空时取 <user.home>/.everyagent。 */

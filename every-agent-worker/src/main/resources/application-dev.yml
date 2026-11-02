@@ -14,7 +14,7 @@ worker:
   # 系统目录(架构 §5.9):默认工作区 workspace/、数据 data/;空 = ~/.everyagent
   home-dir: ${user.home}/.everyagent-dev
   # 开发运行恢复控制台日志与启动横幅(打包默认 OFF,防 worker.out.log 无限膨胀,见 application.yml)
-  console-log-threshold: INFO
+  console-log-threshold: debug
 server:
   port: 8200
   address: 127.0.0.1 # 管理端口仅本机(架构 §2.2)
@@ -43,3 +43,4 @@ logging:
     dev.everyagent.worker.tools: debug
     dev.everyagent.worker.os: debug
     dev.everyagent.worker.task: debug
+    dev.everyagent.worker.agent: debug

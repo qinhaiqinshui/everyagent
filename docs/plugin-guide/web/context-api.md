@@ -36,7 +36,7 @@ const ctx: PluginContext = {
 | `ctx.sdk` | `PluginSdk`（`index.ts:130-146`） | `pluginLoader.ts:205-229` | RPC 通道 + 工作区注册表快照 + 当前 worker id |
 | `ctx.storage` | `PluginStorage`（`index.ts:200-204`） | `pluginLoader.ts:142-165` | localStorage，键前缀 `plugin:<pluginId>:`，值 JSON 序列化 |
 | `ctx.commands` | `CommandRegistry`（`index.ts:206-209`） | `pluginLoader.ts:167-189` | **本插件私有**的命令表（普通 `Map`），不跨插件、无宿主内置命令 |
-| `ctx.ui` | `UiRegistry`（`index.ts:808-853`） | `every-agent-web/src/plugin/PluginDispatcher.ts:218-401` | 17 个 `register*` + 7 个动作方法，详见 [UI 扩展点](ui-extensions.md) |
+| `ctx.ui` | `UiRegistry`（`index.ts:808-853`） | `every-agent-web/src/plugin/PluginDispatcher.ts:218-401` | 19 个 `register*` + 8 个动作方法，详见 [UI 扩展点](ui-extensions.md) |
 | `ctx.events` | `PluginEvents`（`index.ts:162-167`） | `pluginLoader.ts:232-249` | 最薄委托宿主 `domainEventBus`（进程内事件总线） |
 | `ctx.fs` | `PluginFs`（`index.ts:170-175`） | `pluginLoader.ts:251-265` | 委托宿主 `workspaceGateway` → worker `fs.list` / `fs.delete` RPC |
 
@@ -265,7 +265,14 @@ await ctx.fs.delete(workspaceRoot, 'docs/draft.md')
 
 ## 8. `ctx.ui` —— 一笔带过
 
-`UiRegistry` 有 17 个 `register*`（sidebar 项、工作区标签类型、工具调用视图、文件编辑器、编辑器右键菜单、胶囊激活、设置页设置段、全局颜色主题……）、7 个动作方法（`openTab`/`openFileTab`/`openDiffTab`/`openSettingsPage`/`appendComposerText`/`appendComposerToken`/`setComposerRawContent`）与 1 个查询方法（`getActiveTab()`——同步读宿主壳层维护的激活标签镜像，返回 `{id, tabType}` 或 null，变更通知配 `workspace-tab-activated`/`workspace-tab-closed` 事件），声明在 `index.ts:808-853`，宿主实现是单例 `pluginDispatcher`（ctx 里 `ui: pluginDispatcher as unknown as ...` 强转接入，`pluginLoader.ts:511`）。每个 `register*` 返回的 Disposable 都是**真清理**：`ListExtensionRegistry.register` 的 dispose 从数组 splice 并通知订阅者重渲染（`every-agent-web/src/plugin/ExtensionRegistry.ts:45-56`）。逐扩展点字段表与代码范例见 [UI 扩展点](ui-extensions.md)。
+`UiRegistry` 有 19 个 `register*`（sidebar 项、工作区标签类型、工具调用视图、文件编辑器、编辑器右键菜单、胶囊激活、设置页设置段、全局颜色主题、本地斜杠命令条目……）、8 个动作方法（`openTab`/`openFileTab`/`openDiffTab`/`openSettingsPage`/`appendComposerText`/`appendComposerToken`/`buildComposerToken`/`setComposerRawContent`）与 1 个查询方法（`getActiveTab()`——同步读宿主壳层维护的激活标签镜像，返回 `{id, tabType}` 或 null，变更通知配 `workspace-tab-activated`/`workspace-tab-closed` 事件），声明在 `index.ts:808-853`，宿主实现是单例 `pluginDispatcher`（ctx 里 `ui: pluginDispatcher as unknown as ...` 强转接入，`pluginLoader.ts:511`）。每个 `register*` 返回的 Disposable 都是**真清理**：`ListExtensionRegistry.register` 的 dispose 从数组 splice 并通知订阅者重渲染（`every-agent-web/src/plugin/ExtensionRegistry.ts:45-56`）。逐扩展点字段表与代码范例见 [UI 扩展点](ui-extensions.md)。
+
+其中 `buildComposerToken(input: { kind: string; label: string; summary?: string; payload?: Record<string, unknown> }): string` 与 `appendComposerToken` **同源单点编码**（宿主 `buildOpaqueTokenText`，`every-agent-web/src/composerToken/composerOpaqueToken.ts`）——只返回 opaque 串、**不追加草稿**（不走草稿桥，未绑定草稿也照常编码），供本地 slash provider（`ui.slash_command_providers`，[UI 扩展点](ui-extensions.md) §21）的 `select` 回调构造内联胶囊 token——插入时机与位置由 `select` 结果决定，不能用「追加到当前激活草稿」语义的 `appendComposerToken`；`kind`/`label` 为空同样由 `buildOpaqueTokenText` 抛错。
+
+另有 2 个**宿主注入的渲染能力**（2026-11，可选成员、旧宿主可能缺席，插件侧缺席时自行降级）：
+
+- `ctx.ui.TokenRichText?: ComponentType<{ text: string; className?: string; interactive?: boolean; singleLine?: boolean }>`——「token 富文本」渲染组件：把 rawContent（可含 opaque token 串，嵌套 token 整体成段）渲染为「文本段 + 内联胶囊」，胶囊 label 内再嵌 token 时递归渲染小胶囊（深度上限内）。与用户消息回放 / 侧边栏任务列表标题同一实现（宿主 `composerToken/TokenRichText.tsx` 单点；api 包零运行时代码、只声明类型）。任务标题（=rawContent 原样）需要胶囊化展示的场景用——范例：task-wait 选择框候选列表（`every-agent-plugins/task-wait/web/WaitTaskPickerContent.tsx`，`interactive={false}` 纯展示、`singleLine` 单行截断——列表条目等窄条场景必传，否则嵌套内容会把行撑高）。
+- `ctx.ui.toPlainText?(text: string): string`——把可含 token 串（嵌套递归）的文本拍平为纯 label 明文。标签标题、toast、tooltip 等纯文本场景用（胶囊展示场景用 `TokenRichText`）。
 
 ## 9. 寿命与清理
 
@@ -361,6 +368,6 @@ export default plugin
 
 ## 12. 下一步读
 
-- 17 个 UI 扩展点逐个字段表与注册代码：[UI 扩展点](ui-extensions.md)
+- 19 个 UI 扩展点逐个字段表与注册代码：[UI 扩展点](ui-extensions.md)
 - 21 个宿主事件 + 8 个具名事件的完整手册：[事件](events.md)
 - `registerRpcMethod` 命名规范、ACL 与后端事件发射：[后端任务与 RPC](../backend/task-and-rpc.md)

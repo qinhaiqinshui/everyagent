@@ -6,7 +6,7 @@
  * - config.get(按 worker 定向:连接/重连/presence 变化后逐台校准;apiKey 恒为掩码,明文不出 worker);
  * - config.changed{keys:["models"]}(按 hubSession.workerIdOfFrame 判定来源 worker 定向刷新)。
  * 写路径:设置页「模型配置」区块(components/system/modelConfig/)经 config.model.add /
- * config.model.remove 落盘 worker 侧 application-worker.yaml,成功后由 worker 广播
+ * config.model.update / config.model.remove 落盘 worker 侧 application-worker.yaml,成功后由 worker 广播
  * config.changed 触发本服务自动校准;本服务自身不直接写。
  *
  * 多 worker 语义:不同 worker 的模型配置各不相同,缓存为 workerId → ModelConfigInfo[]。

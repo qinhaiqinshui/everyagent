@@ -208,6 +208,9 @@ class ManagedStream {
     this.view?.close()
     const view = new TaskPacketView(client, this.workerId, this.taskId)
     view.onEvent((event: TaskStreamEvent) => this.onEvent(event))
+    // 推送丢帧自愈(§7.13):creditIndex 跳号检出丢帧 → 区间补拉折叠补齐;不补拉则
+    // 丢帧是会话期永久空洞(上滚懒加载只向下覆盖,缓存检查按 items 连续性短路,不回访中段)。
+    view.onFramesLost((fromSeq, toSeq) => this.schedulePushReconcile(fromSeq, toSeq))
     this.view = view
     this.boundClient = client
     this.boundWorkerId = this.workerId
@@ -357,12 +360,24 @@ class ManagedStream {
     const maxReal = this.folder.roundRealFloor(startKey, endKey)
     let afterSeq = page.afterSeq
     if (maxReal != null) {
-      // 完整覆盖:权威最终回复已在 items(真实) → 整轮已拉完,不 RPC。
-      if (endKey != null && cmpSeq(maxReal, endKey) >= 0) {
+      // 缓存是否从轮起点连续延伸:maxReal 只能证明「轮尾部」在 items,不能证明整轮已拉完。
+      // live 任务打开时 loadRoundsIntoFolder 会预载 task.roundTail 的最后一页(≤200 条)到 items
+      // (桥接流式增量),其中含轮终点最终回复(maxReal == endSeq)但前半缺失;该轮闭合后展开,
+      // 若仅据 maxReal >= endSeq 判整轮取完,展开轮详情会只渲染尾段、前半永久丢失
+      // (t_g656 回归:980 事件的大轮只显示末 200 条,首条为孤立的 tool.result——
+      // 对应 tool.call 未载入故无工具名)。
+      // 故额外要求 [startSeq, maxReal] 内已含轮起点 user.message(minReal <= startSeq),
+      // 才认定缓存从起点连续覆盖到 maxReal。
+      const minReal = this.folder.roundRealCeiling(startKey, String(BigInt(String(maxReal)) + 1n))
+      const coveredFromStart = minReal != null && cmpSeq(minReal, startKey) <= 0
+      // 完整覆盖:从轮起点连续延伸到权威最终回复 → 整轮已拉完,不 RPC。
+      if (coveredFromStart && endKey != null && cmpSeq(maxReal, endKey) >= 0) {
         return { lastSeq: maxReal, hasMore: false, fromCache: true }
       }
-      // 部分覆盖:把 afterSeq 提升到已覆盖点,从缺口续拉(不整页重拉)。
-      if (cmpSeq(maxReal, afterSeq) > 0) {
+      // 部分覆盖:仅在缓存从轮起点连续延伸时,才把 afterSeq 提升到已覆盖点从缺口续拉(不整页重拉);
+      // 尾段预载(coveredFromStart=false)说明前半缺失,必须从 afterSeq(轮起点)重新前向扫,
+      // 折入时按 seq 去重,与已缓存的尾段天然合并不重复。
+      if (coveredFromStart && cmpSeq(maxReal, afterSeq) > 0) {
         afterSeq = maxReal
       }
     }
@@ -459,21 +474,13 @@ class ManagedStream {
       } catch (error) {
         console.warn(`[taskStream] 拉取未闭合尾轮尾部事件失败(${this.taskId}):`, error)
       }
-    } else if (!res.live && lastRound?.startSeq) {
-      // 终态任务:hidden 期间 ask_user 超时的 ask.resolved 可能未被推送(DataPusher 已停),
-      // 拉最后一轮尾部事件补分发到 askStore,确保弹窗被 settle 关闭。
-      try {
-        const { events } = await fetchTaskRoundTail(client, this.workerId, {
-          taskId: this.taskId,
-          startSeq: lastRound.startSeq,
-          limit: 200,
-        })
-        for (const item of events) {
-          this.foldWireEvent(item)
-        }
-      } catch (error) {
-        console.warn(`[taskStream] 拉取终态任务尾轮尾部事件失败(${this.taskId}):`, error)
-      }
+    } else if (!res.live) {
+      // 终态任务:hidden 期间 ask_user 超时/作答的 ask.resolved 未推送到前端(DataPusher
+      // 已停)。直接清理本任务残留的挂起 ask——任务已终态,一切 pending ask 必已落定。
+      // clearAsksOfTask 按 taskId 过滤,不影响其他任务的弹窗。
+      // 旧做法拉尾段 200 条事件折入 items 只为找 ask.resolved 分发到 askStore,副作用是
+      // 尾段事件污染 items(含轮终点最终回复),展开轮详情时懒加载缓存误判整轮已覆盖。
+      clearAsksOfTask(this.taskId)
     }
     this.notify()
   }
@@ -498,6 +505,81 @@ class ManagedStream {
       if (this.folder.ledger.seedAgents(res.agents, res.mainAgentId)) this.notify()
     } catch (error) {
       console.warn(`[taskStream] 拉取子 agent 台账失败(${this.taskId}):`, error)
+    }
+  }
+
+  // ---- 推送丢帧补拉(§7.13 降级语义的自愈半边) ----
+
+  /** 待补拉缺口下界(合并多缺口取最小;null=无待处理)。 */
+  private reconcileFrom: string | null = null
+  /** 待补拉缺口上界(合并多缺口取最大)。 */
+  private reconcileTo: string | null = null
+  /** 补拉进行中(单飞;期间新到的缺口并入待处理窗口,完成后续拉)。 */
+  private reconciling = false
+
+  /**
+   * 登记一个推送丢帧缺口(view.onFramesLost 回调):合并进待处理窗口
+   * (下界取最小、上界取最大)后触发单飞补拉。合并的意义:丢帧常成簇
+   * (出站队列溢出窗口),逐缺口补拉会放大 RPC 次数。
+   */
+  private schedulePushReconcile(fromSeq: number | string, toSeq: number | string): void {
+    const from = String(fromSeq)
+    const to = String(toSeq)
+    if (cmpSeq(from, to) >= 0) return // 防御:缺口两端 seq 非递增(理论不出现)
+    this.reconcileFrom = this.reconcileFrom == null || cmpSeq(from, this.reconcileFrom) < 0
+      ? from : this.reconcileFrom
+    this.reconcileTo = this.reconcileTo == null || cmpSeq(to, this.reconcileTo) > 0
+      ? to : this.reconcileTo
+    void this.flushPushReconcile()
+  }
+
+  /**
+   * 执行缺口补拉:task.poll 区间查询 (from, to) 分页拉全(view.loadForwardPage 无副作用,
+   * 不动推送游标),事件经 foldWireEvent 折入(与懒加载同口径,按 seq 去重幂等——已收到
+   * 的两端与重复补拉天然吸收)。补回的 message 是权威整轮,直接覆盖缺口处的流式残段。
+   * 失败仅 warn:不重排死循环——后续丢帧会再次触发;断连场景由 resync 全量校准兜底。
+   */
+  private async flushPushReconcile(): Promise<void> {
+    if (this.reconciling) return
+    const view = this.view
+    if (!view) {
+      this.reconcileFrom = null
+      this.reconcileTo = null
+      return
+    }
+    const from = this.reconcileFrom
+    const to = this.reconcileTo
+    if (from == null || to == null || cmpSeq(from, to) >= 0) {
+      this.reconcileFrom = null
+      this.reconcileTo = null
+      return
+    }
+    this.reconciling = true
+    this.reconcileFrom = null
+    this.reconcileTo = null
+    try {
+      let after = from
+      // hasMore 分页拼全缺口(单页 200;缺口通常远小于一页);游标不推进即退出防自旋。
+      for (let page = 0; page < 100; page++) {
+        const res = await view.loadForwardPage({ startSeq: from, endSeq: to, afterSeq: after })
+        for (const item of res.events) {
+          this.foldWireEvent(item)
+        }
+        if (!res.hasMore) break
+        const next = String(res.lastSeq)
+        if (cmpSeq(next, after) <= 0) break
+        after = next
+      }
+      console.warn(`[taskStream] 推送丢帧已补齐(${this.taskId}): 区间 (${from}, ${to})`)
+    } catch (error) {
+      console.warn(`[taskStream] 推送丢帧补拉失败(${this.taskId}) 区间 (${from}, ${to}):`, error)
+    } finally {
+      this.reconciling = false
+      this.notify()
+      // 补拉期间又登记了新缺口:立即续拉一轮。
+      if (this.reconcileFrom != null && this.reconcileTo != null) {
+        void this.flushPushReconcile()
+      }
     }
   }
 

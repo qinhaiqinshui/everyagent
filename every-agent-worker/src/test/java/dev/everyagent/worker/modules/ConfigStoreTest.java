@@ -106,6 +106,50 @@ class ConfigStoreTest {
         assertTrue(store.list().stream().anyMatch(c -> c.configId().equals("b")));
     }
 
+    @Test
+    void updateModelPersistsAndPreservesApiKey() throws Exception {
+        WorkerProperties props = props(model("a", "pa", "ma"));
+        props.setHomeDir(homeDir.toString());
+        ConfigStore store = new ConfigStore(props, POOL);
+        // 编辑 a:改 provider/model,apiKey 留空(应保持原 sk-a)。
+        WorkerProperties.Model updated = new WorkerProperties.Model();
+        updated.setConfigId("a");
+        updated.setProvider("pa2");
+        updated.setBaseUrl("http://a2");
+        updated.setModel("ma2");
+        updated.setApiKey(""); // 留空 = 保持原 key
+        assertEquals(1, store.updateModel(updated));
+        // resolve 后 model/provider 已变,apiKey 仍是 sk-a。
+        var resolved = store.resolve("a");
+        assertEquals("ma2", resolved.snapshot().model());
+        assertEquals("sk-a", resolved.apiKey());
+        // 不存在 → NOT_FOUND。
+        WorkerProperties.Model missing = new WorkerProperties.Model();
+        missing.setConfigId("nope");
+        missing.setBaseUrl("http://x");
+        missing.setModel("mx");
+        missing.setApiKey("sk-x");
+        assertThrows(NotFoundException.class, () -> store.updateModel(missing));
+        // base-url/full-url 同时填 → IllegalArgumentException。
+        WorkerProperties.Model both = new WorkerProperties.Model();
+        both.setConfigId("a");
+        both.setBaseUrl("http://a");
+        both.setFullUrl("https://x/v1/chat/completions");
+        both.setModel("ma2");
+        assertThrows(IllegalArgumentException.class, () -> store.updateModel(both));
+        // 文件断言:provider 已落盘。
+        Path external = homeDir.resolve("application-worker.yaml");
+        try (InputStream in = Files.newInputStream(external)) {
+            Map<String, Object> root = new Yaml().load(in);
+            List<?> models = (List<?>) ((Map<?, ?>) root.get("worker")).get("models");
+            assertEquals(1, models.size());
+            Map<?, ?> a = (Map<?, ?>) models.get(0);
+            assertEquals("pa2", a.get("provider"));
+            assertEquals("ma2", a.get("model"));
+            assertEquals("sk-a", a.get("api-key"));
+        }
+    }
+
     // ---- 辅助 ----
 
     private static WorkerProperties props(WorkerProperties.Model... models) {

@@ -28,6 +28,7 @@ export interface WorkerUsageSummary {
   inputTokens?: number
   outputTokens?: number
   totalTokens?: number
+  cacheReadTokens?: number
   contextWindowTokens?: number | null
   model?: string | null
 }

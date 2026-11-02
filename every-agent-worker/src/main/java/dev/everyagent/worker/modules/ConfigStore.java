@@ -102,22 +102,9 @@ public class ConfigStore {
      * @throws IllegalArgumentException configId 为空/重复、模型名缺失,或 base-url/full-url 未二选一
      */
     public synchronized int addModel(WorkerProperties.Model model) {
-        if (model == null || model.getConfigId() == null || model.getConfigId().isBlank()) {
-            throw new IllegalArgumentException("config-id 不能为空");
-        }
+        validateModelFields(model);
         String id = model.getConfigId().trim();
         model.setConfigId(id);
-        if (model.getModel() == null || model.getModel().isBlank()) {
-            throw new IllegalArgumentException("模型名不能为空");
-        }
-        boolean hasBaseUrl = model.getBaseUrl() != null && !model.getBaseUrl().isBlank();
-        boolean hasFullUrl = model.getFullUrl() != null && !model.getFullUrl().isBlank();
-        if (hasBaseUrl && hasFullUrl) {
-            throw new IllegalArgumentException("base-url 与 full-url 只能填一项");
-        }
-        if (!hasBaseUrl && !hasFullUrl) {
-            throw new IllegalArgumentException("base-url 与 full-url 必须填一项");
-        }
         List<WorkerProperties.Model> current = props.getModels() == null
                 ? new ArrayList<>() : new ArrayList<>(props.getModels());
         for (WorkerProperties.Model m : current) {
@@ -156,6 +143,73 @@ public class ConfigStore {
         rebuild(current);
         log.info("[config] 删除模型配置: {}(剩 {} 条,已落盘 application-worker.yaml)", id, current.size());
         return current.size();
+    }
+
+    /**
+     * 更新模型配置(设置页「模型配置」表格的编辑入口):按 {@code configId} 定位已存在条目,
+     * 用传入值整条覆盖并落盘 + 热重建。{@code apiKey} 留空/缺省 = 保持原 key 不变
+     * (明文不出 worker,前端仅见掩码);{@code params}/{@code isDefault} 缺省同样保留原值,
+     * 其余字段按传入值覆盖。条目不存在 → {@link NotFoundException}。
+     * 调用方负责广播 config.changed{keys:["models"]}。
+     *
+     * @return 落盘后的模型条目总数
+     */
+    public synchronized int updateModel(WorkerProperties.Model model) {
+        validateModelFields(model);
+        String id = model.getConfigId().trim();
+        model.setConfigId(id);
+        List<WorkerProperties.Model> current = props.getModels() == null
+                ? new ArrayList<>() : new ArrayList<>(props.getModels());
+        int idx = -1;
+        for (int i = 0; i < current.size(); i++) {
+            WorkerProperties.Model m = current.get(i);
+            if (m != null && m.getConfigId() != null && m.getConfigId().trim().equals(id)) {
+                idx = i;
+                break;
+            }
+        }
+        if (idx < 0) {
+            throw new NotFoundException("模型配置不存在: " + id);
+        }
+        WorkerProperties.Model existing = current.get(idx);
+        // apiKey 留空/缺省 → 保持原 key(前端仅见掩码,无法回填明文)。
+        if (model.getApiKey() == null || model.getApiKey().isEmpty()) {
+            model.setApiKey(existing.getApiKey());
+        }
+        // params/isDefault 缺省 → 保留原值(编辑表单不暴露这两项)。
+        if (model.getParams() == null || model.getParams().isEmpty()) {
+            model.setParams(existing.getParams());
+        }
+        if (model.getIsDefault() == null) {
+            model.setIsDefault(existing.getIsDefault());
+        }
+        current.set(idx, model);
+        writeModelsToExternal(current);
+        props.setModels(current);
+        rebuild(current);
+        log.info("[config] 更新模型配置: {}(共 {} 条,已落盘 application-worker.yaml)", id, current.size());
+        return current.size();
+    }
+
+    /**
+     * 模型配置字段校验(add/update 共用):configId 非空、model 非空、
+     * baseUrl/fullUrl 二选一(都填或都不填 → IllegalArgumentException)。
+     */
+    private static void validateModelFields(WorkerProperties.Model model) {
+        if (model == null || model.getConfigId() == null || model.getConfigId().isBlank()) {
+            throw new IllegalArgumentException("config-id 不能为空");
+        }
+        if (model.getModel() == null || model.getModel().isBlank()) {
+            throw new IllegalArgumentException("模型名不能为空");
+        }
+        boolean hasBaseUrl = model.getBaseUrl() != null && !model.getBaseUrl().isBlank();
+        boolean hasFullUrl = model.getFullUrl() != null && !model.getFullUrl().isBlank();
+        if (hasBaseUrl && hasFullUrl) {
+            throw new IllegalArgumentException("base-url 与 full-url 只能填一项");
+        }
+        if (!hasBaseUrl && !hasFullUrl) {
+            throw new IllegalArgumentException("base-url 与 full-url 必须填一项");
+        }
     }
 
     /**

@@ -27,9 +27,23 @@ export const WORKSPACE_ROOT = '/'
 /** Git 元数据目录名。 */
 export const GIT_DIR_NAME = '.git'
 
-/** 应用内部保留目录集合(资源树默认隐藏)。 */
+/**
+ * 应用内部保留目录集合(资源树默认隐藏):VCS / IDE 元数据 + 构建产物 / 依赖目录。
+ * 与 worker `SlashMethods.HIDDEN_DIR_NAMES` 对齐——依赖/构建目录扇出极大,
+ * 默认不进业务可见树(导出 zip 等场景一并跳过)。
+ */
 export const INTERNAL_DIR_NAMES = new Set<string>([
   GIT_DIR_NAME,
+  '.idea',
+  '.vscode',
+  'node_modules',
+  'target',
+  'dist',
+  'build',
+  'release',
+  'out',
+  'bin',
+  '__pycache__',
 ])
 
 /** 规范化工作区相对路径:反斜杠归一、去重复分隔符、去首尾分隔符。 */

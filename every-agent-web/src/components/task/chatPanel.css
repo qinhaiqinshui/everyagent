@@ -773,7 +773,6 @@
    样式对齐项目 ui-chip--command：accent-blue-dim 背景 + accent-blue 文字、
    无边框，与 footer 胶囊统一视觉语言（暗/亮两套主题均通过 CSS 变量自适应）。 */
 .nagent-inline-chip--replay {
-  max-width: 100%;
   border-color: transparent;
   background: var(--accent-blue-dim);
   color: var(--accent-blue);
@@ -781,6 +780,56 @@
 
 .nagent-inline-chip--replay:hover {
   background: color-mix(in srgb, var(--accent-blue) 20%, var(--accent-blue-dim));
+}
+
+/* 任务列表标题胶囊渲染:覆盖 user-replay 的 pre-wrap/word-break,
+   强制单行 + nowrap,配合父级 overflow:hidden + text-overflow:ellipsis
+   实现侧边栏宽度自适应截断(拉宽可见更多内容)。 */
+.nagent-task-title-replay {
+  white-space: nowrap !important;
+  word-break: normal !important;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* TokenRichText 单行模式(任务列表标题/弹窗列表条目等窄条场景,组件 prop
+   singleLine 挂载):根块级容器 nowrap + ellipsis 自截断;单行约束逐层传导到
+   后代——文本段(.nagent-msg__inline-text)与嵌套胶囊渲染容器
+   (.nagent-msg__content--user-replay,胶囊 label 内嵌小胶囊时的子根)都自带
+   显式 pre-wrap/word-break,显式声明优先于继承,必须用更高优先级选择器压回,
+   否则标题会被撑成多行。 */
+.nagent-msg__content--single-line {
+  white-space: nowrap;
+  word-break: normal;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nagent-msg__content--single-line .nagent-msg__inline-text,
+.nagent-msg__content--single-line .nagent-msg__content--user-replay {
+  white-space: nowrap;
+  word-break: normal;
+}
+
+.nagent-task-title-replay .nagent-inline-chip--replay {
+  pointer-events: none;
+}
+
+/* 嵌套胶囊（胶囊 label 内再嵌胶囊，如「等待任务」胶囊内嵌目标任务标题的引用胶囊）：
+   更紧凑的次级视觉——缩小内边距与字号、去掉 hover 反馈（次级内容不可单独点击，
+   点击语义归属外层胶囊）。 */
+.nagent-inline-chip--nested {
+  padding: 0 3px;
+  font-size: calc(var(--text-xs) * 0.95);
+  /* 嵌套层更紧的宽度上限：外层胶囊本体已有 300px 上限，内层若同样吃满 300px，
+     整个外层胶囊会被内层独占、外层文字（如「等待「」）全被挤没。 */
+  max-width: min(220px, 100%);
+}
+
+.nagent-inline-chip--nested,
+.nagent-inline-chip--nested:hover {
+  cursor: inherit;
+  background: color-mix(in srgb, var(--bg-primary) 45%, var(--accent-blue-dim));
 }
 
 .nagent-msg__selection-summary {
@@ -1748,6 +1797,11 @@
   align-items: center;
   gap: 4px;
   vertical-align: baseline;
+  /* 胶囊宽度上限（核心约束，2026-11）：label 可能内嵌整段任务标题（如「等待任务」
+     胶囊嵌目标任务 rawContent），无上限会把整行撑爆；超出部分由 __label 的
+     单行省略截断收口（完整内容看胶囊 title tooltip）。
+     min(300px, 100%) 兼顾窄容器（任务列表条目 / 移动端编辑器）。 */
+  max-width: min(300px, 100%);
   padding: 1px 4px 1px 6px;
   margin: 0 1px;
   border-radius: 999px;
@@ -1772,6 +1826,11 @@
 .nagent-inline-chip__label {
   font-style: normal;
   min-width: 0;
+  /* 配合胶囊 max-width 的单行省略截断（flex item 需 min-width:0 才能收缩；
+     ✕ 关闭钮 flex-shrink:0 不被挤压）。 */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .nagent-inline-chip__close {

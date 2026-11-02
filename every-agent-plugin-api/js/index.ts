@@ -418,6 +418,59 @@ export interface ComposerChipActionDefinition {
   onActivate: (ctx: ComposerChipActivationContext) => void
 }
 
+// ─── Slash 命令 provider（ui.slash_command_providers） ────────────────────
+
+/** 插件 `/` 候选被选中后的插入结果（形态对齐宿主 SlashSelectionResult）。 */
+export interface PluginSlashSelectionResult {
+  /** 要插入的 opaque token 串或纯文本（空串 = 清除触发段、不插入任何内容）。 */
+  token: string
+  /** 放置位置：'inline' → 原地插入；'bottom' → 走底部胶囊（由调用方处理）。 */
+  position: 'inline' | 'bottom'
+  /** 胶囊归属条目 id（可选，多结果联动时各自归属）。 */
+  id?: string
+}
+
+/** select 上下文（宿主在选中 `/` 候选时构造；插件可选消费，如定向拉取任务列表）。 */
+export interface PluginSlashSelectContext {
+  /** 当前任务 ID（草稿态为 undefined）。 */
+  taskId?: string
+  /** 当前工作区根。 */
+  workspace?: string
+  /** 当前 worker ID。 */
+  workerId?: string
+}
+
+/** 插件贡献的单个 `/` 候选项（展示字段 + select 回调）。 */
+export interface PluginSlashCommandItem {
+  /** 全局唯一条目 id（用于 React key 与跨 provider 去重）。 */
+  id: string
+  /** 展示标题。 */
+  title: string
+  /** 副内容（可选）。 */
+  subtitle?: string
+  /** 内联 SVG 字符串（可选，缺省使用通用图标）。 */
+  icon?: string
+  /** 分组名（可选，缺省收进无标题分组）。 */
+  group?: string
+  /** 新建任务时是否默认选中（默认 false）。 */
+  defaultSelected?: boolean
+  /** 选中回调：返回单个或一组插入结果（可异步）。 */
+  select: (ctx?: PluginSlashSelectContext) =>
+    PluginSlashSelectionResult | PluginSlashSelectionResult[]
+    | Promise<PluginSlashSelectionResult | PluginSlashSelectionResult[]>
+}
+
+/**
+ * Slash 命令 provider 定义（由 `ui.slash_command_providers` 扩展点产出）。
+ * 宿主桥接进本地 slashCommandRegistry，与 worker 远端条目统一按 id 去重混排。
+ */
+export interface PluginSlashCommandProviderDefinition {
+  /** 全局唯一 provider id。 */
+  id: string
+  /** 拉取该 provider 的全部条目（可异步）；workerId 为可选透传参数。 */
+  load: (workerId?: string) => PluginSlashCommandItem[] | Promise<PluginSlashCommandItem[]>
+}
+
 // ─── 轮末展示区（ui.round_tail_panels） ─────────────────────────────────
 
 /** 轮末展示区组件的 props（通用轮次上下文，不含任何文件变更专属字段）。 */
@@ -889,11 +942,36 @@ export interface ThemeDefinition {
 
 // ─── UI 注册表 ────────────────────────────────────────────────────────────
 
+/** 插件模态对话框主体内容组件的 props（宿主注入收口回调）。 */
+export interface PluginDialogProps<R = unknown> {
+  /**
+   * 收口当前对话框：close(result) resolve Promise 为 result；
+   * close(null) 视为取消（resolve null）。
+   */
+  close: (result: R | null) => void
+}
+
+/**
+ * 插件模态对话框请求（由 `ctx.ui.showDialog` 传入）。
+ * 宿主负责遮罩 / 居中浮层 / Esc / 点遮罩取消 / 焦点管理；
+ * 插件 Content 组件只负责渲染主体内容与调用 close() 收口。
+ */
+export interface PluginDialogRequest<R = unknown> {
+  /** 模态标题。 */
+  title: string
+  /** 标题下副标题（可选）。 */
+  description?: string
+  /** 主体内容组件（props = PluginDialogProps<R>）。 */
+  Content: ComponentType<PluginDialogProps<R>>
+}
+
 export interface UiRegistry {
   registerSidebarItem(def: UiSidebarItemDefinition): Disposable
   registerWorkspaceTabType(def: UiWorkspaceTabTypeDefinition): Disposable
   registerFileSidebarPanel(def: UiFileSidebarPanelDefinition): Disposable
   registerComposerAbovePanel(def: UiComposerAbovePanelDefinition): Disposable
+  /** 注册 `/` 命令 provider（由 `ui.slash_command_providers` 扩展点产出，条目经宿主桥接进 `/` 菜单）。 */
+  registerSlashCommandProvider(def: PluginSlashCommandProviderDefinition): Disposable
   registerToolCallView(def: ToolCallViewDefinition): Disposable
   registerUserMessageAction(def: UiUserMessageActionDefinition): Disposable
   registerTaskRunSubmitContributionProvider(provider: TaskRunSubmitContributionProvider): Disposable
@@ -956,8 +1034,58 @@ export interface UiRegistry {
     /** 追加前是否补空格分隔（默认 true）。 */
     spaced?: boolean
   }): void
+  /**
+   * 构造一枚胶囊的 opaque token 串并返回（与 `appendComposerToken` 同源单点编码，
+   * 只是不追加草稿，由插件自行决定插入位置/时机）。`kind`/`label` 为空时抛错。
+   */
+  buildComposerToken(input: { kind: string; label: string; summary?: string; payload?: Record<string, unknown> }): string
   /** 用 rawContent（可能含 opaque token 串）替换整个草稿（编辑重发回填用）。 */
   setComposerRawContent(rawContent: string): void
+  /**
+   * 全局轻提示（对标宿主 showToast / antd message）。
+   *
+   * 供插件在非 React 上下文（如 slash select 回调）向用户反馈操作结果——
+   * 如「没有可等待的任务」等无法以组件态承载的瞬态提示。
+   * 宿主委托 antd message（带主题/上下文），未注册时降级静态 message。
+   */
+  showToast(message: string, type?: 'success' | 'error' | 'info' | 'warning'): void
+  /**
+   * 弹出全局模态对话框并挂起等待用户收口，返回 Promise。
+   *
+   * 与 showToast 一样由宿主**全局挂载一次**（不依附任何 composer / 标签页），
+   * 故在任意上下文（草稿态、真实任务、文件页等）调用都能可靠弹出——
+   * 这是相对 `composer_above_panel`（依附输入框上方插槽，会随 composer 挂载
+   * 而漏挂）的根本优势，适合瞬态模态交互（如「选择要等待的任务」）。
+   *
+   * 形态对齐 `kind_views`：宿主出模态壳（遮罩 + 居中浮层 + Esc/点遮罩 = 取消 +
+   * 焦点管理），插件出主体 `Content` 组件（接收 `close(result)` prop 收口；
+   * `result` 即 resolve 值，`close(null)` / Esc / 点遮罩 resolve null）。
+   *
+   * @param request.title        模态标题
+   * @param request.description  标题下副标题（可选）
+   * @param request.Content      主体内容组件，props 注入 `close(result)`
+   * @returns 用户收口值；取消 / Esc / 点遮罩 / 插件卸载 → null
+   */
+  showDialog<R = unknown>(request: PluginDialogRequest<R>): Promise<R | null>
+
+  /**
+   * 宿主注入的「token 富文本」渲染组件：把 rawContent（可含 opaque token 串，嵌套
+   * token 整体成段）渲染为「文本段 + 内联胶囊」，胶囊 label 内再嵌 token 时递归渲染
+   * 小胶囊（深度上限内）。与用户消息回放 / 侧边栏任务列表标题同一套渲染逻辑
+   * （宿主 `composerToken/TokenRichText.tsx` 单点实现；本包零运行时代码、只声明类型）。
+   *
+   * 用途：任务标题（=rawContent 原样，含胶囊串）需要胶囊化展示的场景——如「选择要
+   * 等待的任务」候选列表。胶囊样式随宿主主题；`interactive=false` 纯展示（不响应
+   * 胶囊点击）、`singleLine=true` 单行截断（任务列表/弹窗列表条目等窄条场景，嵌套
+   * 胶囊也压回单行）。可选注入（旧宿主可能缺席）：插件侧缺席时降级为纯文本展示。
+   */
+  readonly TokenRichText?: ComponentType<{ text: string; className?: string; interactive?: boolean; singleLine?: boolean }>
+
+  /**
+   * 把可含 opaque token 串的文本拍平为纯 label 明文（嵌套递归拍平）。
+   * 纯文本展示场景（标签标题、toast 文案、tooltip 等）用；胶囊展示场景用 TokenRichText。
+   */
+  toPlainText?(text: string): string
 }
 
 // ─── PluginContext / PluginModule ─────────────────────────────────────────
