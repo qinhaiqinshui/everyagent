@@ -3,7 +3,9 @@
  *
  * CollapsibleUserBubble 全套自 AgentMessageThread 原位迁入(行为等价迁移):
  * - 回放胶囊段:rawContent 的 opaque 串自包含切分回放(@文件胶囊等),点击经
- *   `ui.composer_chip_actions` 扩展点或只读详情层;
+ *   `ui.composer_chip_actions` 扩展点或只读详情层——2026-11 起切分与胶囊渲染
+ *   (含嵌套支持)统一收敛到公共组件 `TokenRichText`(composerToken/TokenRichText.tsx,
+ *   与任务列表标题/插件弹窗同一套渲染逻辑);
  * - 子 agent 输入判定 `agentId !== mainAgentId`(空串安全):低调样式 +
  *   折叠阈值 66px(≈3行;普通 220px),不带用户消息动作扩展点(不可编辑重发);
  * - 用户消息动作扩展点 `ui.user_message_actions`(seq = item.seq 直取)。
@@ -14,12 +16,9 @@
 import React from 'react'
 import type { ChatComposerToken } from '@/types'
 import type { UserMessagePayload } from '@/task/threadItem'
-import { splitComposerRawContent, parseOpaqueTokenText } from '@/composerToken/composerOpaqueToken'
-import { getComposerChipView } from '@/composerToken/composerChipRenderer'
-import { openSlashItemDetail } from '@/components/taskComposer/SlashItemDetailPopover'
+import { splitComposerRawContent } from '@/composerToken/composerOpaqueToken'
+import TokenRichText from '@/composerToken/TokenRichText'
 import { pluginDispatcher } from '@/plugin/PluginDispatcher'
-import { taskStore } from '@/task/taskStore'
-import { workspaceRegistry } from '@/hub/workspaceRegistry'
 import { ChevronDownIcon, ChevronRightIcon } from '@/components/shared/AppGlyphs'
 import type { KindViewProps } from './registry'
 
@@ -60,85 +59,23 @@ export function buildUserMessageReplaySegments(message: {
   }))
 }
 
-function UserMessageReplay({
-  segments,
+/**
+ * 用户消息回放胶囊渲染(薄封装,公开导出):切分/胶囊/嵌套/点击行为全部由公共组件
+ * `TokenRichText` 承接。保留本导出以兼容既有引用(TasksPanel 等)并统一升级点。
+ */
+export function UserMessageReplay({
+  segments: _segments,
+  text,
   taskId,
 }: {
-  segments: UserReplaySegment[]
+  /** 旧入参(预切分段)。仍传入时忽略——渲染统一走 TokenRichText 自切分。 */
+  segments?: UserReplaySegment[]
+  /** 直接文本(rawContent 或纯文本);缺省时由调用方继续传 segments 的拼接值。 */
+  text?: string
   /** 当前 Task ID(点击 workspace_file 胶囊打开文件标签页时反查任务工作区根)。 */
   taskId?: string
-}) {
-  if (segments.length === 0) {
-    return null
-  }
-
-  /**
-   * 胶囊激活(点击/Enter/空格):按 kind 查胶囊激活扩展点(ui.composer_chip_actions)。
-   * 命中即回调注册方行为(核心 `system.workspace_file` 亦经此扩展点注册 → 打开文件标签页);
-   * 未命中保持现状(弹只读详情层)。
-   */
-  const handleChipActivate = (el: HTMLElement, token: ChatComposerToken) => {
-    const action = pluginDispatcher.findComposerChipAction(token.kind)
-    if (action) {
-      action.onActivate({
-        token: {
-          kind: token.kind,
-          label: token.label,
-          summary: token.summary,
-          opaqueText: token.opaqueText,
-          payload: parseOpaqueTokenText(token.opaqueText)?.payload ?? {},
-        },
-        anchor: el,
-        source: 'replay',
-        // 消费侧解析工作区根:任务工作区优先、注册表首选兜底。
-        workspaceRoot: (taskId ? taskStore.get(taskId)?.workspace : undefined) || workspaceRegistry.primaryRoot() || '',
-        taskId,
-      })
-      return
-    }
-    // 未命中 → 保持现状:弹只读详情层。
-    openSlashItemDetail(el, { token })
-  }
-
-  return (
-    <div className="nagent-msg__content nagent-msg__content--user-replay">
-      {segments.map((segment, index) => {
-        if (segment.type === 'text') {
-          return (
-            <span key={`text:${index}`} className="nagent-msg__inline-text">
-              {segment.value}
-            </span>
-          )
-        }
-        const view = segment.token ? getComposerChipView(segment.token) : { tokenId: `tok:${index}`, label: segment.value }
-        return (
-          <span
-            key={`token:${index}:${view.tokenId}`}
-            className="nagent-inline-chip nagent-inline-chip--replay"
-            title={view.label || segment.value}
-            role="button"
-            tabIndex={0}
-            onClick={(event) => {
-              event.stopPropagation()
-              if (segment.token) {
-                const el = event.currentTarget as HTMLElement
-                handleChipActivate(el, segment.token)
-              }
-            }}
-            onKeyDown={(event) => {
-              if (segment.token && (event.key === 'Enter' || event.key === ' ')) {
-                event.preventDefault()
-                const el = event.currentTarget as HTMLElement
-                handleChipActivate(el, segment.token)
-              }
-            }}
-          >
-            <span className="nagent-inline-chip__label">{view.label || segment.value}</span>
-          </span>
-        )
-      })}
-    </div>
-  )
+}): React.ReactNode {
+  return <TokenRichText text={text ?? ''} taskId={taskId} />
 }
 
 /** 用户消息气泡折叠阈值(px):内容高度超过该值时折叠并显示展开按钮。 */
@@ -153,12 +90,16 @@ const SUB_AGENT_BUBBLE_COLLAPSE_HEIGHT = 66
  */
 function CollapsibleUserBubble({
   className,
-  segments,
+  text,
+  tokens,
   taskId,
   collapseHeight = USER_BUBBLE_COLLAPSE_HEIGHT,
 }: {
   className: string
-  segments: UserReplaySegment[]
+  /** 原始文本(rawContent 优先,含 opaque token 串;缺失回退 content 纯文本)。 */
+  text?: string
+  /** 可选 composer tokens(命中时优先用真实 id)。 */
+  tokens?: ChatComposerToken[]
   /** 当前 Task ID(透传给 UserMessageReplay,点击 workspace_file 胶囊时反查工作区根)。 */
   taskId?: string
   /** 折叠阈值(px):内容高度超过该值时折叠;缺省 = 普通用户消息阈值(220px)。 */
@@ -191,7 +132,7 @@ function CollapsibleUserBubble({
         className="nagent-msg__bubble-content"
         style={collapsed ? { maxHeight: `${collapseHeight}px` } : undefined}
       >
-        <UserMessageReplay segments={segments} taskId={taskId} />
+        <UserMessageReplay text={text} taskId={taskId} />
       </div>
       {overflowing ? (
         <button
@@ -243,7 +184,6 @@ export function UserBubbleMessage({
   taskId,
   mainAgentId = '',
 }: UserBubbleMessageProps): React.ReactNode {
-  const replaySegments = buildUserMessageReplaySegments(message)
   // 子 agent 输入判定:agentId 非空且 ≠ mainAgentId(空串安全:合成骨架/mainAgentId 未灌入时落回 false)。
   const isSubAgentInput = Boolean(message.agentId) && message.agentId !== mainAgentId
   // 用户消息动作(扩展点 ui.user_message_actions,如复制原始内容/编辑重发按钮):
@@ -277,7 +217,8 @@ export function UserBubbleMessage({
         ) : null}
         <CollapsibleUserBubble
           className={`nagent-msg__bubble nagent-msg__bubble--user${isSubAgentInput ? ' nagent-msg__bubble--sub-agent' : ''}`}
-          segments={replaySegments}
+          text={message.rawContent?.length ? message.rawContent : message.content}
+          tokens={message.composerTokens}
           taskId={taskId}
           collapseHeight={isSubAgentInput ? SUB_AGENT_BUBBLE_COLLAPSE_HEIGHT : undefined}
         />

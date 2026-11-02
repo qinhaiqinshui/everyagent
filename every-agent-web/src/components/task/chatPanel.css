@@ -797,6 +797,20 @@
   pointer-events: none;
 }
 
+/* 嵌套胶囊（胶囊 label 内再嵌胶囊，如「等待任务」胶囊内嵌目标任务标题的引用胶囊）：
+   更紧凑的次级视觉——缩小内边距与字号、去掉 hover 反馈（次级内容不可单独点击，
+   点击语义归属外层胶囊）。 */
+.nagent-inline-chip--nested {
+  padding: 0 3px;
+  font-size: calc(var(--text-xs) * 0.95);
+}
+
+.nagent-inline-chip--nested,
+.nagent-inline-chip--nested:hover {
+  cursor: inherit;
+  background: color-mix(in srgb, var(--bg-primary) 45%, var(--accent-blue-dim));
+}
+
 .nagent-msg__selection-summary {
   width: 100%;
   display: flex;

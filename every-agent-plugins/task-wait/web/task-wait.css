@@ -47,6 +47,23 @@
   color: var(--text-primary);
 }
 
+/* 标题的胶囊渲染（宿主 TokenRichText 注入）：宿主组件外层是
+   .nagent-msg__content--user-replay（pre-wrap），在弹窗单行条目里改为
+   inline + nowrap，配合父级 ellipsis 截断；胶囊字号随条目略缩。 */
+.task-wait-picker__item-title .task-wait-picker__title-tokens {
+  display: inline;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+}
+
+.task-wait-picker__item-title .nagent-inline-chip--replay {
+  pointer-events: none;
+  font-size: var(--text-2xs);
+  padding: 0 4px;
+}
+
 /* 状态徽标：running 蓝 / waiting-user 琥珀 / created 中性灰（配色自管走 token） */
 .task-wait-picker__badge {
   flex-shrink: 0;

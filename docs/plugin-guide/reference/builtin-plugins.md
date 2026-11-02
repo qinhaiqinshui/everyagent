@@ -49,7 +49,7 @@ has_children: false
 | task-edit-resend | 编辑重发 | both | TaskLifecycleNode | `ui.user_message_actions` + `task.submit_contributions` | 节点 877 | 入口 27 行 + web 26 行 |
 | task-input-queue | 任务输入队列 | both | TaskLifecycleNode ×2 + AdvisorProvider；RPC ×3（`task.queue*`） | `ui.composer_above_panel` | 节点 15 / 870；Advisor DO+30 | 入口 38 行 + web 24 行 |
 | task-queue | 任务队列 | java | TaskLifecycleNode + TaskAdmissionPolicy；RPC `task.queueList` | — | 节点 40 ⚠️ | 入口 31 行 |
-| task-wait | 等待任务 | both | SlashTokenResolver + TaskLifecycleNode + AdvisorProvider | `ui.slash_command_providers` + `ui.composer_above_panel` + `ui.composer_chip_actions` + `ui.kind_views` | 节点 879；Advisor DO+40 | — |
+| task-wait | 等待任务 | both | SlashTokenResolver + TaskLifecycleNode + AdvisorProvider | `ui.slash_command_providers` + `ui.composer_above_panel` + `ui.composer_chip_actions` + `ui.kind_views` | 节点 879；Advisor DO+40；token 扫描支持嵌套（`SlashTokenEncoder.scanTokens` 平衡配对）、选择框标题经 `ctx.ui.TokenRichText` 胶囊渲染 | — |
 | token-estimator | Token 估算与校准 | java | TokenEstimator + AdvisorProvider ×1（校准） | — | 校准 0 | 入口 50 行 |
 | transient-error-retry | 瞬时错误退避重试 | java | AdvisorProvider | — | DO+200 | 入口 21 行 |
 | unattended | 无人值守 | java | ToolExecutionInterceptor + AuthorizationHandler + SlashProvider + SlashTokenResolver | — | — | 入口 32 行 |

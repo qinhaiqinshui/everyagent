@@ -19,8 +19,7 @@ import ConfirmDialog from '@/components/shared/ConfirmDialog'
 import PropertiesDialog from '@/components/shared/PropertiesDialog'
 import { buildWorkspacePropertyItems, getWorkspaceDisplayName } from '@/components/shared/workspacePropertyUtils'
 import { Checkbox } from 'antd'
-import { buildUserMessageReplaySegments } from '@/components/task/kindViews/userMessageView'
-import { getComposerChipView } from '@/composerToken/composerChipRenderer'
+import TokenRichText from '@/composerToken/TokenRichText'
 import { stripTokensToLabels } from '@/composerToken/composerOpaqueToken'
 
 const runtimeService = getDefaultRuntimeService()
@@ -423,36 +422,17 @@ export default function TasksPanel({
   })
 
   /**
-   * 任务标题胶囊渲染:把 rawContent(含 opaque token)用与用户消息相同的胶囊渲染组件展示,
-   * 单行 nowrap + ellipsis,侧边栏拉宽时可见更多内容。
+   * 任务标题胶囊渲染:把 rawContent(含 opaque token 串,嵌套整体成段)交给公共组件
+   * TokenRichText 渲染(与用户消息视图/插件弹窗同一套渲染逻辑),单行 nowrap +
+   * ellipsis 截断,侧边栏拉宽时可见更多内容;胶囊不可交互(点击语义归任务行打开)。
    */
-  const renderTaskTitle = (task: TaskListItemSnapshot) => {
-    const segments = buildUserMessageReplaySegments({ rawContent: task.displayTitle })
-    if (segments.length === 0) {
-      return <span>{task.displayTitle}</span>
-    }
-    return (
-      <span className="nagent-msg__content nagent-msg__content--user-replay nagent-task-title-replay">
-        {segments.map((segment, index) => {
-          if (segment.type === 'text') {
-            return <span key={`text:${index}`}>{segment.value}</span>
-          }
-          const view = segment.token
-            ? getComposerChipView(segment.token)
-            : { tokenId: `tok:${index}`, label: segment.value }
-          return (
-            <span
-              key={`token:${index}:${view.tokenId}`}
-              className="nagent-inline-chip nagent-inline-chip--replay"
-              title={view.label || segment.value}
-            >
-              <span className="nagent-inline-chip__label">{view.label || segment.value}</span>
-            </span>
-          )
-        })}
-      </span>
-    )
-  }
+  const renderTaskTitle = (task: TaskListItemSnapshot) => (
+    <TokenRichText
+      text={task.displayTitle}
+      className="nagent-task-title-replay"
+      interactive={false}
+    />
+  )
 
   const renderTaskCard = (task: TaskListItemSnapshot, groupKey: string) => {
     // 高亮只跟随父级当前任务，避免本地状态滞后造成旧任务残留边框。

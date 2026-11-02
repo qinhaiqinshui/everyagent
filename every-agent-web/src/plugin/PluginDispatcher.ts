@@ -26,10 +26,11 @@ import type {
   ThemeDefinition,
   PluginSlashCommandProviderDefinition,
 } from '@everyagent/plugin-api'
+import type { ComponentType } from 'react'
 import { appendComposerTextQueued, getComposerBridge, getShellBridge } from './pluginRuntimeBridge'
 import { activeTabMirror } from './activeTabMirror'
 import { openDialog } from './dialogBridge'
-import { buildOpaqueTokenText } from '@/composerToken/composerOpaqueToken'
+import { buildOpaqueTokenText, stripTokensToLabels } from '@/composerToken/composerOpaqueToken'
 import { antdMessage } from '@/utils/appAntdBridge'
 import type {
   UiSidebarItemDefinition,
@@ -45,6 +46,7 @@ import type {
 import type { FileContentEditorDescriptor } from '@/components/files/file-tab-types'
 import { registerTraceType as registerToTraceRegistry, unregisterTraceType as unregisterFromTraceRegistry } from './traceTypeRegistry'
 import { outputBlockRegistry } from './outputBlockRegistry'
+import HostTokenRichText from '@/composerToken/TokenRichText'
 import {
   ExtensionRegistry,
   ExtensionRegistryFactory,
@@ -268,6 +270,16 @@ export interface RealPluginDispatcher {
    * 渲染由 PluginDialogHost 全局挂载承接，不依附任何 composer/标签页）。
    */
   showDialog: <R = unknown>(request: PluginDialogRequest<R>) => Promise<R | null>
+  /**
+   * 宿主注入的「token 富文本」渲染组件（声明见 @everyagent/plugin-api UiRegistry）：
+   * 把可含 opaque token 串的文本渲染为「文本段 + 内联胶囊」（嵌套递归）。
+   * 与用户消息回放 / 任务列表标题同一实现（composerToken/TokenRichText.tsx）；
+   * getter 惰性解引用，避免与本模块（TokenRichText 经由 pluginDispatcher 查胶囊
+   * 激活动作）之间的模块初始化环。
+   */
+  readonly TokenRichText?: ComponentType<{ text: string; className?: string; interactive?: boolean }>
+  /** 把可含 opaque token 串（嵌套递归）的文本拍平为纯 label 明文。 */
+  toPlainText: (text: string) => string
 }
 
 export const pluginDispatcher: RealPluginDispatcher = {
@@ -505,5 +517,15 @@ export const pluginDispatcher: RealPluginDispatcher = {
   },
   showDialog(request) {
     return openDialog(request)
+  },
+
+  // 宿主注入的 token 渲染能力（声明见 @everyagent/plugin-api UiRegistry）：
+  // TokenRichText getter 惰性解引用——该组件经 pluginDispatcher 查胶囊激活动作，
+  // 惰性取用避开模块初始化环；toPlainText 直连宿主拍平函数（嵌套递归）。
+  get TokenRichText(): ComponentType<{ text: string; className?: string; interactive?: boolean }> {
+    return HostTokenRichText
+  },
+  toPlainText(text) {
+    return stripTokensToLabels(text)
   },
 }

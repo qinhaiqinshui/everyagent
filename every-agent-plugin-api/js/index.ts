@@ -1067,6 +1067,24 @@ export interface UiRegistry {
    * @returns 用户收口值；取消 / Esc / 点遮罩 / 插件卸载 → null
    */
   showDialog<R = unknown>(request: PluginDialogRequest<R>): Promise<R | null>
+
+  /**
+   * 宿主注入的「token 富文本」渲染组件：把 rawContent（可含 opaque token 串，嵌套
+   * token 整体成段）渲染为「文本段 + 内联胶囊」，胶囊 label 内再嵌 token 时递归渲染
+   * 小胶囊（深度上限内）。与用户消息回放 / 侧边栏任务列表标题同一套渲染逻辑
+   * （宿主 `composerToken/TokenRichText.tsx` 单点实现；本包零运行时代码、只声明类型）。
+   *
+   * 用途：任务标题（=rawContent 原样，含胶囊串）需要胶囊化展示的场景——如「选择要
+   * 等待的任务」候选列表。胶囊样式随宿主主题；`interactive=false` 纯展示（不响应
+   * 胶囊点击）。可选注入（旧宿主可能缺席）：插件侧缺席时降级为纯文本展示。
+   */
+  readonly TokenRichText?: ComponentType<{ text: string; className?: string; interactive?: boolean }>
+
+  /**
+   * 把可含 opaque token 串的文本拍平为纯 label 明文（嵌套递归拍平）。
+   * 纯文本展示场景（标签标题、toast 文案、tooltip 等）用；胶囊展示场景用 TokenRichText。
+   */
+  toPlainText?(text: string): string
 }
 
 // ─── PluginContext / PluginModule ─────────────────────────────────────────

@@ -6,10 +6,14 @@
  * 经 props.close(task|null) 收口。
  *
  * 键盘：↑/↓ 切换高亮行，Enter 选中高亮行（Esc 由宿主壳统一处理）。
+ * 任务标题（=rawContent 原样，可含 opaque token 串/嵌套 token）经宿主注入的
+ * TokenRichText（props 可选传入）渲染为「文本段 + 胶囊」；缺席时降级纯文本，
+ * tooltip 一律用 toPlainText 拍平明文（缺省原样）。
  * 样式沿用 task-wait-picker__* 类名（./task-wait.css），遮罩/浮层/头部类
  * 已随壳迁移到宿主（pluginDialogHost.css），本文件不再使用。
  */
 import React from 'react'
+import type { ComponentType, ReactNode } from 'react'
 import type { PluginDialogProps } from '@everyagent/plugin-api'
 import type { PickerTask } from './candidates'
 import './task-wait.css'
@@ -39,9 +43,29 @@ function statusTone(status: string): string {
 export interface WaitTaskPickerContentProps extends PluginDialogProps<PickerTask> {
   /** 候选任务列表（showDialog 调用方经闭包传入）。 */
   candidates: PickerTask[]
+  /** 宿主注入的 token 富文本渲染组件（可选；缺席时标题降级纯文本）。 */
+  TokenRichText?: ComponentType<{ text: string; className?: string; interactive?: boolean }>
+  /** 宿主注入的拍平函数（tooltip 等纯文本场景；缺席时原样）。 */
+  toPlainText?: (text: string) => string
 }
 
-export default function WaitTaskPickerContent({ candidates, close }: WaitTaskPickerContentProps): React.ReactNode {
+/** 单条候选的标题渲染：有宿主组件 → 胶囊化展示；否则纯文本降级。 */
+function renderPickerTitle(
+  task: PickerTask,
+  TokenRichText?: WaitTaskPickerContentProps['TokenRichText'],
+): ReactNode {
+  if (!TokenRichText) {
+    return task.title
+  }
+  return <TokenRichText text={task.title} className="task-wait-picker__title-tokens" interactive={false} />
+}
+
+export default function WaitTaskPickerContent({
+  candidates,
+  close,
+  TokenRichText,
+  toPlainText,
+}: WaitTaskPickerContentProps): React.ReactNode {
   // 高亮行下标（键盘 ↑/↓ / 鼠标 hover 联动）
   const [highlighted, setHighlighted] = React.useState(0)
 
@@ -82,8 +106,11 @@ export default function WaitTaskPickerContent({ candidates, close }: WaitTaskPic
               onMouseEnter={() => setHighlighted(index)}
               onClick={() => close(task)}
             >
-              <span className="task-wait-picker__item-title" title={task.title}>
-                {task.title}
+              <span
+                className="task-wait-picker__item-title"
+                title={toPlainText ? toPlainText(task.title) : task.title}
+              >
+                {renderPickerTitle(task, TokenRichText)}
               </span>
               <span className={`task-wait-picker__badge ${statusTone(task.status)}`}>
                 {statusLabel(task.status)}

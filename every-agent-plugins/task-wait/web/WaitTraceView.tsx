@@ -12,6 +12,10 @@
  * - error：「目标任务未成功完成，等待中止」（error 色）；
  * - cancelled：「本任务已取消，等待中止」。
  *
+ * targetTitle 来自任务 title 字段（=rawContent 原样，可含胶囊串/嵌套 token），
+ * 本行为窄条纯文本场景：经 props.toPlainText（activate 闭包注入的宿主
+ * `ctx.ui.toPlainText`）拍平为 label 明文；缺席时原样。
+ *
  * 整行可点（有 targetTaskId 时）→ openTargetTask 回调（activate 闭包注入的
  * ctx.ui.openTab('task', …)，见 index.ts）。data 可能整体缺失：全部字段安全读取。
  */
@@ -19,9 +23,11 @@ import React from 'react'
 import type { PluginKindViewProps } from '@everyagent/plugin-api'
 import './task-wait.css'
 
-/** 组件额外 props：activate 闭包注入的目标任务打开回调。 */
+/** 组件额外 props：activate 闭包注入的目标任务打开回调与拍平函数。 */
 export interface WaitTraceViewProps extends PluginKindViewProps {
   openTargetTask: (taskId: string, title: string) => void
+  /** 标题拍平函数（宿主 ctx.ui.toPlainText 注入；缺席时原样）。 */
+  toPlainText?: (text: string) => string
 }
 
 /** trace data 契约形状（后端 WaitTaskAdvisor 落盘字段）。 */
@@ -167,7 +173,7 @@ function CancelledGlyph(): React.ReactNode {
 }
 
 export default function WaitTraceView(props: WaitTraceViewProps): React.ReactNode {
-  const { payload, openTargetTask } = props
+  const { payload, openTargetTask, toPlainText } = props
   const data = readTraceData(payload)
 
   // waiting 态读秒：每 1s 重算（now - startedAt）；卸载 / 终态自动清定时器。
@@ -181,7 +187,7 @@ export default function WaitTraceView(props: WaitTraceViewProps): React.ReactNod
     return () => clearInterval(timer)
   }, [data.state, data.startedAt])
 
-  const title = `等待「${data.targetTitle}」`
+  const title = `等待「${toPlainText ? toPlainText(data.targetTitle) : data.targetTitle}」`
 
   let icon: React.ReactNode
   let meta: React.ReactNode

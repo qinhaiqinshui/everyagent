@@ -269,6 +269,11 @@ await ctx.fs.delete(workspaceRoot, 'docs/draft.md')
 
 其中 `buildComposerToken(input: { kind: string; label: string; summary?: string; payload?: Record<string, unknown> }): string` 与 `appendComposerToken` **同源单点编码**（宿主 `buildOpaqueTokenText`，`every-agent-web/src/composerToken/composerOpaqueToken.ts`）——只返回 opaque 串、**不追加草稿**（不走草稿桥，未绑定草稿也照常编码），供本地 slash provider（`ui.slash_command_providers`，[UI 扩展点](ui-extensions.md) §21）的 `select` 回调构造内联胶囊 token——插入时机与位置由 `select` 结果决定，不能用「追加到当前激活草稿」语义的 `appendComposerToken`；`kind`/`label` 为空同样由 `buildOpaqueTokenText` 抛错。
 
+另有 2 个**宿主注入的渲染能力**（2026-11，可选成员、旧宿主可能缺席，插件侧缺席时自行降级）：
+
+- `ctx.ui.TokenRichText?: ComponentType<{ text: string; className?: string; interactive?: boolean }>`——「token 富文本」渲染组件：把 rawContent（可含 opaque token 串，嵌套 token 整体成段）渲染为「文本段 + 内联胶囊」，胶囊 label 内再嵌 token 时递归渲染小胶囊（深度上限内）。与用户消息回放 / 侧边栏任务列表标题同一实现（宿主 `composerToken/TokenRichText.tsx` 单点；api 包零运行时代码、只声明类型）。任务标题（=rawContent 原样）需要胶囊化展示的场景用——范例：task-wait 选择框候选列表（`every-agent-plugins/task-wait/web/WaitTaskPickerContent.tsx`，`interactive={false}` 纯展示）。
+- `ctx.ui.toPlainText?(text: string): string`——把可含 token 串（嵌套递归）的文本拍平为纯 label 明文。标签标题、toast、tooltip 等纯文本场景用（胶囊展示场景用 `TokenRichText`）。
+
 ## 9. 寿命与清理
 
 **Disposable 语义是真的**：`events.on`（unsubscribe）、`ui.register*`（splice + notify）、`commands.registerCommand`（Map.delete）三种 Disposable 调 `dispose()` 都会立即生效（证据见各节）。宿主侧的代管与停用钩子有三条事实（前端卸载钩子上线后的口径）：

@@ -45,6 +45,15 @@ const WAIT_MENU_ICON =
 /** 本插件持有的可释放资源；deactivate() 时统一清理（保留标准出口）。 */
 const disposables: Disposable[] = []
 
+/**
+ * 纯文本形态辅助：标题（=rawContent 原样，可含胶囊串/嵌套 token）在纯文本场景
+ * （标签标题、trace 行等）经宿主 `ctx.ui.toPlainText` 拍平为 label 明文；宿主
+ * 未注入（旧版本）时原样返回。
+ */
+function toPlain(ctx: PluginContext, text: string): string {
+  return ctx.ui.toPlainText ? ctx.ui.toPlainText(text) : text
+}
+
 const taskWaitPlugin: PluginModule = {
   activate(ctx: PluginContext) {
     // ① `/` 候选 provider：条目在 load 时构造（select 闭包持 ctx）。
@@ -63,20 +72,23 @@ const taskWaitPlugin: PluginModule = {
         onActivate: (c) => {
           const p = readPayload(c.token.payload)
           if (p) {
-            ctx.ui.openTab('task', { taskId: p.targetTaskId, title: p.title })
+            // 标签标题是纯文本场景：title(=rawContent，可含胶囊串/嵌套)拍平后传入
+            ctx.ui.openTab('task', { taskId: p.targetTaskId }, toPlain(ctx, p.title))
           }
         },
       }),
     )
 
     // ③ 等待 trace 整行接管：activate 闭包捕获 ctx，经包装组件注入打开目标任务回调
+    //    与标题拍平函数（targetTitle=rawContent 原样，可含胶囊串/嵌套，纯文本行拍平展示）
     //    （.ts 入口不用 JSX，节点用 React.createElement 构造）。
     const WaitTraceViewWithCtx = (props: PluginKindViewProps) =>
       React.createElement(WaitTraceView, {
         ...props,
         openTargetTask: (taskId: string, title: string) => {
-          ctx.ui.openTab('task', { taskId, title })
+          ctx.ui.openTab('task', { taskId }, toPlain(ctx, title))
         },
+        toPlainText: (text: string) => toPlain(ctx, text),
       })
     disposables.push(ctx.ui.registerKindView(KIND, WaitTraceViewWithCtx))
   },
@@ -116,12 +128,15 @@ function slashItem(ctx: PluginContext): PluginSlashCommandItem {
         return [{ token: '', position: 'inline' }]
       }
       // 弹全局模态：宿主出壳（遮罩/居中浮层/Esc/聚焦），本插件出候选列表 Content。
-      // Content 闭包捕获候选列表（每次调用新建组件类型，showDialog 卸载即丢弃）。
+      // Content 闭包捕获候选列表（每次调用新建组件类型，showDialog 卸载即丢弃），
+      // 并透传宿主注入的 token 渲染能力（任务标题=rawContent 原样，胶囊化展示）。
       const candidates = tasks
       const Content = (props: { close: (result: PickerTask | null) => void }) =>
         React.createElement(WaitTaskPickerContent, {
           candidates,
           close: props.close,
+          TokenRichText: ctx.ui.TokenRichText,
+          toPlainText: ctx.ui.toPlainText,
         })
       const picked = await ctx.ui.showDialog<PickerTask>({
         title: '选择要等待的任务',
