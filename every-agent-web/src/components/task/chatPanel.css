@@ -773,7 +773,6 @@
    样式对齐项目 ui-chip--command：accent-blue-dim 背景 + accent-blue 文字、
    无边框，与 footer 胶囊统一视觉语言（暗/亮两套主题均通过 CSS 变量自适应）。 */
 .nagent-inline-chip--replay {
-  max-width: 100%;
   border-color: transparent;
   background: var(--accent-blue-dim);
   color: var(--accent-blue);
@@ -822,6 +821,9 @@
 .nagent-inline-chip--nested {
   padding: 0 3px;
   font-size: calc(var(--text-xs) * 0.95);
+  /* 嵌套层更紧的宽度上限：外层胶囊本体已有 300px 上限，内层若同样吃满 300px，
+     整个外层胶囊会被内层独占、外层文字（如「等待「」）全被挤没。 */
+  max-width: min(220px, 100%);
 }
 
 .nagent-inline-chip--nested,
@@ -1795,6 +1797,11 @@
   align-items: center;
   gap: 4px;
   vertical-align: baseline;
+  /* 胶囊宽度上限（核心约束，2026-11）：label 可能内嵌整段任务标题（如「等待任务」
+     胶囊嵌目标任务 rawContent），无上限会把整行撑爆；超出部分由 __label 的
+     单行省略截断收口（完整内容看胶囊 title tooltip）。
+     min(300px, 100%) 兼顾窄容器（任务列表条目 / 移动端编辑器）。 */
+  max-width: min(300px, 100%);
   padding: 1px 4px 1px 6px;
   margin: 0 1px;
   border-radius: 999px;
@@ -1819,6 +1826,11 @@
 .nagent-inline-chip__label {
   font-style: normal;
   min-width: 0;
+  /* 配合胶囊 max-width 的单行省略截断（flex item 需 min-width:0 才能收缩；
+     ✕ 关闭钮 flex-shrink:0 不被挤压）。 */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .nagent-inline-chip__close {

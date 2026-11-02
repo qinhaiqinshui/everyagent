@@ -1,6 +1,6 @@
 import React from 'react'
 import type { ChatComposerToken } from '@/types'
-import { splitComposerRawContent, parseOpaqueTokenText } from '@/composerToken/composerOpaqueToken'
+import { splitComposerRawContent, parseOpaqueTokenText, stripTokensToLabels } from '@/composerToken/composerOpaqueToken'
 import { buildTokenForPastedFile } from '@/services/pastedFileService'
 import { createSnowflakeId } from '@/utils/snowflakeId'
 import { openSlashItemDetail } from './SlashItemDetailPopover'
@@ -191,9 +191,14 @@ function mapNonZwToActual(text: string, nonZwPos: number): number {
 
 /** 生成单个胶囊的 HTML 字符串（统一样式，无逐类图标/配色）。 */
 function chipHtml(token: ChatComposerToken): string {
-  const label = escapeHtml(token.label)
+  // 展示 label 拍平：label 内嵌 opaque 串（嵌套 token，如「等待任务」胶囊嵌目标
+  // 任务标题）时，contenteditable 胶囊内无法内联渲染嵌套胶囊，拍平为 label 明文；
+  // 序列化只读 data-opaque（见 buildRawContentFromEditor），展示拍平不影响回传，
+  // data-label 仍保留原始 label 供消费方按需读取。
+  const displayLabel = token.label.includes('[[[[') ? stripTokensToLabels(token.label) : token.label
+  const label = escapeHtml(displayLabel)
   return (
-    `<span class="nagent-inline-chip" contenteditable="false"` +
+    `<span class="nagent-inline-chip" contenteditable="false" title="${escapeAttr(displayLabel)}"` +
     ` data-token-id="${escapeAttr(token.id)}"` +
     ` data-opaque="${escapeAttr(token.opaqueText)}" data-label="${escapeAttr(token.label)}">` +
     `<span class="nagent-inline-chip__label">${label}</span>` +

@@ -98,7 +98,9 @@ function ChipSegment({
     ? getComposerChipView(token)
     : { tokenId: 'tok:' + fallbackValue, label: fallbackValue }
   const label = view.label || fallbackValue
-  // label 里再嵌 token 串（嵌套胶囊）：递归渲染为胶囊内小胶囊；超深度上限拍平为明文
+  // label 里再嵌 token 串（嵌套胶囊）：递归渲染为胶囊内小胶囊；超深度上限拍平为明文。
+  // singleLine 恒定传入——胶囊本体是单行元素（white-space:nowrap），嵌套内容同样
+  // 不允许换行（否则会把胶囊撑成多行）；配合胶囊 max-width 由外向内逐层截断。
   const nested = depth < MAX_RENDER_DEPTH && label.includes('[[[[')
   const labelNode: React.ReactNode = nested
     ? (
@@ -107,7 +109,7 @@ function ChipSegment({
           className="nagent-inline-chip__label"
           interactive={false}
           depth={depth + 1}
-          singleLine={singleLine}
+          singleLine
         />
       )
     : <span className="nagent-inline-chip__label">{label}</span>
