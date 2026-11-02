@@ -53,7 +53,10 @@ public final class WaitTaskToken {
     /**
      * 扫描文本中全部等待胶囊引用（按出现顺序返回）。
      *
-     * <p>逐段扫描 opaque token（{@code [[[[…]]]]}），只解析 kind==task.wait 的段；
+     * <p>段扫描统一走 {@link SlashTokenEncoder#scanTokens}（<b>深度平衡配对</b>，
+     * 2026-11：任务标题原样存 rawContent 后，本胶囊的 label 会内嵌目标任务标题里的
+     * token 串，形成嵌套 token——简单 indexOf 配对会在内层 {@code }]]]} 处提前截断
+     * 外层、识别失败，必须按深度归零配对）。只解析 kind==task.wait 的段；
      * 解析失败 / 非本 kind / payload 缺 targetTaskId 的段直接跳过——多胶囊时由
      * 调用方（{@link WaitBindNode}）取最后一个（最近意图胜）。
      */
@@ -62,13 +65,7 @@ public final class WaitTaskToken {
         if (rawContent == null || rawContent.isEmpty()) {
             return refs;
         }
-        int idx = rawContent.indexOf(SlashTokenEncoder.OPAQUE_PREFIX);
-        while (idx >= 0) {
-            int end = rawContent.indexOf(SlashTokenEncoder.OPAQUE_SUFFIX, idx);
-            if (end < 0) {
-                break;
-            }
-            String opaque = rawContent.substring(idx, end + SlashTokenEncoder.OPAQUE_SUFFIX.length());
+        for (String opaque : SlashTokenEncoder.scanTokens(rawContent)) {
             SlashTokenEncoder.ParsedToken parsed = SlashTokenEncoder.parseToken(opaque);
             if (parsed != null && KIND.equals(parsed.kind())) {
                 String targetTaskId = parsed.payload().path("targetTaskId").asString("");
@@ -76,7 +73,6 @@ public final class WaitTaskToken {
                     refs.add(new WaitRef(targetTaskId, parsed.payload().path("title").asString("")));
                 }
             }
-            idx = rawContent.indexOf(SlashTokenEncoder.OPAQUE_PREFIX, end);
         }
         return refs;
     }

@@ -1,7 +1,9 @@
 package dev.everyagent.plugin.api.slash;
 
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Base64;
+import java.util.List;
 
 import dev.everyagent.contract.json.Json;
 import tools.jackson.databind.JsonNode;
@@ -73,6 +75,12 @@ public final class SlashTokenEncoder {
     /**
      * 解析单个 opaque token 文本;非本格式返回 {@code null}。
      * 与老项目 {@code parseOpaqueTokenText} 行为一致(label 缺失视为非法)。
+     *
+     * <p><b>嵌套支持(2026-11)</b>:{@code label} 值里可能内嵌另一个完整 token 串
+     * (如「等待任务」胶囊的 label 嵌目标任务标题的 rawContent)。顶层字段切分
+     * ({@code ||||})改为<b>深度感知</b>——只在嵌套深度 0 处切分,内层 token 里的
+     * {@code ||||}/{@code ====} 属于内层值、不参与外层切分,故嵌套 token 也能完整
+     * 解析出 kind/label/summary/payload。
      */
     public static ParsedToken parseToken(String value) {
         if (value == null
@@ -85,21 +93,21 @@ public final class SlashTokenEncoder {
             return null;
         }
         String rest = body.substring(KIND_MARKER.length());
-        String[] parts = rest.split(java.util.regex.Pattern.quote(FIELD_SEP), -1);
-        String kind = parts.length > 0 ? parts[0].trim() : "";
+        List<String> parts = splitTopLevelFields(rest);
+        String kind = parts.isEmpty() ? "" : parts.get(0).trim();
         if (kind.isEmpty()) {
             return null;
         }
         String label = "";
         String summary = null;
         JsonNode payload = Json.obj();
-        for (int i = 1; i < parts.length; i++) {
-            int eq = parts[i].indexOf(KEY_SEP);
+        for (int i = 1; i < parts.size(); i++) {
+            int eq = parts.get(i).indexOf(KEY_SEP);
             if (eq <= 0) {
                 continue;
             }
-            String key = parts[i].substring(0, eq);
-            String val = parts[i].substring(eq + KEY_SEP.length());
+            String key = parts.get(i).substring(0, eq);
+            String val = parts.get(i).substring(eq + KEY_SEP.length());
             if ("label".equals(key)) {
                 label = val;
             } else if ("summary".equals(key)) {
@@ -122,11 +130,103 @@ public final class SlashTokenEncoder {
     }
 
     /**
+     * 深度感知的顶层字段切分:只在 {@code [[[[}/{@code ]]]]} 嵌套深度 0 处按
+     * {@code ||||} 切分;内层 token(嵌在 label/summary 值里)中的分隔符不被切开。
+     */
+    private static List<String> splitTopLevelFields(String rest) {
+        List<String> parts = new ArrayList<>();
+        final int n = rest.length();
+        int depth = 0;
+        int segStart = 0;
+        int i = 0;
+        while (i < n) {
+            if (rest.startsWith(OPAQUE_PREFIX, i)) {
+                depth++;
+                i += OPAQUE_PREFIX.length();
+            } else if (rest.startsWith(OPAQUE_SUFFIX, i)) {
+                depth = Math.max(0, depth - 1);
+                i += OPAQUE_SUFFIX.length();
+            } else if (depth == 0 && rest.startsWith(FIELD_SEP, i)) {
+                parts.add(rest.substring(segStart, i));
+                i += FIELD_SEP.length();
+                segStart = i;
+            } else {
+                i++;
+            }
+        }
+        parts.add(rest.substring(segStart));
+        return parts;
+    }
+
+    /**
+     * 从 {@code prefixStart}(必须指向一个 {@code [[[[})起按深度配对找本段 token 的
+     * 结束位置(排他下标,含收尾 {@code }]]]})。
+     *
+     * <p>深度配对:遇到 {@code [[[[} 深度+1,遇到 {@code }]]]} 深度-1,深度归零处即
+     * 本段(可能嵌套)的边界——嵌套 token(label 里又含完整 token 串)由此正确配对。
+     * 到串尾深度仍不归零 → 返回 -1(截断/残缺段)。
+     */
+    public static int balancedTokenEnd(String input, int prefixStart) {
+        final int n = input.length();
+        int depth = 0;
+        int i = prefixStart;
+        while (i + 4 <= n) {
+            if (input.startsWith(OPAQUE_PREFIX, i)) {
+                depth++;
+                i += 4;
+            } else if (input.startsWith(OPAQUE_SUFFIX, i)) {
+                depth--;
+                i += 4;
+                if (depth == 0) {
+                    return i;
+                }
+            } else {
+                i++;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * 扫描输入中全部<b>平衡</b>的 opaque token 段(按出现顺序返回原串,含边界)。
+     *
+     * <p>嵌套 token 整体作为一段返回(其内层 token 不单独成段——内层是外层
+     * label 值的一部分);解析与否由调用方 {@link #parseToken} 决定,非本格式/
+     * 非目标 kind 自行跳过。残缺 {@code [[[[}(无配对收尾)按普通文本跳过,不阻塞
+     * 其后合法段的识别。
+     *
+     * <p><b>全仓唯一合法的段扫描口</b>:worker 与插件的 token 命中扫描一律复用
+     * 本方法(禁自写 indexOf 配对/非贪婪正则——两者都会在嵌套场景提前截断外层)。
+     */
+    public static List<String> scanTokens(String input) {
+        List<String> tokens = new ArrayList<>();
+        if (input == null || input.isEmpty()) {
+            return tokens;
+        }
+        int cursor = 0;
+        while (true) {
+            int start = input.indexOf(OPAQUE_PREFIX, cursor);
+            if (start < 0) {
+                return tokens;
+            }
+            int end = balancedTokenEnd(input, start);
+            if (end < 0) {
+                // 本 [[[[(无配对收尾:作为普通文本跳过这 4 个字符,继续找后续合法段
+                cursor = start + OPAQUE_PREFIX.length();
+                continue;
+            }
+            tokens.add(input.substring(start, end));
+            cursor = end;
+        }
+    }
+
+    /**
      * 从原始输入中剥离 opaque token 外壳,替换为各自的 label 明文。
      * 用于任务标题派生等场景:避免 {@code [[[[agent-token::::...]]]]} 原串出现在标题中。
      *
-     * <p>遍历输入中所有 {@code [[[[...]]]]} 段,逐段尝试 {@link #parseToken};
-     * 解析成功则用 {@code label} 替换,解析失败则丢弃该 token 段。最终 trim 返回。
+     * <p>遍历输入中所有<b>平衡</b>的 {@code [[[[...]]]]} 段(嵌套整体成段,见
+     * {@link #scanTokens}),逐段尝试 {@link #parseToken};解析成功则用 {@code label}
+     * 替换(label 里若再嵌 token,递归拍平),解析失败则丢弃该 token 段。最终 trim 返回。
      */
     public static String stripTokensToLabels(String input) {
         if (input == null || input.isEmpty()) {
@@ -140,17 +240,20 @@ public final class SlashTokenEncoder {
                 sb.append(input, cursor, input.length());
                 break;
             }
-            int end = input.indexOf(OPAQUE_SUFFIX, start + OPAQUE_PREFIX.length());
+            int end = balancedTokenEnd(input, start);
             if (end < 0) {
-                sb.append(input, cursor, input.length());
-                break;
+                // 残缺段:保留为普通文本,跳过这 4 个字符继续找后续合法段
+                sb.append(input, cursor, start + OPAQUE_PREFIX.length());
+                cursor = start + OPAQUE_PREFIX.length();
+                continue;
             }
-            end += OPAQUE_SUFFIX.length();
             sb.append(input, cursor, start);
             String token = input.substring(start, end);
             ParsedToken parsed = parseToken(token);
             if (parsed != null) {
-                sb.append(parsed.label());
+                sb.append(parsed.label().contains(OPAQUE_PREFIX)
+                        ? stripTokensToLabels(parsed.label())
+                        : parsed.label());
             }
             // 解析失败时不追加原串(已由 cursor/start 截断跳过),直接丢弃 token 段
             cursor = end;

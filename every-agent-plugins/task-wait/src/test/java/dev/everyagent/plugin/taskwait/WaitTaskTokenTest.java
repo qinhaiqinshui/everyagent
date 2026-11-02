@@ -109,4 +109,46 @@ class WaitTaskTokenTest {
         assertTrue(WaitTaskToken.scanWaits("").isEmpty());
         assertTrue(WaitTaskToken.scanWaits("普通文本，无任何胶囊").isEmpty());
     }
+
+    // ── 嵌套 token（2026-11：目标 title=rawContent 原样，胶囊 label 内嵌完整 token 串） ──
+
+    /**
+     * 核心回归：目标任务输入含 token（title=rawContent）→ 等待胶囊 label/payload 嵌入
+     * 完整内层 token 串 → scanWaits 必须按深度平衡配对外层并完整解析（老 indexOf 配对
+     * 在内层 ]]]] 处提前截断，识别失败——本用例即该 bug 的最小复现）。
+     */
+    @Test
+    void scanWaitsResolvesNestedWaitTokenWhoseLabelEmbedsInnerTokens() {
+        String fileRef = SlashTokenEncoder.buildToken("system.workspace_file", "图.png", null,
+                Json.obj().put("path", "图.png").put("fileName", "图.png"));
+        String skill = SlashTokenEncoder.buildToken("system.skill", "代码审查", null, Json.obj());
+        String targetTitle = fileRef + skill + " 都过一遍";
+
+        String nested = WaitTaskToken.buildToken("t-100", targetTitle);
+        List<WaitTaskToken.WaitRef> refs = WaitTaskToken.scanWaits("跑完 " + nested + " 再继续");
+
+        assertEquals(1, refs.size(), "嵌套等待胶囊必须命中（不被内层 ]]]] 截断）");
+        assertEquals("t-100", refs.get(0).targetTaskId());
+        assertEquals(targetTitle, refs.get(0).title(), "title 原样保留 rawContent（含内层 token 串）");
+
+        // 外层 token 本身可完整解析：label / payload 均不被内层分隔符切碎
+        SlashTokenEncoder.ParsedToken parsed = SlashTokenEncoder.parseToken(nested);
+        assertNotNull(parsed);
+        assertEquals("等待「" + targetTitle + "」", parsed.label());
+        assertEquals("t-100", parsed.payload().path("targetTaskId").asString());
+    }
+
+    /** 嵌套胶囊与普通胶囊混排：各自独立命中、互不吞并。 */
+    @Test
+    void scanWaitsMixedNestedAndPlainTokens() {
+        String inner = SlashTokenEncoder.buildToken("system.skill", "技能", null, Json.obj());
+        String nested = WaitTaskToken.buildToken("t-1", inner + " 跑起来");
+        String plain = WaitTaskToken.buildToken("t-2", "纯文本任务");
+
+        List<WaitTaskToken.WaitRef> refs = WaitTaskToken.scanWaits(nested + " 然后 " + plain);
+
+        assertEquals(2, refs.size());
+        assertEquals("t-1", refs.get(0).targetTaskId());
+        assertEquals("t-2", refs.get(1).targetTaskId());
+    }
 }

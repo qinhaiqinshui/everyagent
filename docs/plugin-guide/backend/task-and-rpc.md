@@ -355,6 +355,8 @@ worker 内置同路注册：SkillSlashProvider 构造器里 registry.registerPro
 取消胶囊 → slash.cancel；任务级 bottom token → slash.taskTokens.apply                    SlashMethods.java:159-162
 提交后 opaque 串原样到达后端 → SlashTokenResolveAdvisor(HP+150) 按 kind 找 resolver
   把 token 替换为 resolveSubmissionText 的文本再进模型                                    advisors.md §2.2 #7
+  （段扫描统一走 SlashTokenEncoder.scanTokens 深度平衡配对——嵌套 token，如「等待任务」
+   胶囊 label 内嵌目标任务标题的 token 串——整体成段，不被内层 ]]]] 截断）
 ```
 
 **SkillSlashProvider 与 skill 目录唯一真相源**：`/` 菜单的 skill 候选 = worker 对 `skillsDir` 的**一路目录扫描**（`SkillCatalog.scan()`：每个一级子目录 + 目录下的 `skill.md` 即一个 skill；不排除任何 id、不递归、每次实扫）——不存在代码注册通道（内置 Java 清单与插件 SPI 声明均已删除）。内置包与插件包只是**安装方式不同**：经 `SkillMaterializer` 物化落盘后与用户自制 skill 完全同权，统一进 `/` 菜单与 system prompt（[advisors.md](advisors.md) §5）；全部条目同 group（Skills）/icon/`system.skill` opaque token（选中执行路径一致），无来源标记。菜单**永远全量**；某 skill 是否进 system prompt 由 worker 侧**按工作区排除配置**决定（默认全部工作区自动暴露，`/` 菜单不受该配置影响），统一口径见 [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §7.17「skill 目录结构与唯一真相源」。

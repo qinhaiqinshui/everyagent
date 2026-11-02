@@ -5,6 +5,7 @@ import dev.everyagent.plugin.api.agent.AgentContext;
 import dev.everyagent.plugin.api.execution.ExecContext;
 import dev.everyagent.plugin.api.model.EmitEvent;
 import dev.everyagent.plugin.api.proto.SnowflakeId;
+import dev.everyagent.plugin.api.slash.SlashTokenEncoder;
 import dev.everyagent.plugin.api.task.StoredTaskInfo;
 import dev.everyagent.plugin.api.task.TaskRuntime;
 import dev.everyagent.plugin.api.task.TaskService;
@@ -141,7 +142,7 @@ public class WaitTaskAdvisor implements CallAdvisor, StreamAdvisor {
             }
             if ("failed".equals(s) || "cancelled".equals(s) || "missing".equals(s)) {
                 emit(traceId, b, "error", "目标任务未成功完成，等待中止", errorData(b, s));
-                throw new WaitTaskFailedException("等待的任务「" + b.targetTitle()
+                throw new WaitTaskFailedException("等待的任务「" + plainTitle(b)
                         + "」未成功完成（" + terminalLabel(s) + "），本任务不再继续");
             }
             // 其余（running / waiting-user / created）→ 虚拟线程 park 后续查
@@ -248,11 +249,24 @@ public class WaitTaskAdvisor implements CallAdvisor, StreamAdvisor {
             return;
         }
         agent.emitter().emit(EmitEvent.of(traceId, "task.wait", null,
-                "等待「" + b.targetTitle() + "」", summary, null, status, data,
+                "等待「" + plainTitle(b) + "」", summary, null, status, data,
                 EmitEvent.Mode.REPLACE));
     }
 
-    // ── 工具 ──────────────────────────────────────────────────────
+    // ── 工具 ──────────────────────────────────────────────
+
+    /**
+     * 目标标题的纯文本形态：title 来自任务 title 字段（=rawContent 原样，可能含
+     * opaque token 串甚至嵌套 token），异常消息 / trace title 等纯文本场景一律经
+     * {@link SlashTokenEncoder#stripTokensToLabels} 拍平为 label 明文（嵌套递归拍平）。
+     */
+    private static String plainTitle(WaitRegistry.WaitBinding b) {
+        String title = b.targetTitle();
+        if (title == null || title.isEmpty()) {
+            return "";
+        }
+        return SlashTokenEncoder.stripTokensToLabels(title);
+    }
 
     /** 终态中文标签（异常信息展示用）。 */
     private static String terminalLabel(String status) {

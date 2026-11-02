@@ -116,4 +116,80 @@ class SlashTokenEncoderTest {
         assertEquals(null, SlashTokenEncoder.stripTokensToLabels(null));
         assertEquals("", SlashTokenEncoder.stripTokensToLabels(""));
     }
+
+    // ── 嵌套 token(2026-11:任务标题原样存 rawContent 后,胶囊 label 可内嵌完整 token 串) ──
+
+    /**
+     * 嵌套 token 解析:外层 label 值里内嵌完整内层 token(含内层的 `||||`/`====`/base64),
+     * parseToken 必须完整解出外层 kind/label/payload——顶层字段切分跳过嵌套层。
+     */
+    @Test
+    void parseTokenWithNestedInnerTokenInLabel() {
+        String inner = SlashTokenEncoder.buildToken("system.workspace_file", "图.png",
+                null, Json.obj().put("path", "图.png").put("fileName", "图.png"));
+        // 模拟「等待任务」胶囊:label 嵌目标任务标题(=rawContent,含内层 token)
+        String outer = SlashTokenEncoder.buildToken("task.wait",
+                "等待「" + inner + " 帮我分析」",
+                "等待该任务完成后继续（本次输入有效）",
+                Json.obj().put("targetTaskId", "7512345678901234567")
+                        .put("title", inner + " 帮我分析"));
+
+        SlashTokenEncoder.ParsedToken parsed = SlashTokenEncoder.parseToken(outer);
+        assertNotNull(parsed, "嵌套 token 必须可解析: " + outer);
+        assertEquals("task.wait", parsed.kind());
+        assertEquals("等待「" + inner + " 帮我分析」", parsed.label(), "label 含内层原串不被切碎");
+        assertEquals("7512345678901234567", parsed.payload().path("targetTaskId").asString(),
+                "payload 不被内层分隔符干扰: " + parsed.payload());
+        assertEquals(inner + " 帮我分析", parsed.payload().path("title").asString());
+
+        // 内层 token 本身在嵌套体内仍可独立解析(拍平场景用)
+        SlashTokenEncoder.ParsedToken innerParsed = SlashTokenEncoder.parseToken(inner);
+        assertNotNull(innerParsed);
+        assertEquals("图.png", innerParsed.label());
+    }
+
+    /** scanTokens 平衡配对:嵌套外层整体成段、内层不单独成段。 */
+    @Test
+    void scanTokensTreatsNestedTokenAsSingleSegment() {
+        String inner = SlashTokenEncoder.buildToken("system.skill", "代码审查", null, Json.obj());
+        String outer = SlashTokenEncoder.buildToken("task.wait", "等待「" + inner + "」", null,
+                Json.obj().put("targetTaskId", "42"));
+        String plain = SlashTokenEncoder.buildToken("system.workspace_file", "a.py", null,
+                Json.obj().put("path", "a.py"));
+
+        java.util.List<String> tokens = SlashTokenEncoder.scanTokens(
+                "前置文本 " + outer + " 中间 " + plain + " 尾部");
+        assertEquals(2, tokens.size(), "嵌套外层整体 1 段 + 普通胶囊 1 段: " + tokens);
+        assertEquals(outer, tokens.get(0));
+        assertEquals(plain, tokens.get(1));
+    }
+
+    /** scanTokens 残缺段容错:手打半截 `[[[[` 不阻塞其后合法 token 的识别。 */
+    @Test
+    void scanTokensSkipsUnbalancedPrefix() {
+        String plain = SlashTokenEncoder.buildToken("system.skill", "技能", null, Json.obj());
+        java.util.List<String> tokens = SlashTokenEncoder.scanTokens(
+                "[[[[agent-token::::坏掉的无收尾 " + plain);
+        assertEquals(1, tokens.size(), "残缺段跳过后仍应识别后面的合法胶囊");
+        assertEquals(plain, tokens.get(0));
+    }
+
+    /** scanTokens 空输入/无 token 回归。 */
+    @Test
+    void scanTokensWithNullOrEmptyOrPlainText() {
+        assertTrue(SlashTokenEncoder.scanTokens(null).isEmpty());
+        assertTrue(SlashTokenEncoder.scanTokens("").isEmpty());
+        assertTrue(SlashTokenEncoder.scanTokens("普通文本,无胶囊").isEmpty());
+    }
+
+    /** stripTokensToLabels 嵌套递归拍平:外层 label 里再嵌 token 时,替换文本里内层也被拍平为 label 明文。 */
+    @Test
+    void stripTokensToLabelsFlattensNestedTokens() {
+        String inner = SlashTokenEncoder.buildToken("system.workspace_file", "图.png",
+                null, Json.obj().put("path", "图.png"));
+        String outer = SlashTokenEncoder.buildToken("task.wait", "等待「" + inner + " 分析」",
+                null, Json.obj().put("targetTaskId", "42").put("title", inner + " 分析"));
+        String result = SlashTokenEncoder.stripTokensToLabels(outer);
+        assertEquals("等待「图.png 分析」", result, "嵌套拍平为内层 label 明文");
+    }
 }
