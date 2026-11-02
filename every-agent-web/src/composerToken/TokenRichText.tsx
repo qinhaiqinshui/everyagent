@@ -36,6 +36,13 @@ export interface TokenRichTextProps {
    * `nagent-task-title-replay`（nowrap + ellipsis）。
    */
   className?: string
+  /**
+   * 单行模式（任务列表标题、弹窗列表条目等窄条场景）：根容器 nowrap +
+   * ellipsis 自截断，并把单行约束传导到全部后代（文本段 / 嵌套胶囊渲染容器
+   * 自带显式 pre-wrap，显式声明优先于继承，必须逐层压回——否则标题被撑成多行）。
+   * 默认 false（消息回放多行）。
+   */
+  singleLine?: boolean
   /** 胶囊是否可交互（点击触发 chip action / 只读详情）。默认 true。 */
   interactive?: boolean
   /** 点击 workspace_file 胶囊打开文件标签页时反查任务工作区根用的任务 ID（可缺省）。 */
@@ -78,12 +85,14 @@ function ChipSegment({
   interactive,
   taskId,
   depth,
+  singleLine,
 }: {
   token?: ChatComposerToken
   fallbackValue: string
   interactive: boolean
   taskId?: string
   depth: number
+  singleLine?: boolean
 }): React.ReactNode {
   const view = token
     ? getComposerChipView(token)
@@ -92,7 +101,15 @@ function ChipSegment({
   // label 里再嵌 token 串（嵌套胶囊）：递归渲染为胶囊内小胶囊；超深度上限拍平为明文
   const nested = depth < MAX_RENDER_DEPTH && label.includes('[[[[')
   const labelNode: React.ReactNode = nested
-    ? <TokenRichText text={label} className="nagent-inline-chip__label" interactive={false} depth={depth + 1} />
+    ? (
+        <TokenRichText
+          text={label}
+          className="nagent-inline-chip__label"
+          interactive={false}
+          depth={depth + 1}
+          singleLine={singleLine}
+        />
+      )
     : <span className="nagent-inline-chip__label">{label}</span>
   const tooltip = label.includes('[[[[') ? stripTokensToLabels(label) : label
   return (
@@ -127,6 +144,7 @@ export default function TokenRichText({
   text,
   tokens,
   className,
+  singleLine = false,
   interactive = true,
   taskId,
   depth = 0,
@@ -137,7 +155,11 @@ export default function TokenRichText({
   }
   return (
     <span
-      className={`nagent-msg__content nagent-msg__content--user-replay${className ? ` ${className}` : ''}`}
+      className={
+        'nagent-msg__content nagent-msg__content--user-replay'
+        + (singleLine ? ' nagent-msg__content--single-line' : '')
+        + (className ? ` ${className}` : '')
+      }
     >
       {segments.map((segment, index) =>
         segment.type === 'text' ? (
@@ -150,6 +172,7 @@ export default function TokenRichText({
             interactive={interactive}
             taskId={taskId}
             depth={depth}
+            singleLine={singleLine}
           />
         ),
       )}

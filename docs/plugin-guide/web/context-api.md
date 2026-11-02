@@ -271,7 +271,7 @@ await ctx.fs.delete(workspaceRoot, 'docs/draft.md')
 
 另有 2 个**宿主注入的渲染能力**（2026-11，可选成员、旧宿主可能缺席，插件侧缺席时自行降级）：
 
-- `ctx.ui.TokenRichText?: ComponentType<{ text: string; className?: string; interactive?: boolean }>`——「token 富文本」渲染组件：把 rawContent（可含 opaque token 串，嵌套 token 整体成段）渲染为「文本段 + 内联胶囊」，胶囊 label 内再嵌 token 时递归渲染小胶囊（深度上限内）。与用户消息回放 / 侧边栏任务列表标题同一实现（宿主 `composerToken/TokenRichText.tsx` 单点；api 包零运行时代码、只声明类型）。任务标题（=rawContent 原样）需要胶囊化展示的场景用——范例：task-wait 选择框候选列表（`every-agent-plugins/task-wait/web/WaitTaskPickerContent.tsx`，`interactive={false}` 纯展示）。
+- `ctx.ui.TokenRichText?: ComponentType<{ text: string; className?: string; interactive?: boolean; singleLine?: boolean }>`——「token 富文本」渲染组件：把 rawContent（可含 opaque token 串，嵌套 token 整体成段）渲染为「文本段 + 内联胶囊」，胶囊 label 内再嵌 token 时递归渲染小胶囊（深度上限内）。与用户消息回放 / 侧边栏任务列表标题同一实现（宿主 `composerToken/TokenRichText.tsx` 单点；api 包零运行时代码、只声明类型）。任务标题（=rawContent 原样）需要胶囊化展示的场景用——范例：task-wait 选择框候选列表（`every-agent-plugins/task-wait/web/WaitTaskPickerContent.tsx`，`interactive={false}` 纯展示、`singleLine` 单行截断——列表条目等窄条场景必传，否则嵌套内容会把行撑高）。
 - `ctx.ui.toPlainText?(text: string): string`——把可含 token 串（嵌套递归）的文本拍平为纯 label 明文。标签标题、toast、tooltip 等纯文本场景用（胶囊展示场景用 `TokenRichText`）。
 
 ## 9. 寿命与清理

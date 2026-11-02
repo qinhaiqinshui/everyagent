@@ -277,7 +277,7 @@ export interface RealPluginDispatcher {
    * getter 惰性解引用，避免与本模块（TokenRichText 经由 pluginDispatcher 查胶囊
    * 激活动作）之间的模块初始化环。
    */
-  readonly TokenRichText?: ComponentType<{ text: string; className?: string; interactive?: boolean }>
+  readonly TokenRichText?: ComponentType<{ text: string; className?: string; interactive?: boolean; singleLine?: boolean }>
   /** 把可含 opaque token 串（嵌套递归）的文本拍平为纯 label 明文。 */
   toPlainText: (text: string) => string
 }
@@ -522,7 +522,7 @@ export const pluginDispatcher: RealPluginDispatcher = {
   // 宿主注入的 token 渲染能力（声明见 @everyagent/plugin-api UiRegistry）：
   // TokenRichText getter 惰性解引用——该组件经 pluginDispatcher 查胶囊激活动作，
   // 惰性取用避开模块初始化环；toPlainText 直连宿主拍平函数（嵌套递归）。
-  get TokenRichText(): ComponentType<{ text: string; className?: string; interactive?: boolean }> {
+  get TokenRichText(): ComponentType<{ text: string; className?: string; interactive?: boolean; singleLine?: boolean }> {
     return HostTokenRichText
   },
   toPlainText(text) {

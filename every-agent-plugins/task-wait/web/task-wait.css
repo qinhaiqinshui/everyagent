@@ -47,17 +47,10 @@
   color: var(--text-primary);
 }
 
-/* 标题的胶囊渲染（宿主 TokenRichText 注入）：宿主组件外层是
-   .nagent-msg__content--user-replay（pre-wrap），在弹窗单行条目里改为
-   inline + nowrap，配合父级 ellipsis 截断；胶囊字号随条目略缩。 */
-.task-wait-picker__item-title .task-wait-picker__title-tokens {
-  display: inline;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  vertical-align: bottom;
-}
-
+/* 标题的胶囊渲染（宿主 TokenRichText 注入，调用侧传 singleLine=true 单行截断）：
+   本类名仅作弹窗上下文的胶囊字号/间距 hook（单行与截断由宿主
+   .nagent-msg__content--single-line 统一承担）。胶囊不可单独点击（pointer-events
+   关闭，点击语义归候选行选中）。 */
 .task-wait-picker__item-title .nagent-inline-chip--replay {
   pointer-events: none;
   font-size: var(--text-2xs);

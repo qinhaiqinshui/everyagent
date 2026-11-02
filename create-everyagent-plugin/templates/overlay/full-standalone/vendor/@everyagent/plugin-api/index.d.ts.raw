@@ -1076,9 +1076,10 @@ export interface UiRegistry {
    *
    * 用途：任务标题（=rawContent 原样，含胶囊串）需要胶囊化展示的场景——如「选择要
    * 等待的任务」候选列表。胶囊样式随宿主主题；`interactive=false` 纯展示（不响应
-   * 胶囊点击）。可选注入（旧宿主可能缺席）：插件侧缺席时降级为纯文本展示。
+   * 胶囊点击）、`singleLine=true` 单行截断（任务列表/弹窗列表条目等窄条场景，嵌套
+   * 胶囊也压回单行）。可选注入（旧宿主可能缺席）：插件侧缺席时降级为纯文本展示。
    */
-  readonly TokenRichText?: ComponentType<{ text: string; className?: string; interactive?: boolean }>
+  readonly TokenRichText?: ComponentType<{ text: string; className?: string; interactive?: boolean; singleLine?: boolean }>
 
   /**
    * 把可含 opaque token 串的文本拍平为纯 label 明文（嵌套递归拍平）。

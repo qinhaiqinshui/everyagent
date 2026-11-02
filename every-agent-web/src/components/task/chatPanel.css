@@ -793,6 +793,25 @@
   text-overflow: ellipsis;
 }
 
+/* TokenRichText 单行模式(任务列表标题/弹窗列表条目等窄条场景,组件 prop
+   singleLine 挂载):根块级容器 nowrap + ellipsis 自截断;单行约束逐层传导到
+   后代——文本段(.nagent-msg__inline-text)与嵌套胶囊渲染容器
+   (.nagent-msg__content--user-replay,胶囊 label 内嵌小胶囊时的子根)都自带
+   显式 pre-wrap/word-break,显式声明优先于继承,必须用更高优先级选择器压回,
+   否则标题会被撑成多行。 */
+.nagent-msg__content--single-line {
+  white-space: nowrap;
+  word-break: normal;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nagent-msg__content--single-line .nagent-msg__inline-text,
+.nagent-msg__content--single-line .nagent-msg__content--user-replay {
+  white-space: nowrap;
+  word-break: normal;
+}
+
 .nagent-task-title-replay .nagent-inline-chip--replay {
   pointer-events: none;
 }

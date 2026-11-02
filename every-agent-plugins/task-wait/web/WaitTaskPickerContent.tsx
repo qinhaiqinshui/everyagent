@@ -44,12 +44,12 @@ export interface WaitTaskPickerContentProps extends PluginDialogProps<PickerTask
   /** 候选任务列表（showDialog 调用方经闭包传入）。 */
   candidates: PickerTask[]
   /** 宿主注入的 token 富文本渲染组件（可选；缺席时标题降级纯文本）。 */
-  TokenRichText?: ComponentType<{ text: string; className?: string; interactive?: boolean }>
+  TokenRichText?: ComponentType<{ text: string; className?: string; interactive?: boolean; singleLine?: boolean }>
   /** 宿主注入的拍平函数（tooltip 等纯文本场景；缺席时原样）。 */
   toPlainText?: (text: string) => string
 }
 
-/** 单条候选的标题渲染：有宿主组件 → 胶囊化展示；否则纯文本降级。 */
+/** 单条候选的标题渲染：有宿主组件 → 胶囊化展示（单行截断）；否则纯文本降级。 */
 function renderPickerTitle(
   task: PickerTask,
   TokenRichText?: WaitTaskPickerContentProps['TokenRichText'],
@@ -57,7 +57,14 @@ function renderPickerTitle(
   if (!TokenRichText) {
     return task.title
   }
-  return <TokenRichText text={task.title} className="task-wait-picker__title-tokens" interactive={false} />
+  return (
+    <TokenRichText
+      text={task.title}
+      className="task-wait-picker__title-tokens"
+      singleLine
+      interactive={false}
+    />
+  )
 }
 
 export default function WaitTaskPickerContent({

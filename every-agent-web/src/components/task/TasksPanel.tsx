@@ -423,13 +423,15 @@ export default function TasksPanel({
 
   /**
    * 任务标题胶囊渲染:把 rawContent(含 opaque token 串,嵌套整体成段)交给公共组件
-   * TokenRichText 渲染(与用户消息视图/插件弹窗同一套渲染逻辑),单行 nowrap +
-   * ellipsis 截断,侧边栏拉宽时可见更多内容;胶囊不可交互(点击语义归任务行打开)。
+   * TokenRichText 渲染(与用户消息视图/插件弹窗同一套渲染逻辑);singleLine 单行
+   * 截断(含嵌套胶囊逐层压回单行),侧边栏拉宽时可见更多内容;胶囊不可交互
+   * (点击语义归任务行打开)。
    */
   const renderTaskTitle = (task: TaskListItemSnapshot) => (
     <TokenRichText
       text={task.displayTitle}
       className="nagent-task-title-replay"
+      singleLine
       interactive={false}
     />
   )
