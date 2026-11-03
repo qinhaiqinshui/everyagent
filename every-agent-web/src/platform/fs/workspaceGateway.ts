@@ -502,6 +502,47 @@ export const workspaceGateway = {
   },
 
   /**
+   * 按机器绝对路径做「定位-替换」写(文件差异标签页「回滚」专用;worker fs.replaceRaw,
+   * Raw 系列合法根校验 §5.5,越界经确认放行重试同 writeBytesRaw)。
+   *
+   * 语义 = 反向 update_file:在文件全文中行尾宽容地定位 oldContent 的**唯一**出现,
+   * 原位替换为按文件主导行尾转写的 newContent(替换区间外逐字节保留,原子落盘);
+   * 未找到(=该处已被其他修改)或出现多次均抛 RPC 错误,绝不按行号盲改。
+   *
+   * @param opts.deleteWhenEmpty 替换结果为「整个文件被替换为空」时删除文件
+   *   (回滚「新建文件」变更),应答 deleted=true。
+   * @returns {deleted} 是否以删除文件收尾。
+   */
+  async replaceTextRaw(
+    workspaceRoot: string,
+    path: string,
+    oldContent: string,
+    newContent: string,
+    opts?: { deleteWhenEmpty?: boolean },
+  ): Promise<{ deleted: boolean }> {
+    wireFsChanged()
+    const absPath = resolveMachinePath(workspaceRoot, path)
+    const workerId = workspaceRegistry.workerIdOfRoot(workspaceRoot) ?? workspaceRegistry.primaryWorkerId()
+    if (!workerId) throw new Error('无法确定该文件所属 worker(工作区未注册或 worker 离线)')
+    const normalized = normalizeWorkspaceRelativePath(path)
+    const doReplace = async (): Promise<{ deleted: boolean }> => {
+      const result = await hubSession.rpcTo(workerId, 'fs.replaceRaw', {
+        path: absPath,
+        oldContent,
+        newContent,
+        ...(opts?.deleteWhenEmpty ? { deleteWhenEmpty: 'true' } : {}),
+      }, {
+        timeoutMs: 120_000,
+      }) as { deleted?: boolean }
+      const deleted = result.deleted === true
+      // 回滚成功即磁盘事实变更:发领域事件让打开中的文件标签页/文件树刷新
+      emitFileChanged(workspaceRoot, normalized, deleted ? 'delete' : 'modify', false)
+      return { deleted }
+    }
+    return withRawAccessAuthorization({ workerId, path: absPath, op: 'write' }, grantRawRoot, doReplace)
+  },
+
+  /**
    * 按机器绝对路径获取文件属性(文件标签页用户操作专用;worker 侧做 Raw 系列合法根
    * 校验,越界返回 SANDBOX_DENIED)。调 worker 的 fs.statRaw,返回与 stat 同构的
    * WorkspaceFileStat。外部文件无工作区根,listDir 推导不可用,需专用 RPC 直接 stat;

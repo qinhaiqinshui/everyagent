@@ -232,3 +232,78 @@
   color: var(--text-muted);
   font-size: var(--text-xs);
 }
+
+/* ─── 变更块回滚(悬浮于块首行) ───────────────────────────
+ * 桌面 hover 行时浮现,触屏(hover:none)常显;已回滚块置灰标记。
+ */
+
+.file-diff-row--hunk-start,
+.file-diff-unified-line--hunk-start {
+  position: relative;
+}
+
+.file-diff-hunk-rollback {
+  position: absolute;
+  top: 1px;
+  right: 8px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 8px;
+  border: 1px solid color-mix(in srgb, var(--accent-red) 45%, var(--border-light));
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg-primary) 92%, transparent);
+  color: color-mix(in srgb, var(--accent-red) 72%, var(--text-primary));
+  font-size: var(--text-xs);
+  font-family: var(--font-mono);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease, background-color 0.12s ease;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
+}
+
+.file-diff-row--hunk-start:hover .file-diff-hunk-rollback,
+.file-diff-unified-line--hunk-start:hover .file-diff-hunk-rollback,
+.file-diff-hunk-rollback:focus-visible {
+  opacity: 1;
+}
+
+/* 触屏设备无 hover:常显,避免找不到入口 */
+@media (hover: none) {
+  .file-diff-hunk-rollback {
+    opacity: 1;
+  }
+}
+
+.file-diff-hunk-rollback:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent-red) 12%, var(--bg-primary));
+}
+
+.file-diff-hunk-rollback:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.file-diff-hunk-rollback:focus-visible {
+  outline: 2px solid var(--focus-ring-color);
+  outline-offset: 1px;
+}
+
+.file-diff-hunk-rolledback {
+  position: absolute;
+  top: 1px;
+  right: 8px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg-primary) 88%, transparent);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  font-family: var(--font-mono);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+}

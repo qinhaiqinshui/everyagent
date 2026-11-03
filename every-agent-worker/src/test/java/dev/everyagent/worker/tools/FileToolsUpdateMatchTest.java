@@ -1,18 +1,15 @@
 package dev.everyagent.worker.tools;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
-
 import org.junit.jupiter.api.Test;
 
 /**
- * update_file 的 oldcontent 定位逻辑({@code findUniqueEolAgnostic})回归测试。
+ * update_file / fs.replaceRaw 共用的 oldcontent 定位逻辑
+ * ({@code EolAgnosticText.findUniqueEolAgnostic})回归测试。
  *
  * <p>覆盖:主导行尾判定、行尾宽容匹配、唯一性校验、替换后 prefix/suffix 逐字节保留,
  * 以及**以换行开头的 oldcontent**(原实现先跳过换行位置再匹配,导致这类 oldcontent
@@ -20,11 +17,9 @@ import org.junit.jupiter.api.Test;
  */
 class FileToolsUpdateMatchTest {
 
-    /** 反射调用 private static findUniqueEolAgnostic(String,String) → int[]{start,end,eolCode}。 */
-    private static int[] find(String haystack, String needle) throws Exception {
-        Method m = FileTools.class.getDeclaredMethod("findUniqueEolAgnostic", String.class, String.class);
-        m.setAccessible(true);
-        return (int[]) m.invoke(null, haystack, needle);
+    /** 直接调用共用工具(历史版本在 FileTools 内以 private static 实现,靠反射调用)。 */
+    private static int[] find(String haystack, String needle) {
+        return EolAgnosticText.findUniqueEolAgnostic(haystack, needle);
     }
 
     @Test
@@ -75,11 +70,10 @@ class FileToolsUpdateMatchTest {
         assertIae("aaaa", "aa");
     }
 
-    /** 反射调用会把异常包进 InvocationTargetException,这里解开再断言类型。 */
     private static void assertIae(String haystack, String needle) {
-        InvocationTargetException ex =
-                assertThrows(InvocationTargetException.class, () -> find(haystack, needle));
-        assertInstanceOf(IllegalArgumentException.class, ex.getCause());
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> find(haystack, needle));
+        assertNotNull(ex.getMessage());
     }
 
     @Test

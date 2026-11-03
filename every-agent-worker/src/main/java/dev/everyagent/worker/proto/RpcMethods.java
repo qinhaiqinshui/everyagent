@@ -63,6 +63,15 @@ public final class RpcMethods {
     /** 按机器绝对路径获取文件属性(Raw 系列合法根校验,§5.5;文件标签页用户操作专用)。 */
     public static final String FS_STAT_RAW = "fs.statRaw";
     /**
+     * 按机器绝对路径做「定位-替换」写(Raw 系列合法根校验,§5.5;文件差异标签页「回滚」专用):
+     * 参数 {path, oldContent, newContent, deleteWhenEmpty?}。行尾宽容定位 oldContent 的唯一出现
+     * (与 update_file 工具同语义,未找到/出现多次一律 BAD_PARAMS),原位替换为按文件主导行尾
+     * 转写的 newContent 后 AtomicFiles 原子落盘;deleteWhenEmpty=true 且匹配段覆盖全文件、
+     * newContent 为空时删除文件(回滚「新建文件」)。前端语义 = 反向 update_file:oldContent=差异
+     * 新文本、newContent=差异旧文本,目标内容已被其他修改时不再命中 → 回滚失败,绝不按行号盲改。
+     */
+    public static final String FS_REPLACE_RAW = "fs.replaceRaw";
+    /**
      * 注册 Raw 系列会话级用户放行目录(§5.5):前端收到 SANDBOX_DENIED 弹确认框、
      * 用户显式确认后调用;文件→取所在目录,放行粒度=目录 realpath,会话级内存态。
      */
