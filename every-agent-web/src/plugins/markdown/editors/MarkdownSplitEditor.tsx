@@ -4,7 +4,7 @@ import CodeMirrorEditor from '@/components/shared/CodeMirrorEditor'
 import { markdown } from '@codemirror/lang-markdown'
 import MarkdownPreview, { type MarkdownPreviewHandle } from './MarkdownPreview'
 import ScrollEdgeToggleFab from '@/components/shared/ScrollEdgeToggleFab'
-import { scrollEditorToLine } from './markdownScrollSync'
+import { scrollEditorToLine, getEditorTopLine, scrollPreviewToLine, getPreviewTopSourceLine } from './markdownScrollSync'
 
 type PreviewLayout = 'horizontal' | 'vertical'
 type ViewMode = 'split' | 'editor' | 'preview'
@@ -78,6 +78,24 @@ const MarkdownSplitEditor = React.forwardRef<MarkdownSplitEditorHandle, Markdown
   const editorScrollTopRef = React.useRef(0)
   const previewScrollTopRef = React.useRef(0)
   const initialEditorLineConsumedRef = React.useRef(false)
+  // ── 双栏(split)滚动同步:编辑器/预览任一侧滚动时,另一侧按源行号跟随
+  //    (VSCode 式)。syncLock 标记当前主动同步的发起侧,短窗内忽略对侧回声
+  //    scroll 事件,避免互相触发的同步循环;视图模式经 ref 供事件回调读取最新值。
+  const viewModeRef = React.useRef(viewMode)
+  viewModeRef.current = viewMode
+  const syncLockRef = React.useRef<'editor' | 'preview' | null>(null)
+  const syncUnlockTimerRef = React.useRef<number | undefined>(undefined)
+  const editorSyncRafRef = React.useRef(0)
+  const previewSyncRafRef = React.useRef(0)
+
+  /** 标记一次由 source 侧发起的主动同步,并在短窗后解锁(对侧回声事件在此期间忽略)。 */
+  const lockSync = React.useCallback((source: 'editor' | 'preview') => {
+    syncLockRef.current = source
+    window.clearTimeout(syncUnlockTimerRef.current)
+    syncUnlockTimerRef.current = window.setTimeout(() => {
+      syncLockRef.current = null
+    }, 150)
+  }, [])
 
   React.useEffect(() => {
     const handlePointerMove = (event: PointerEvent) => {
@@ -156,44 +174,118 @@ const MarkdownSplitEditor = React.forwardRef<MarkdownSplitEditorHandle, Markdown
     })
   }, [scrollHeadingIntoView, value, viewMode])
 
-  // 编辑器滚动位置记录:CodeMirror scroller 挂载后绑定(子组件 effect 先于本组件运行)。
+  // 编辑器滚动:记录位置(视图切换恢复用)+ 双栏时同步预览。
+  // CodeMirror scroller 挂载后绑定(子组件 effect 先于本组件运行);rAF 合并高频滚动事件。
   React.useEffect(() => {
     const scroller = editorScrollRef.current
     if (!scroller) return
     const onScroll = () => {
       editorScrollTopRef.current = scroller.scrollTop
+      if (viewModeRef.current !== 'split' || syncLockRef.current === 'preview') return
+      if (editorSyncRafRef.current) return
+      editorSyncRafRef.current = requestAnimationFrame(() => {
+        editorSyncRafRef.current = 0
+        const view = editorViewRef.current
+        const previewEl = previewScrollRef.current
+        if (!view || !previewEl) return
+        if (viewModeRef.current !== 'split' || syncLockRef.current === 'preview') return
+        const line = getEditorTopLine(view)
+        if (line == null) return
+        lockSync('editor')
+        scrollPreviewToLine(previewEl, line)
+      })
     }
     scroller.addEventListener('scroll', onScroll, { passive: true })
     return () => {
       scroller.removeEventListener('scroll', onScroll)
+      if (editorSyncRafRef.current) {
+        cancelAnimationFrame(editorSyncRafRef.current)
+        editorSyncRafRef.current = 0
+      }
     }
-  }, [])
+  }, [lockSync])
 
+  // 预览滚动:记录位置(视图切换恢复用)+ 双栏时同步编辑器。
   const handlePreviewScroll = React.useCallback(() => {
     const element = previewScrollRef.current
-    if (element) {
-      previewScrollTopRef.current = element.scrollTop
+    if (!element) return
+    previewScrollTopRef.current = element.scrollTop
+    if (viewModeRef.current !== 'split' || syncLockRef.current === 'editor') return
+    if (previewSyncRafRef.current) return
+    previewSyncRafRef.current = requestAnimationFrame(() => {
+      previewSyncRafRef.current = 0
+      const view = editorViewRef.current
+      if (!view) return
+      if (viewModeRef.current !== 'split' || syncLockRef.current === 'editor') return
+      const line = getPreviewTopSourceLine(previewScrollRef.current)
+      if (line == null) return
+      lockSync('preview')
+      scrollEditorToLine(view, line)
+    })
+  }, [lockSync])
+
+  // 卸载清理同步用的定时器与挂起帧。
+  React.useEffect(() => () => {
+    window.clearTimeout(syncUnlockTimerRef.current)
+    if (previewSyncRafRef.current) {
+      cancelAnimationFrame(previewSyncRafRef.current)
+      previewSyncRafRef.current = 0
     }
   }, [])
 
-  // 视图切换后恢复刚显示一侧的滚动位置(隐藏期间浏览器已将其 scrollTop 重置为 0)。
+  // 视图切换后的位置处理:
+  // - 预览 ↔ 编辑(单栏互切):恢复刚显示一侧的滚动位置(隐藏期间浏览器已将其 scrollTop 重置为 0);
+  // - 进入双栏(split):刚显示的一侧按源行号对齐先在视的一侧,保证双栏两侧内容位置一致
+  //   (双栏期间由滚动同步保持)。进入 split 的对齐等一帧,让 CodeMirror/预览完成恢复显示后的测量。
   React.useLayoutEffect(() => {
     const previous = lastViewModeRef.current
     lastViewModeRef.current = viewMode
     if (previous === viewMode) return
-    if (previous === 'preview' && (viewMode === 'editor' || viewMode === 'split')) {
+    if (viewMode === 'editor' && previous === 'preview') {
       const scroller = editorScrollRef.current
       if (scroller) {
         scroller.scrollTop = editorScrollTopRef.current
       }
+      return
     }
-    if (previous === 'editor' && (viewMode === 'preview' || viewMode === 'split')) {
+    if (viewMode === 'preview' && previous === 'editor') {
       const element = previewScrollRef.current
       if (element) {
         element.scrollTop = previewScrollTopRef.current
       }
+      return
     }
-  }, [viewMode])
+    if (viewMode !== 'split') return
+    // 有挂起的大纲跳转(editor 模式选标题 → 切 split 后滚预览)时让位,
+    // 避免「预览对齐编辑器」覆盖掉即将执行的大纲定位。
+    if (pendingHeadingIdRef.current != null) return
+    let raf1 = 0
+    let raf2 = 0
+    raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => {
+        const view = editorViewRef.current
+        const previewEl = previewScrollRef.current
+        if (!view || !previewEl) return
+        if (previous === 'editor') {
+          // 编辑器在视 → 预览对齐编辑器顶行
+          const line = getEditorTopLine(view)
+          if (line == null) return
+          lockSync('editor')
+          scrollPreviewToLine(previewEl, line)
+        } else if (previous === 'preview') {
+          // 预览在视 → 编辑器对齐预览顶行
+          const line = getPreviewTopSourceLine(previewEl)
+          if (line == null) return
+          lockSync('preview')
+          scrollEditorToLine(view, line)
+        }
+      })
+    })
+    return () => {
+      cancelAnimationFrame(raf1)
+      cancelAnimationFrame(raf2)
+    }
+  }, [viewMode, lockSync])
 
   // 初始行号定位(跨组件重建时迁移阅读位置,如只读预览 → 编辑模式):
   // 等编辑器可见(viewMode editor/split)且内容就绪后消费一次;内容未就绪(空文档)
