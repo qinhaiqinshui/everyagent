@@ -7,9 +7,10 @@ import { resolve } from 'path'
  * - resolve.alias 与 vite.config.ts 保持同一套别名(@ / @every-agent/client /
  *   @everyagent/plugin-api / @plugins),被测模块内的别名导入可正常解析;
  * - 测试覆盖纯数据层(src/task 折叠器等),node 环境即可,不引入 jsdom;
- * - include 收敛到 src 目录树下的 *.test.ts(glob 模式),测试文件放被测模块同目录
+ * - include 收敛到 src 目录树下的 *.test.ts / *.test.tsx(glob 模式),测试文件放被测模块同目录
  *   (与 tsconfig 对 src/sdk 目录下 *.test.ts 的 exclude 惯例一致;src 下的测试文件
- *   参与 tsc --noEmit)。
+ *   参与 tsc --noEmit;*.test.tsx 用 react-dom/server 的 renderToStaticMarkup,
+ *   同样不依赖 DOM,node 环境即可)。
  */
 export default defineConfig({
   resolve: {
@@ -22,6 +23,6 @@ export default defineConfig({
   },
   test: {
     environment: 'node',
-    include: ['src/**/*.test.ts'],
+    include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
   },
 })
