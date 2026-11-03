@@ -1,4 +1,4 @@
-/**
+﻿/**
  * CodeMirror 6 React 封装组件。
  *
  * 统一承担：语法高亮、行号、折行、代码折叠、查找替换（@codemirror/search）、
@@ -43,6 +43,8 @@ export type CodeMirrorEditorProps = {
   className?: string
   /** 滚动元素 ref 回调；返回 CodeMirror 内部 .cm-scroller 元素，供 ScrollEdgeToggleFab 等外部组件使用。 */
   scrollRef?: React.MutableRefObject<HTMLElement | null>
+  /** EditorView 实例 ref 回调；供外部组件读取文档行号 / 程序化滚动（如 markdown 滚动同步）。 */
+  viewRef?: React.MutableRefObject<EditorView | null>
 }
 
 export default function CodeMirrorEditor({
@@ -57,9 +59,10 @@ export default function CodeMirrorEditor({
   style,
   className,
   scrollRef,
+  viewRef,
 }: CodeMirrorEditorProps) {
   const hostRef = React.useRef<HTMLDivElement | null>(null)
-  const viewRef = React.useRef<EditorView | null>(null)
+  const internalViewRef = React.useRef<EditorView | null>(null)
   // Compartments 允许动态 reconfigure 而不重建 editor。
   const compartmentsRef = React.useRef({
     language: new Compartment(),
@@ -125,7 +128,10 @@ export default function CodeMirrorEditor({
     })
 
     const view = new EditorView({ state, parent: hostRef.current })
-    viewRef.current = view
+    internalViewRef.current = view
+    if (viewRef) {
+      viewRef.current = view
+    }
     // 暴露 .cm-scroller 给外部组件（如 ScrollEdgeToggleFab）。
     if (scrollRef) {
       scrollRef.current = view.scrollDOM
@@ -133,7 +139,10 @@ export default function CodeMirrorEditor({
 
     return () => {
       view.destroy()
-      viewRef.current = null
+      internalViewRef.current = null
+      if (viewRef) {
+        viewRef.current = null
+      }
       if (scrollRef) {
         scrollRef.current = null
       }
@@ -147,7 +156,7 @@ export default function CodeMirrorEditor({
       isInternalChange.current = false
       return
     }
-    const view = viewRef.current
+    const view = internalViewRef.current
     if (!view) return
     const current = view.state.doc.toString()
     if (current !== value) {
@@ -159,7 +168,7 @@ export default function CodeMirrorEditor({
 
   // ── language reconfigure ──
   React.useEffect(() => {
-    const view = viewRef.current
+    const view = internalViewRef.current
     if (!view) return
     view.dispatch({
       effects: compartmentsRef.current.language.reconfigure(language ?? []),
@@ -168,7 +177,7 @@ export default function CodeMirrorEditor({
 
   // ── editable reconfigure ──
   React.useEffect(() => {
-    const view = viewRef.current
+    const view = internalViewRef.current
     if (!view) return
     view.dispatch({
       effects: compartmentsRef.current.editable.reconfigure(
@@ -179,7 +188,7 @@ export default function CodeMirrorEditor({
 
   // ── wrapLines reconfigure ──
   React.useEffect(() => {
-    const view = viewRef.current
+    const view = internalViewRef.current
     if (!view) return
     view.dispatch({
       effects: compartmentsRef.current.wrapping.reconfigure(
@@ -205,7 +214,7 @@ export default function CodeMirrorEditor({
   // 依赖 value：当内容从空变为有值时重新触发定位。
   React.useEffect(() => {
     if (lineLocateRequestedAt == null || lineNumber == null) return
-    const view = viewRef.current
+    const view = internalViewRef.current
     if (!view) return
     // 文档为空时跳过——内容尚未就绪，scrollIntoView 无意义且会错误消费定位请求。
     if (view.state.doc.length === 0) return
@@ -215,7 +224,7 @@ export default function CodeMirrorEditor({
 
     raf1 = requestAnimationFrame(() => {
       raf2 = requestAnimationFrame(() => {
-        const v = viewRef.current
+        const v = internalViewRef.current
         if (!v) return
         const doc = v.state.doc
         const line = Math.min(Math.max(1, lineNumber), doc.lines)

@@ -3,6 +3,7 @@ import MarkdownOutlinePanel from './MarkdownOutlinePanel'
 import MarkdownPreview from './MarkdownPreview'
 import MarkdownSplitEditor from './MarkdownSplitEditor'
 import { parseMarkdownHeadings, type MarkdownHeading } from './markdownOutline'
+import { getPreviewTopSourceLine } from './markdownScrollSync'
 import Dialog from '@/components/shared/ui/Dialog'
 import { useResponsiveViewport } from '@/hooks/useResponsiveViewport'
 import type { FileContentEditorDescriptor, FileContentEditorProps, FileContentHeaderAction } from '@/components/files/editors/types'
@@ -32,6 +33,9 @@ function MarkdownFileEditor({
   const [layout, setLayout] = React.useState<MarkdownLayout>('horizontal')
   const [wrapLines, setWrapLines] = React.useState(true)
   const [copied, setCopied] = React.useState(false)
+  // 只读预览 → 编辑模式切换时迁移阅读位置:切换前从预览读取视口顶部源行号,
+  // 交给 MarkdownSplitEditor 在编辑器挂载后定位(该切换会整体重建编辑器组件树)。
+  const [initialEditLine, setInitialEditLine] = React.useState<number | null>(null)
   const previewRootRef = React.useRef<HTMLDivElement | null>(null)
   const previewComponentRef = React.useRef<React.ElementRef<typeof MarkdownPreview> | null>(null)
   const splitEditorRef = React.useRef<React.ElementRef<typeof MarkdownSplitEditor> | null>(null)
@@ -101,6 +105,11 @@ function MarkdownFileEditor({
       label: viewMode === 'preview' ? '编辑' : '预览',
       onClick: () => {
         if (mode === 'readonly') {
+          // DOM 切换(mode 变化会整体重建编辑器组件树)前先捕获预览视口顶部源行号。
+          const topLine = getPreviewTopSourceLine(previewRootRef.current)
+          if (topLine != null) {
+            setInitialEditLine(Math.max(1, Math.round(topLine)))
+          }
           onRequestEditMode?.()
         } else if (viewMode === 'preview') {
           setViewMode('editor')
@@ -257,6 +266,7 @@ function MarkdownFileEditor({
             onViewModeChange={setViewMode}
             workspaceRoot={markdownPreviewContext.workspaceRoot}
             baseDir={markdownPreviewContext.baseDir}
+            initialEditorLine={initialEditLine}
           />
         </div>
         {!isMobile && showOutline ? (

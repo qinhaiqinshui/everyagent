@@ -293,6 +293,23 @@ function isPlainLeftClick(event: React.MouseEvent<HTMLAnchorElement>): boolean {
     && !event.altKey
 }
 
+/**
+ * 块级元素源行号标注(1-based,与 CodeMirror 行号同基准),
+ * 供 markdown 预览滚动同步(markdownScrollSync)按行定位预览块。
+ * hast 节点缺失 position(如部分 rehype-raw 产物)时返回空。
+ */
+function sourceLineData(node: Element | undefined): {
+  'data-source-line'?: number
+  'data-source-line-end'?: number
+} {
+  const start = node?.position?.start?.line
+  const end = node?.position?.end?.line
+  if (start == null) return {}
+  return end != null && end >= start
+    ? { 'data-source-line': start, 'data-source-line-end': end }
+    : { 'data-source-line': start }
+}
+
 export function buildMarkdownComponents(options: MarkdownComponentOptions): Components {
   const { variant, wrapLines = true, resolveHeadingId, renderImage, onLinkClick } = options
   const s = variantStyles[variant]
@@ -307,14 +324,14 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
       const id = line != null ? resolveHeadingId?.(line - 1) : undefined
       return React.createElement(
         `h${level}`,
-        { ...rest, id, 'data-markdown-heading-id': id, style: s.heading[level] },
+        { ...rest, id, 'data-markdown-heading-id': id, ...sourceLineData(node), style: s.heading[level] },
         children,
       )
     }
     return Heading
   }
 
-  const PreBlock = ({ children }: IntrinsicProps<'pre'>) => {
+  const PreBlock = ({ node, children }: IntrinsicProps<'pre'>) => {
     const childArray = React.Children.toArray(children)
     const codeEl = childArray.find(React.isValidElement) as
       | React.ReactElement<{ className?: string; children?: React.ReactNode }>
@@ -322,14 +339,24 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
     const className = codeEl?.props?.className
     const lang = /language-([\w-]+)/.exec(className ?? '')?.[1]
     const text = extractReactText(codeEl ? codeEl.props.children : children).replace(/\n$/, '')
-    return <CodeBlock code={text} language={lang} variant={variant} style={{ margin: variant === 'preview' ? '10px 0' : '4px 0' }} />
+    const lineData = sourceLineData(node)
+    return (
+      <CodeBlock
+        code={text}
+        language={lang}
+        variant={variant}
+        style={{ margin: variant === 'preview' ? '10px 0' : '4px 0' }}
+        sourceLine={lineData['data-source-line']}
+        sourceLineEnd={lineData['data-source-line-end']}
+      />
+    )
   }
 
   const TableBlock = ({ node, children }: IntrinsicProps<'table'>) => {
     const { headers, rows } = extractTableMatrix(node)
     const widths = computeTableColumnWidths(headers, rows)
     return (
-      <div style={s.tableWrap}>
+      <div style={s.tableWrap} {...sourceLineData(node)}>
         <table style={s.table}>
           {widths.length > 0 && (
             <colgroup>
@@ -374,32 +401,33 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
     h5: makeHeading(5),
     h6: makeHeading(6),
     p: (props: IntrinsicProps<'p'>) => {
-      const { children } = props
+      const { children, node } = props
       const rest = stripNode(props)
-      return <p {...rest} style={{ ...s.paragraph, ...wrap }}>{children}</p>
+      return <p {...rest} {...sourceLineData(node)} style={{ ...s.paragraph, ...wrap }}>{children}</p>
     },
     blockquote: (props: IntrinsicProps<'blockquote'>) => {
-      const { children } = props
+      const { children, node } = props
       const rest = stripNode(props)
-      return <blockquote {...rest} style={{ ...s.blockquote, ...wrap }}>{children}</blockquote>
+      return <blockquote {...rest} {...sourceLineData(node)} style={{ ...s.blockquote, ...wrap }}>{children}</blockquote>
     },
     ul: (props: IntrinsicProps<'ul'>) => {
-      const { children } = props
+      const { children, node } = props
       const rest = stripNode(props)
-      return <ul {...rest} style={s.list}>{children}</ul>
+      return <ul {...rest} {...sourceLineData(node)} style={s.list}>{children}</ul>
     },
     ol: (props: IntrinsicProps<'ol'>) => {
-      const { children } = props
+      const { children, node } = props
       const rest = stripNode(props)
-      return <ol {...rest} style={{ ...s.list, listStyleType: 'decimal' }}>{children}</ol>
+      return <ol {...rest} {...sourceLineData(node)} style={{ ...s.list, listStyleType: 'decimal' }}>{children}</ol>
     },
     li: (props: IntrinsicProps<'li'>) => {
-      const { children, className } = props
+      const { children, className, node } = props
       const rest = stripNode(props)
+      const lineData = sourceLineData(node)
       const isTaskItem = typeof className === 'string' && className.includes('task-list-item')
       if (!isTaskItem) {
         return (
-          <li {...rest} style={{ ...s.listItem, ...wrap }}>
+          <li {...rest} {...lineData} style={{ ...s.listItem, ...wrap }}>
             {children}
           </li>
         )
@@ -410,6 +438,7 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
       return (
         <li
           {...rest}
+          {...lineData}
           style={{
             ...s.listItem,
             ...wrap,
@@ -443,8 +472,9 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
     th: Th,
     td: Td,
     hr: (props: IntrinsicProps<'hr'>) => {
+      const { node } = props
       const rest = stripNode(props)
-      return <hr {...rest} style={s.hr} />
+      return <hr {...rest} {...sourceLineData(node)} style={s.hr} />
     },
     a: (props: IntrinsicProps<'a'>) => {
       const { children, href } = props
