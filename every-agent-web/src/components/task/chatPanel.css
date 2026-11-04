@@ -805,14 +805,21 @@
   max-width: none;
 }
 
-/* 胶囊 label 及其内嵌渲染容器(TokenRichText 子根带 --single-line,
-   嵌套胶囊渲染硬编码 singleLine)统一单行 + clip:不换行、不出现「…」。 */
-.nagent-task-title-replay .nagent-inline-chip__label,
-.nagent-task-title-replay .nagent-msg__content--single-line,
-.nagent-task-title-replay .nagent-msg__content--single-line .nagent-msg__inline-text,
-.nagent-task-title-replay .nagent-msg__content--single-line .nagent-msg__content--user-replay {
+/* 后代逐层压回单行:标题不再走 TokenRichText 的 singleLine 模式(根上没有
+   --single-line class),而文本段(.nagent-msg__inline-text)与嵌套渲染容器
+   (.nagent-msg__content--user-replay,胶囊 label 内嵌小胶囊时的子根)都自带
+   显式 pre-wrap/word-break,显式声明优先于继承,必须在此逐层压回——否则标题
+   被文本段撑成多行。 */
+.nagent-task-title-replay .nagent-msg__inline-text,
+.nagent-task-title-replay .nagent-msg__content--user-replay {
   white-space: nowrap;
   word-break: normal;
+  overflow-wrap: normal;
+}
+
+/* 胶囊 label 同步单行 + clip(默认 ellipsis,超宽时会出「…」)。 */
+.nagent-task-title-replay .nagent-inline-chip__label {
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: clip;
 }
