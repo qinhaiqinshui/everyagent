@@ -782,18 +782,43 @@
   background: color-mix(in srgb, var(--accent-blue) 20%, var(--accent-blue-dim));
 }
 
-/* 任务列表标题胶囊渲染:覆盖 user-replay 的 pre-wrap/word-break,
-   强制单行 + nowrap,配合父级 overflow:hidden + text-overflow:ellipsis
-   实现侧边栏宽度自适应截断(拉宽可见更多内容)。 */
+/* 任务列表标题胶囊渲染:标题不做单行截断——去掉 nowrap/ellipsis,随侧边栏宽度
+   自然换行,能显示多少内容就显示多少内容;行高由内容撑开,溢出交给侧边栏
+   滚动区。标题里的胶囊(含嵌套小胶囊)同样不内部省略:去掉宽度封顶,label
+   随行换行,保证标题内不出现任何「…」。 */
 .nagent-task-title-replay {
-  white-space: nowrap !important;
-  word-break: normal !important;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: pre-wrap !important;
+  word-break: break-word !important;
+  overflow-wrap: anywhere !important;
+  overflow: visible !important;
+  text-overflow: clip !important;
 }
 
-/* TokenRichText 单行模式(任务列表标题/弹窗列表条目等窄条场景,组件 prop
-   singleLine 挂载):根块级容器 nowrap + ellipsis 自截断;单行约束逐层传导到
+/* 标题场景胶囊不封顶、不省略:label 随容器宽度换行(胶囊本体 nowrap 的
+   单行视觉让位于「完整展示标题内容」)。pointer-events:none 维持原有约束:
+   点击语义归任务行打开。 */
+.nagent-task-title-replay .nagent-inline-chip--replay {
+  pointer-events: none;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* 胶囊 label 及其内嵌渲染容器(TokenRichText 子根带 --single-line,
+   嵌套胶囊渲染硬编码 singleLine)逐层压回换行,撤销 nowrap+ellipsis。 */
+.nagent-task-title-replay .nagent-inline-chip__label,
+.nagent-task-title-replay .nagent-msg__content--single-line,
+.nagent-task-title-replay .nagent-msg__content--single-line .nagent-msg__inline-text,
+.nagent-task-title-replay .nagent-msg__content--single-line .nagent-msg__content--user-replay {
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  overflow: visible;
+  text-overflow: clip;
+}
+
+/* TokenRichText 单行模式(弹窗列表条目等窄条场景,组件 prop
+   singleLine 挂载;任务列表标题已改为多行换行展示,不再走单行截断):根块级容器 nowrap + ellipsis 自截断;单行约束逐层传导到
    后代——文本段(.nagent-msg__inline-text)与嵌套胶囊渲染容器
    (.nagent-msg__content--user-replay,胶囊 label 内嵌小胶囊时的子根)都自带
    显式 pre-wrap/word-break,显式声明优先于继承,必须用更高优先级选择器压回,
@@ -809,10 +834,6 @@
 .nagent-msg__content--single-line .nagent-msg__content--user-replay {
   white-space: nowrap;
   word-break: normal;
-}
-
-.nagent-task-title-replay .nagent-inline-chip--replay {
-  pointer-events: none;
 }
 
 /* 嵌套胶囊（胶囊 label 内再嵌胶囊，如「等待任务」胶囊内嵌目标任务标题的引用胶囊）：

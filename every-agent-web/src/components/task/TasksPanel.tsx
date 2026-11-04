@@ -423,15 +423,14 @@ export default function TasksPanel({
 
   /**
    * 任务标题胶囊渲染:把 rawContent(含 opaque token 串,嵌套整体成段)交给公共组件
-   * TokenRichText 渲染(与用户消息视图/插件弹窗同一套渲染逻辑);singleLine 单行
-   * 截断(含嵌套胶囊逐层压回单行),侧边栏拉宽时可见更多内容;胶囊不可交互
-   * (点击语义归任务行打开)。
+   * TokenRichText 渲染(与用户消息视图/插件弹窗同一套渲染逻辑);标题不截断——
+   * 随侧边栏宽度自然换行,能显示多少内容就显示多少内容(行高由内容撑开,溢出交给
+   * 侧边栏滚动区);胶囊不可交互(点击语义归任务行打开)。
    */
   const renderTaskTitle = (task: TaskListItemSnapshot) => (
     <TokenRichText
       text={task.displayTitle}
       className="nagent-task-title-replay"
-      singleLine
       interactive={false}
     />
   )
@@ -981,9 +980,9 @@ const taskTitleStyle: React.CSSProperties = {
   fontWeight: 700,
   minWidth: 0,
   flex: 1,
-  overflow: 'hidden',
-  textOverflow: 'ellipsis',
-  whiteSpace: 'nowrap',
+  // 标题不截断:不设 nowrap/ellipsis,随侧边栏宽度换行,能显示多少内容就显示多少内容;
+  // overflow-wrap 兜底超长无空格串(路径/URL)也能折行,不撑破行宽。
+  overflowWrap: 'anywhere',
 }
 
 const taskMetaRowStyle: React.CSSProperties = {
