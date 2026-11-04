@@ -32,15 +32,15 @@ export interface TokenRichTextProps {
   tokens?: ChatComposerToken[]
   /**
    * 外层容器附加类名。缺省 `nagent-msg__content--user-replay`（消息回放布局：
-   * pre-wrap + break-word）；任务列表标题等需要自定义截断/换行行为的场景传
-   * `nagent-task-title-replay`（多行换行,不截断）。
+   * pre-wrap + break-word）；任务列表标题场景传 `nagent-task-title-replay`
+   * （单行不省略,随行宽裁切,拖宽可见更多）。
    */
   className?: string
   /**
    * 单行模式（弹窗列表条目等窄条场景）：根容器 nowrap +
    * ellipsis 自截断，并把单行约束传导到全部后代（文本段 / 嵌套胶囊渲染容器
    * 自带显式 pre-wrap，显式声明优先于继承，必须逐层压回——否则标题被撑成多行）。
-   * 默认 false（消息回放多行）。任务列表标题已不用本模式（改为多行换行展示）。
+   * 默认 false（消息回放多行）。任务列表标题不走本模式（自定义单行 + clip 无省略）。
    */
   singleLine?: boolean
   /** 胶囊是否可交互（点击触发 chip action / 只读详情）。默认 true。 */

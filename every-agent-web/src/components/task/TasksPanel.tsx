@@ -423,9 +423,9 @@ export default function TasksPanel({
 
   /**
    * 任务标题胶囊渲染:把 rawContent(含 opaque token 串,嵌套整体成段)交给公共组件
-   * TokenRichText 渲染(与用户消息视图/插件弹窗同一套渲染逻辑);标题不截断——
-   * 随侧边栏宽度自然换行,能显示多少内容就显示多少内容(行高由内容撑开,溢出交给
-   * 侧边栏滚动区);胶囊不可交互(点击语义归任务行打开)。
+   * TokenRichText 渲染(与用户消息视图/插件弹窗同一套渲染逻辑);标题单行展示、
+   * 不省略截断(不出现「…」)——行宽即侧边栏宽度,能显示多少就显示多少,拖宽
+   * 侧边栏即可看到更多;胶囊不可交互(点击语义归任务行打开)。
    */
   const renderTaskTitle = (task: TaskListItemSnapshot) => (
     <TokenRichText
@@ -980,9 +980,11 @@ const taskTitleStyle: React.CSSProperties = {
   fontWeight: 700,
   minWidth: 0,
   flex: 1,
-  // 标题不截断:不设 nowrap/ellipsis,随侧边栏宽度换行,能显示多少内容就显示多少内容;
-  // overflow-wrap 兜底超长无空格串(路径/URL)也能折行,不撑破行宽。
-  overflowWrap: 'anywhere',
+  // 单行展示、不省略:nowrap + clip(无「…」),行宽即侧边栏宽度,拖宽可见更多;
+  // overflow:hidden 把溢出裁在行边界,不外溢到操作按钮/卡片外。
+  overflow: 'hidden',
+  textOverflow: 'clip',
+  whiteSpace: 'nowrap',
 }
 
 const taskMetaRowStyle: React.CSSProperties = {
