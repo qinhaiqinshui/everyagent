@@ -114,7 +114,20 @@ export function scrollEditorToLine(view: EditorView | null, line: number): void 
   const doc = view.state.doc
   if (doc.lines === 0) return
   const clamped = clamp(Math.round(line), 1, doc.lines)
-  view.dispatch({
-    effects: EditorView.scrollIntoView(doc.line(clamped).from, { y: 'start' }),
+  // 经一次完整测量后再 dispatch:编辑器可能刚从 display:none 变为可见(视图切换/进入双栏),
+  // 此前 CodeMirror 的几何(viewport/editorHeight)是隐藏期的失真值,直接 dispatch
+  // scrollIntoView 可能被判定「无需滚动」而失效。write 回调在本轮测量完成后执行,
+  // 其触发的更新会在下一轮测量中以真实几何应用滚动;measure 在视图销毁后自动丢弃回调。
+  view.requestMeasure({
+    key: 'everyagent-md-scroll-editor-to-line',
+    read: () => null,
+    write: () => {
+      // write 异步执行,期间文档可能已变更——基于当前文档 clamp 后再取行位置。
+      const currentDoc = view.state.doc
+      const safeLine = clamp(clamped, 1, currentDoc.lines)
+      view.dispatch({
+        effects: EditorView.scrollIntoView(currentDoc.line(safeLine).from, { y: 'start' }),
+      })
+    },
   })
 }

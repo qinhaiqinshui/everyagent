@@ -39,21 +39,24 @@ function MarkdownFileEditor({
   const previewRootRef = React.useRef<HTMLDivElement | null>(null)
   const previewComponentRef = React.useRef<React.ElementRef<typeof MarkdownPreview> | null>(null)
   const splitEditorRef = React.useRef<React.ElementRef<typeof MarkdownSplitEditor> | null>(null)
-  const previousModeRef = React.useRef(mode)
   const headings = React.useMemo<MarkdownHeading[]>(() => (
     parseMarkdownHeadings(mode === 'readonly' ? content : draftContent)
   ), [content, draftContent, mode])
   const sourceContent = mode === 'readonly' ? content : draftContent
 
-  React.useEffect(() => {
-    const previousMode = previousModeRef.current
-    if (mode === 'readonly') {
-      setViewMode('preview')
-    } else if (previousMode === 'readonly' && viewMode === 'preview') {
+  // mode 切换时同步(渲染期)调整视图:readonly→readwrite 进入源码视图,回退 readonly 回预览。
+  // 用「渲染期 setState」而非 effect:MarkdownSplitEditor 首次挂载就直接以目标视图挂载——
+  // 避免「先以编辑器隐藏(preview)形态挂载、下个 effect 再翻转」导致 CodeMirror 在
+  // display:none 下创建、测量几何失真(首切编辑模式滚动定位失效的根因)。
+  const [prevMode, setPrevMode] = React.useState(mode)
+  if (mode !== prevMode) {
+    setPrevMode(mode)
+    if (mode === 'readwrite' && prevMode === 'readonly' && viewMode === 'preview') {
       setViewMode('editor')
+    } else if (mode === 'readonly') {
+      setViewMode('preview')
     }
-    previousModeRef.current = mode
-  }, [mode, viewMode])
+  }
 
   // 行定位请求（如搜索结果点击跳转到指定行）到来时切到源码视图：
   // 预览视图不挂载 CodeMirror，行定位无法生效；split/editor 视图保持不动。

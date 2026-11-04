@@ -199,15 +199,11 @@ export default function CodeMirrorEditor({
 
   // ── 行定位：lineLocateRequestedAt 变化时滚动到目标行 ──
   // 用双重 requestAnimationFrame 确保浏览器完成 layout 后再滚动：
-  // 第一帧让 React 完成 DOM 提交，第二帧让浏览器完成 layout 计算，
-  // 之后 CodeMirror 的 scrollIntoView 才能正确计算滚动位置。
-  // 文档为空时不执行定位——首次打开文件时可能先以空内容挂载，文件读取完成
-  // 后内容才就绪；此时不应消费 lineLocateRequestedAt（否则会清除定位请求，
-  // 导致内容就绪后无法再次定位）。
-  // ── 行定位：lineLocateRequestedAt 变化时滚动到目标行 ──
-  // 用双重 requestAnimationFrame 确保浏览器完成 layout 后再滚动：
-  // 第一帧让 React 完成 DOM 提交，第二帧让浏览器完成 layout 计算，
-  // 之后 CodeMirror 的 scrollIntoView 才能正确计算滚动位置。
+  // 第一帧让 React 完成 DOM 提交，第二帧让浏览器完成 layout 计算；
+  // 随后再经一次 CodeMirror 完整测量(requestMeasure write 阶段)才 dispatch
+  // scrollIntoView——编辑器可能刚从 display:none 变为可见(如 markdown 预览视图
+  // 收到跳转请求后切回编辑器),隐藏期的失真几何会让 scrollIntoView 判定
+  // 「无需滚动」而失效;测量完成后以真实几何应用滚动。
   // 文档为空时不执行定位——首次打开文件时可能先以空内容挂载，文件读取完成
   // 后内容才就绪；此时不应消费 lineLocateRequestedAt（否则会清除定位请求，
   // 导致内容就绪后无法再次定位）。
@@ -230,11 +226,17 @@ export default function CodeMirrorEditor({
         const line = Math.min(Math.max(1, lineNumber), doc.lines)
         const lineStart = doc.line(line).from
 
-        v.dispatch({
-          effects: EditorView.scrollIntoView(
-            lineStart,
-            { y: 'center' },
-          ),
+        v.requestMeasure({
+          key: 'everyagent-cm-locate-line',
+          read: () => null,
+          write: () => {
+            v.dispatch({
+              effects: EditorView.scrollIntoView(
+                lineStart,
+                { y: 'center' },
+              ),
+            })
+          },
         })
         onLineLocateApplied?.()
       })

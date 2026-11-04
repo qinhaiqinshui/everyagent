@@ -78,6 +78,10 @@ const MarkdownSplitEditor = React.forwardRef<MarkdownSplitEditorHandle, Markdown
   const editorScrollTopRef = React.useRef(0)
   const previewScrollTopRef = React.useRef(0)
   const initialEditorLineConsumedRef = React.useRef(false)
+  // 编辑器侧消费了 initialEditorLine 后,同款行号暂存给预览侧:编辑器挂载时预览面板
+  // 从未显示过(scrollTop 恒 0),首次切回预览/双栏时用它把预览也定位到同一行,
+  // 而不是恢复到顶部——保证 readonly(行N) → 编辑 → 预览 全程位置一致。
+  const pendingInitialPreviewLineRef = React.useRef<number | null>(initialEditorLine ?? null)
   // ── 双栏(split)滚动同步:编辑器/预览任一侧滚动时,另一侧按源行号跟随
   //    (VSCode 式)。syncLock 标记当前主动同步的发起侧,短窗内忽略对侧回声
   //    scroll 事件,避免互相触发的同步循环;视图模式经 ref 供事件回调读取最新值。
@@ -251,7 +255,13 @@ const MarkdownSplitEditor = React.forwardRef<MarkdownSplitEditorHandle, Markdown
     if (viewMode === 'preview' && previous === 'editor') {
       const element = previewScrollRef.current
       if (element) {
-        element.scrollTop = previewScrollTopRef.current
+        const pendingLine = pendingInitialPreviewLineRef.current
+        if (pendingLine != null) {
+          pendingInitialPreviewLineRef.current = null
+          scrollPreviewToLine(element, pendingLine)
+        } else {
+          element.scrollTop = previewScrollTopRef.current
+        }
       }
       return
     }
@@ -259,6 +269,9 @@ const MarkdownSplitEditor = React.forwardRef<MarkdownSplitEditorHandle, Markdown
     // 有挂起的大纲跳转(editor 模式选标题 → 切 split 后滚预览)时让位,
     // 避免「预览对齐编辑器」覆盖掉即将执行的大纲定位。
     if (pendingHeadingIdRef.current != null) return
+    // 进入双栏:预览侧对齐编辑器(或反向),挂起的初始预览行号一并清除
+    // (对齐结果与它等价,留着会在后续单栏切换时造成回跳)。
+    pendingInitialPreviewLineRef.current = null
     let raf1 = 0
     let raf2 = 0
     raf1 = requestAnimationFrame(() => {
