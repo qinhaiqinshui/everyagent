@@ -214,6 +214,10 @@ public class EmptyResponseRetryAdvisor implements CallAdvisor, StreamAdvisor {
     /**
      * 退避 + 倒计时:每秒一条瞬态 retry(不落盘),最后一秒结束后触发重试。
      * 中止(dispose)会取消 interval,不再触发重试;实际等待 = 向上取整到秒。
+     *
+     * <p><b>终态闸门(2026-11 t_5v9a)</b>:与 TransientErrorRetryAdvisor 同纪律——重订点
+     * 检查 agent 终态(stop_agent/stopAll 已 claimTerminal(stopped) 时不再重订),
+     * 「停止后读秒到期旧流复活」从数据面根治。
      */
     private Flux<ChatClientResponse> backoffAndRetry(long delayMs, int attempt,
             ChatClientRequest request, StreamAdvisorChain original,
@@ -234,6 +238,12 @@ public class EmptyResponseRetryAdvisor implements CallAdvisor, StreamAdvisor {
                                     delayMs, elapsed, remaining, "empty_response"),
                             EmitEvent.Mode.REPLACE));
                     if (i == ticks - 1) {
+                        if (a.finished() || "stopped".equals(a.status())) {
+                            log.info("任务 {} agent {} 已停止(stopped),放弃空响应第 {} 次重订(终态闸门)",
+                                    a.execution().subjectId(), a.agentId(), attempt);
+                            return Flux.error(new AgentCancelledException(
+                                    "agent 已停止,重试读秒中止"));
+                        }
                         return attemptStream(request, original.copy(this), original,
                                 sawSignal, emptyAttempts, totalDelayMs, waveId);
                     }

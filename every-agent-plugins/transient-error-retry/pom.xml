@@ -25,5 +25,12 @@
             <groupId>org.springframework.ai</groupId>
             <artifactId>spring-ai-openai</artifactId>
         </dependency>
+        <!-- 兄弟插件(同版本):复现测试组装生产同构链(空响应重试在瞬时重试外层) -->
+        <dependency>
+            <groupId>io.github.qinhaiqinshui</groupId>
+            <artifactId>empty-response-retry</artifactId>
+            <version>0.1.0</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 </project>
