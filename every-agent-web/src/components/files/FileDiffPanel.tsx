@@ -14,7 +14,7 @@ import { Button } from '@/components/shared/ui'
 import { useWorkspaceShell } from '@/components/app/WorkspaceShellContext'
 import { useAppUi } from '@/components/app/AppUiContext'
 import { App } from 'antd'
-import { UndoOutlined } from '@ant-design/icons'
+import { DownOutlined, UndoOutlined, UpOutlined } from '@ant-design/icons'
 import { workspaceRegistry } from '@/hub/workspaceRegistry'
 import { workspaceGateway } from '@/platform/fs/workspaceGateway'
 import { FilesIcon } from '@/components/icon'
@@ -109,6 +109,121 @@ export default function FileDiffPanel({ fileChange, workspaceRoot: diffWorkspace
     }
     return map
   }, [diffRows])
+
+  /* ─── 变更点导航 ───────────────────────────────────────────
+   * 块首行 DOM 带 data-hunk-start(单列/并排两视图一致),工具栏「上一个/
+   * 下一个」按块序号循环跳转(smooth 滚到视口中央);当前所在块由滚动
+   * 位置反算(已进入过视口的最后一块),导航动画在途期间加锁暂停反算,
+   * 避免显示抖动与连点跳错块。
+   */
+  const hunkCount = hunkFirstRowKeyToIndex.size
+  /** 滚动容器(差异行区域)。 */
+  const diffBodyRef = React.useRef<HTMLDivElement | null>(null)
+  /** 当前所在变更块序号(-1 = 视口尚未进入过任何变更块,如文件开头全是上下文)。 */
+  const [activeHunkIndex, setActiveHunkIndex] = React.useState(-1)
+  /** smooth 导航在途锁(动画期间忽略 scroll 反算)。 */
+  const navLockRef = React.useRef(false)
+  /** 导航目标块(动画结束后以此为准复位,无视同屏多块的干扰)。 */
+  const navTargetRef = React.useRef<number | null>(null)
+  /** 不支持/未触发 scrollend 环境的解锁兜底定时器。 */
+  const navUnlockTimerRef = React.useRef<number | null>(null)
+  /** scroll 反算的 rAF 节流句柄。 */
+  const navSyncRafRef = React.useRef<number | null>(null)
+
+  /** 解除导航锁:优先采信导航目标(scrollend 与兜底 timer 共用)。 */
+  const releaseNavLock = React.useCallback(() => {
+    navLockRef.current = false
+    if (navTargetRef.current != null) {
+      setActiveHunkIndex(navTargetRef.current)
+      navTargetRef.current = null
+    }
+  }, [])
+
+  /** 按滚动位置反算当前块:块首行顶缘进入过视口(在视口底缘之上)的最后一块。 */
+  const syncActiveHunkFromScroll = React.useCallback(() => {
+    if (navLockRef.current) return
+    const body = diffBodyRef.current
+    if (!body || hunkCount === 0) return
+    const viewportBottom = body.getBoundingClientRect().bottom
+    let current = -1
+    body.querySelectorAll<HTMLElement>('[data-hunk-start]').forEach((anchor, index) => {
+      if (anchor.getBoundingClientRect().top < viewportBottom) {
+        current = index
+      }
+    })
+    setActiveHunkIndex(current)
+  }, [hunkCount])
+
+  /** rAF 节流的 scroll 反算调度。 */
+  const scheduleSyncActiveHunk = React.useCallback(() => {
+    if (navSyncRafRef.current != null) return
+    navSyncRafRef.current = window.requestAnimationFrame(() => {
+      navSyncRafRef.current = null
+      syncActiveHunkFromScroll()
+    })
+  }, [syncActiveHunkFromScroll])
+
+  React.useEffect(() => {
+    const body = diffBodyRef.current
+    if (!body) return
+    const handleScroll = () => scheduleSyncActiveHunk()
+    const handleScrollEnd = () => releaseNavLock()
+    body.addEventListener('scroll', handleScroll, { passive: true })
+    body.addEventListener('scrollend', handleScrollEnd)
+    return () => {
+      body.removeEventListener('scroll', handleScroll)
+      body.removeEventListener('scrollend', handleScrollEnd)
+    }
+  }, [scheduleSyncActiveHunk, releaseNavLock])
+
+  /** 差异内容切换:旧导航在途状态作废,强制复位(需先于下方 sync effect,切内容后立即重算)。 */
+  React.useEffect(() => {
+    navLockRef.current = false
+    navTargetRef.current = null
+    if (navUnlockTimerRef.current != null) {
+      window.clearTimeout(navUnlockTimerRef.current)
+      navUnlockTimerRef.current = null
+    }
+    setActiveHunkIndex(-1)
+  }, [fileChange])
+
+  /** 视图切换 / 差异行重建后立即重算一次当前位置。 */
+  React.useEffect(() => {
+    syncActiveHunkFromScroll()
+  }, [syncActiveHunkFromScroll, diffRows, viewType])
+
+  React.useEffect(() => () => {
+    if (navUnlockTimerRef.current != null) window.clearTimeout(navUnlockTimerRef.current)
+    if (navSyncRafRef.current != null) window.cancelAnimationFrame(navSyncRafRef.current)
+  }, [])
+
+  /** 跳转到指定变更块:smooth 滚到视口中央;解锁优先 scrollend,timer 兜底。 */
+  const navigateToHunk = React.useCallback((target: number) => {
+    const body = diffBodyRef.current
+    if (!body || target < 0 || target >= hunkCount) return
+    const targetAnchor = body.querySelector<HTMLElement>(`[data-hunk-start="${target}"]`)
+    if (!targetAnchor) return
+    navLockRef.current = true
+    navTargetRef.current = target
+    setActiveHunkIndex(target)
+    targetAnchor.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    if (navUnlockTimerRef.current != null) window.clearTimeout(navUnlockTimerRef.current)
+    navUnlockTimerRef.current = window.setTimeout(() => {
+      navUnlockTimerRef.current = null
+      releaseNavLock()
+    }, NAV_UNLOCK_FALLBACK_MS)
+  }, [hunkCount, releaseNavLock])
+
+  const goToNextHunk = React.useCallback(() => {
+    if (hunkCount === 0) return
+    const next = activeHunkIndex + 1
+    navigateToHunk(next >= hunkCount ? 0 : next)
+  }, [activeHunkIndex, hunkCount, navigateToHunk])
+
+  const goToPrevHunk = React.useCallback(() => {
+    if (hunkCount === 0) return
+    navigateToHunk(activeHunkIndex <= 0 ? hunkCount - 1 : activeHunkIndex - 1)
+  }, [activeHunkIndex, hunkCount, navigateToHunk])
 
   /** 回滚目标工作区(优先差异所属根,缺省回退注册表首项;null=不可回滚)。 */
   const rollbackWorkspaceRoot = diffWorkspaceRoot ?? workspaceRegistry.primaryRoot()
@@ -335,29 +450,64 @@ export default function FileDiffPanel({ fileChange, workspaceRoot: diffWorkspace
             <span className="file-diff-panel__open-file-label">{rollingBackAll ? '回滚中…' : '回滚全部变更'}</span>
           </Button>
         ) : null}
-        <div className="file-diff-panel__view-toggle" role="group" aria-label="差异视图切换">
-          <Button
-            variant="ghost"
-            size="sm"
-            className={`file-diff-panel__view-button${viewType === 'unified' ? ' is-active' : ''}`}
-            aria-pressed={viewType === 'unified'}
-            onClick={() => setViewType('unified')}
-          >
-            单列
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            className={`file-diff-panel__view-button${viewType === 'split' ? ' is-active' : ''}`}
-            aria-pressed={viewType === 'split'}
-            onClick={() => setViewType('split')}
-            disabled={isMobile}
-          >
-            并排
-          </Button>
+        <div className="file-diff-panel__toolbar-side">
+          {hunkCount > 0 ? (
+            <div className="file-diff-panel__hunk-nav" role="group" aria-label="变更点跳转导航">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="file-diff-panel__hunk-nav-button"
+                title="上一个变更点（到头后循环到最后一处）"
+                aria-label="上一个变更点"
+                onClick={goToPrevHunk}
+              >
+                <UpOutlined />
+              </Button>
+              <span
+                className="file-diff-panel__hunk-counter"
+                aria-live="polite"
+                title={activeHunkIndex >= 0
+                  ? `第 ${activeHunkIndex + 1} 处变更，共 ${hunkCount} 处`
+                  : `尚未定位到变更点，共 ${hunkCount} 处`}
+              >
+                {activeHunkIndex >= 0 ? `${activeHunkIndex + 1}/${hunkCount}` : `–/${hunkCount}`}
+              </span>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="file-diff-panel__hunk-nav-button"
+                title="下一个变更点（到尾后循环回第一处）"
+                aria-label="下一个变更点"
+                onClick={goToNextHunk}
+              >
+                <DownOutlined />
+              </Button>
+            </div>
+          ) : null}
+          <div className="file-diff-panel__view-toggle" role="group" aria-label="差异视图切换">
+            <Button
+              variant="ghost"
+              size="sm"
+              className={`file-diff-panel__view-button${viewType === 'unified' ? ' is-active' : ''}`}
+              aria-pressed={viewType === 'unified'}
+              onClick={() => setViewType('unified')}
+            >
+              单列
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className={`file-diff-panel__view-button${viewType === 'split' ? ' is-active' : ''}`}
+              aria-pressed={viewType === 'split'}
+              onClick={() => setViewType('split')}
+              disabled={isMobile}
+            >
+              并排
+            </Button>
+          </div>
         </div>
       </div>
-      <div className="file-diff-panel__body">
+      <div className="file-diff-panel__body" ref={diffBodyRef}>
         {viewType === 'split'
           ? <SplitDiffTable rows={diffRows} hunkFirstRowKeyToIndex={hunkFirstRowKeyToIndex} renderHunkAction={renderHunkAction} />
           : <UnifiedDiffTable rows={diffRows} hunkFirstRowKeyToIndex={hunkFirstRowKeyToIndex} renderHunkAction={renderHunkAction} />}
@@ -368,6 +518,9 @@ export default function FileDiffPanel({ fileChange, workspaceRoot: diffWorkspace
 
 /** 单块回滚定位不唯一时,自动扩大上下文行的最大行数(通常 1-2 行即可消歧)。 */
 const MAX_ROLLBACK_CONTEXT_LINES = 3
+
+/** 变更点导航解锁兜底时长(毫秒):scrollend 未触发(不支持/被打断)时由 timer 解锁。 */
+const NAV_UNLOCK_FALLBACK_MS = 800
 
 type HunkRollbackButtonProps = {
   /** 变更块序号。 */
@@ -424,6 +577,7 @@ function SplitDiffTable({ rows, hunkFirstRowKeyToIndex, renderHunkAction }: Spli
           <div
             key={row.key}
             className={`file-diff-row file-diff-row--${row.type}${hunkIndex !== undefined ? ' file-diff-row--hunk-start' : ''}`}
+            data-hunk-start={hunkIndex}
             role="row"
           >
             {hunkIndex !== undefined ? renderHunkAction(hunkIndex) : null}
@@ -480,6 +634,7 @@ function UnifiedDiffTable({ rows, hunkFirstRowKeyToIndex, renderHunkAction }: Un
                 content={row.leftContent}
                 parts={row.leftParts}
                 hunkAction={hunkAction}
+                hunkStartIndex={hunkIndex ?? undefined}
               />
             ),
             (
@@ -506,6 +661,7 @@ function UnifiedDiffTable({ rows, hunkFirstRowKeyToIndex, renderHunkAction }: Un
                 content={row.leftContent}
                 parts={row.leftParts}
                 hunkAction={hunkAction}
+                hunkStartIndex={hunkIndex ?? undefined}
               />
             ),
           ]
@@ -522,6 +678,7 @@ function UnifiedDiffTable({ rows, hunkFirstRowKeyToIndex, renderHunkAction }: Un
                 content={row.rightContent}
                 parts={row.rightParts}
                 hunkAction={hunkAction}
+                hunkStartIndex={hunkIndex ?? undefined}
               />
             ),
           ]
@@ -537,6 +694,7 @@ function UnifiedDiffTable({ rows, hunkFirstRowKeyToIndex, renderHunkAction }: Un
               content={row.rightContent}
               parts={row.rightParts}
               hunkAction={hunkAction}
+              hunkStartIndex={hunkIndex ?? undefined}
             />
           ),
         ]
@@ -595,15 +753,18 @@ type UnifiedDiffLineProps = {
   parts: InlineDiffPart[]
   /** 该行是变更块首行时携带的回滚动作(悬浮按钮)。 */
   hunkAction?: React.ReactNode
+  /** 该行是变更块首行时的块序号(导航锚点 data-hunk-start)。 */
+  hunkStartIndex?: number
 }
 
 /**
  * 单列视图的单行。
  */
-function UnifiedDiffLine({ marker, type, lineNumber, content, parts, hunkAction }: UnifiedDiffLineProps) {
+function UnifiedDiffLine({ marker, type, lineNumber, content, parts, hunkAction, hunkStartIndex }: UnifiedDiffLineProps) {
   return (
     <div
       className={`file-diff-unified-line file-diff-unified-line--${type}${hunkAction != null ? ' file-diff-unified-line--hunk-start' : ''}`}
+      data-hunk-start={hunkStartIndex}
       role="row"
     >
       {hunkAction != null ? hunkAction : null}

@@ -86,6 +86,58 @@
   border-left: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
 }
 
+/* ─── 变更点跳转导航(上一个 / 当前序号 / 下一个) ─────────────────────────── */
+
+.file-diff-panel__toolbar-side {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.file-diff-panel__hunk-nav {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid color-mix(in srgb, var(--border) 92%, transparent);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.file-diff-panel__hunk-nav-button {
+  min-height: 24px;
+  height: 24px;
+  width: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  box-shadow: none;
+  font-size: var(--text-xs);
+}
+
+.file-diff-panel__hunk-nav-button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent-blue) 12%, var(--bg-primary));
+  color: var(--text-primary);
+}
+
+.file-diff-panel__hunk-nav-button:focus-visible {
+  outline: 2px solid var(--focus-ring-color);
+  outline-offset: -2px;
+}
+
+.file-diff-panel__hunk-counter {
+  min-width: 40px;
+  padding: 0 6px;
+  text-align: center;
+  font-size: var(--text-xs);
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  user-select: none;
+  border-left: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  border-right: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+}
+
 .file-diff-panel__body {
   min-height: 0;
   overflow: auto;
