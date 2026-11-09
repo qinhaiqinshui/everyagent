@@ -35,6 +35,12 @@ SSH 密码：优先级 DEPLOY_SSH_PASSWORD 环境变量 > 交互输入 > --passw
   # 只部署 worker（--no-deps 不连带拉起依赖的 hub）
   python deploy.py worker --no-deps --host 1.2.3.4 --user root -k ~/.ssh/id_rsa
 
+  # worker/hub 的 JVM 内存参数默认按 4G 内存小服务器收敛（worker -Xmx1g / hub -Xmx256m，
+  # 显式限堆，避免依赖 JVM 按物理内存 1/4 取默认堆上限的漂移行为）；大内存机器可覆盖：
+  python deploy.py worker --host 1.2.3.4 --worker-java-opts "-Xmx2g -XX:MaxMetaspaceSize=256m"
+  # （也可经 --config 文件 WORKER_JAVA_OPTS= / HUB_JAVA_OPTS= 或环境变量
+  #   DEPLOY_WORKER_JAVA_OPTS / DEPLOY_HUB_JAVA_OPTS 提供；显式传空字符串清除全部 JVM 参数）
+
   # 预览：不构建、不上传、不连服务器
   python deploy.py all --dry-run
 
@@ -144,16 +150,38 @@ WORKER_IMAGE = "eclipse-temurin:25-jre"
 # TODO: pin @sha256:<digest>（同上）
 WEB_IMAGE = "nginx:alpine"
 
+# JVM 启动参数默认值（host 模式注入 systemd ExecStart，docker 模式注入 compose command）。
+# 默认面向 4G 内存小服务器收敛：实测 worker 常驻 <650MB、hub <260MB，显式限堆避免依赖
+# JVM「按物理内存 1/4 取默认堆上限」的漂移行为（换台大内存机器反而可能堆上限过高吃满内存）。
+# 覆盖途径：--worker-java-opts / --hub-java-opts > DEPLOY_WORKER_JAVA_OPTS / DEPLOY_HUB_JAVA_OPTS
+# > --config 文件 WORKER_JAVA_OPTS= / HUB_JAVA_OPTS=；CLI 显式传空字符串可清除全部 JVM 参数。
+DEFAULT_WORKER_JAVA_OPTS = "-Xmx1g -XX:MaxMetaspaceSize=256m"
+DEFAULT_HUB_JAVA_OPTS = "-Xmx256m -XX:MaxMetaspaceSize=128m"
+
 # 服务器端 docker-compose：官方镜像 + 挂载本地编译产物，不构建自定义镜像。
 # 三个服务始终定义齐全；只部署部分时，未部署的服务不会被启动（其挂载路径无需存在）。
 # worker 通过 bind mount 把「宿主工作区根」挂到容器内相同绝对路径，
 # 这样 worker 的目录选择 / fs 操作直接落在宿主真实目录上（由 WORKSPACE_ROOT 控制）。
+
+def java_cmd_line(java_bin: str, opts: str, jar: str) -> str:
+    """systemd ExecStart 用的单行 java 命令：JVM 参数按空白拆分（支持空格分隔的多项）后重组。"""
+    parts = [java_bin, *(p for p in (opts or "").split() if p), "-jar", jar]
+    return " ".join(parts)
+
+
+def java_cmd_list(java_bin: str, opts: str) -> str:
+    """compose command 用的 JSON 风格参数列表（jar 路径固定为容器内 /app/app.jar）。"""
+    parts = [java_bin, *(p for p in (opts or "").split() if p), "-jar", "/app/app.jar"]
+    return "[" + ", ".join(f'"{p}"' for p in parts) + "]"
+
 
 def render_compose(cfg) -> str:
     """生成运行时 compose：官方镜像 + 挂载本地产物。
     WORKSPACE_ROOT 非空时，把该宿主绝对路径「同路径」挂入 worker 容器，
     并写入同名环境变量，使 worker 默认工作区指向宿主真实目录。"""
     ws = (getattr(cfg, "workspace_root", "") or "").strip()
+    hub_cmd = java_cmd_list("java", getattr(cfg, "hub_java_opts", DEFAULT_HUB_JAVA_OPTS))
+    worker_cmd = java_cmd_list("java", getattr(cfg, "worker_java_opts", DEFAULT_WORKER_JAVA_OPTS))
     hub_key = getattr(cfg, "hub_key", "") or ""
     worker_api_key = getattr(cfg, "worker_api_key", "") or ""
     web_port = getattr(cfg, "web_port", 80) or 80
@@ -187,7 +215,7 @@ services:
   hub:
     image: {HUB_IMAGE}
     container_name: everyagent-hub
-    command: ["java", "-jar", "/app/app.jar"]
+    command: {hub_cmd}
     volumes:
       - ./hub/app.jar:/app/app.jar:ro
     ports:
@@ -201,7 +229,7 @@ services:
   worker:
     image: {WORKER_IMAGE}
     container_name: everyagent-worker
-    command: ["java", "-jar", "/app/app.jar"]
+    command: {worker_cmd}
     volumes:
 {"\n".join(worker_volumes)}
     environment:
@@ -239,6 +267,7 @@ volumes:
 
 def render_hub_service(cfg, java_bin: str) -> str:
     cur = f"{cfg.remote_dir.rstrip('/')}/current"
+    exec_start = java_cmd_line(java_bin, getattr(cfg, "hub_java_opts", DEFAULT_HUB_JAVA_OPTS), f"{cur}/hub/app.jar")
     return f"""\
 [Unit]
 Description=Every Agent Hub
@@ -248,7 +277,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory={cur}/hub
-ExecStart={java_bin} -jar {cur}/hub/app.jar
+ExecStart={exec_start}
 EnvironmentFile={cur}/.env
 # hub 打包默认只监听 127.0.0.1(安全整改);host 部署显式放开保持既有行为
 # (nginx 反代与跨机 worker 直连均可达;如确认 hub/worker/webapp 全部同机、且无需
@@ -264,6 +293,7 @@ WantedBy=multi-user.target
 
 def render_worker_service(cfg, java_bin: str) -> str:
     cur = f"{cfg.remote_dir.rstrip('/')}/current"
+    exec_start = java_cmd_line(java_bin, getattr(cfg, "worker_java_opts", DEFAULT_WORKER_JAVA_OPTS), f"{cur}/worker/app.jar")
     return f"""\
 [Unit]
 Description=Every Agent Worker
@@ -274,7 +304,7 @@ Requires=everyagent-hub.service
 [Service]
 Type=simple
 WorkingDirectory={cur}/worker
-ExecStart={java_bin} -jar {cur}/worker/app.jar
+ExecStart={exec_start}
 EnvironmentFile={cur}/.env
 Restart=on-failure
 RestartSec=5
@@ -906,6 +936,8 @@ def deploy(cfg, services) -> None:
             print("  systemd/everyagent-worker.service")
             print("  nginx/everyagent.conf")
             print("  .env  (HUB_KEY 原文,hub/worker 启动自算 sha256;解包后 chmod 600)")
+            print(f"  worker 启动命令: {cfg.java_bin} {cfg.worker_java_opts or '(无JVM参数)'} -jar <current>/worker/app.jar")
+            print(f"  hub   启动命令: {cfg.java_bin} {cfg.hub_java_opts or '(无JVM参数)'} -jar <current>/hub/app.jar")
         # 预览统一打码(前4...后4)，密钥原文不落终端/CI 日志；
         # 实际上传到服务器的 .env / docker-compose.yml 仍写原文(服务端运行需要)。
         print("\n---- 运行期配置预览(敏感值已打码) ----")
@@ -997,6 +1029,13 @@ def parse_args(argv):
                                         "默认 DEPLOY_JAVA_HOME / 配置文件 DEPLOY_JAVA_HOME / 环境变量 JAVA_HOME）")
     p.add_argument("--java-bin", help="host 模式下远端运行的 java 可执行文件（默认 /usr/bin/java，即脚本首次部署时"
                                         "apt 安装的 openjdk-25-jre-headless；docker 模式忽略 / DEPLOY_JAVA_BIN）")
+    p.add_argument("--worker-java-opts", default=None,
+                   help="worker 的 JVM 启动参数（host 模式注入 systemd ExecStart，docker 模式注入 compose command；"
+                        "默认 '-Xmx1g -XX:MaxMetaspaceSize=256m'，按 4G 内存服务器收敛；"
+                        "可用 DEPLOY_WORKER_JAVA_OPTS / 配置文件 WORKER_JAVA_OPTS= 覆盖，显式传空字符串清除）")
+    p.add_argument("--hub-java-opts", default=None,
+                   help="hub 的 JVM 启动参数（注入位置同上；默认 '-Xmx256m -XX:MaxMetaspaceSize=128m'；"
+                        "可用 DEPLOY_HUB_JAVA_OPTS / 配置文件 HUB_JAVA_OPTS= 覆盖，显式传空字符串清除）")
     p.add_argument("--npm", help="本地 npm 可执行文件（默认 npm / DEPLOY_NPM）")
     p.add_argument("--workspace-root", help="宿主工作区根(绝对路径)；bind mount 进 worker 使工作区落在宿主真实目录。不填则 worker 用容器内默认目录（DEPLOY_WORKSPACE_ROOT）")
     p.add_argument("--hub-key", help="原始 hub key(必填,hub/worker 启动自算 sha256)；前端设置页与 worker hubs[].hub-key 填同一密钥。也可写在 --config 文件的 HUB_KEY= 一行。")
@@ -1060,6 +1099,14 @@ def parse_args(argv):
     args.compose = args.compose or os.environ.get("DEPLOY_COMPOSE") or local.get("DEPLOY_COMPOSE", "docker compose")
     args.mode = args.mode or os.environ.get("DEPLOY_MODE") or local.get("DEPLOY_MODE", "host")
     args.java_bin = args.java_bin or os.environ.get("DEPLOY_JAVA_BIN") or local.get("DEPLOY_JAVA_BIN", "/usr/bin/java")
+    # JVM 参数优先级：CLI > DEPLOY_*_JAVA_OPTS > --config 文件 *_JAVA_OPTS= > DEFAULT_*_JAVA_OPTS。
+    # CLI 用 is None 判断是否显式给出——显式传空字符串意为「清除全部 JVM 参数」，不能被 or 链吞掉。
+    if args.worker_java_opts is None:
+        args.worker_java_opts = (os.environ.get("DEPLOY_WORKER_JAVA_OPTS")
+                                 or local.get("WORKER_JAVA_OPTS", "") or DEFAULT_WORKER_JAVA_OPTS)
+    if args.hub_java_opts is None:
+        args.hub_java_opts = (os.environ.get("DEPLOY_HUB_JAVA_OPTS")
+                              or local.get("HUB_JAVA_OPTS", "") or DEFAULT_HUB_JAVA_OPTS)
 
     def _truthy(v):
         return v is not None and str(v).strip().lower() in ("1", "true", "yes", "y", "on")
