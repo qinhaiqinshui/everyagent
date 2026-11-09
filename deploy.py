@@ -27,6 +27,8 @@ SSH 密码：优先级 DEPLOY_SSH_PASSWORD 环境变量 > 交互输入 > --passw
           worker 侧的内置插件 jar 被运行中的 worker 锁定时 clean 会失败——构建前请先停掉本机 worker。
 服务器前置（host 模式）：nginx（已装）、systemd；Java 25 需可用——可手动预装
           openjdk-25-jre-headless，或由脚本在缺失时 apt 安装（幂等，已装则跳过）。
+          ripgrep 无需服务器安装：runtime/bin/rg 随 worker 包分发（本机缺失时按钉死
+          版本自动下载 musl 静态版，见 ensure_runtime_rg）。
           hub 端口 6101 由 nginx 反代（/hub/）对外暴露，防火墙只需开 80（默认）。需 sudo（建议免密）。
 
 示例：
@@ -86,6 +88,7 @@ import sys
 import tarfile
 import tempfile
 import time
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 
@@ -156,6 +159,20 @@ WORKER_IMAGE = "eclipse-temurin:25-jre"
 # TODO: pin @sha256:<digest>（同上）
 WEB_IMAGE = "nginx:alpine"
 
+# ripgrep 程序附属文件（仓库根 runtime/ 唯一真源，不入 git）：
+# worker 搜索引擎（RgSearchEngine）与 shell 工具的 rg PATH 注入都按 <cwd>/runtime/bin/rg
+# 解析（RipgrepBinary 无系统 PATH 回退），desktop 打包经 electron-builder extraResources
+# 搬运——deploy 部署同一机制：随 worker 包分发到 <worker>/runtime/，服务器端零安装。
+# 本机缺失（新克隆环境常见）时按钉死版本自动下载：musl 静态版在任意 Linux（glibc/musl）
+# 均可直接执行；官方 GitHub release 优先，国内镜像 fallback，全失败仅 WARN（服务端搜索
+# 降级，不阻塞部署），不悄悄改用 apt 版（版本漂移、且仍需配 worker.tools.rg-path 才生效）。
+RG_VERSION = "15.2.0"
+_RG_MUSL_TARBALL = f"ripgrep-{RG_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+RG_DOWNLOAD_URLS = [
+    f"https://github.com/BurntSushi/ripgrep/releases/download/{RG_VERSION}/{_RG_MUSL_TARBALL}",
+    f"https://ghfast.top/https://github.com/BurntSushi/ripgrep/releases/download/{RG_VERSION}/{_RG_MUSL_TARBALL}",
+]
+
 # JVM 启动参数默认值（host 模式注入 systemd ExecStart，docker 模式注入 compose command）。
 # 默认面向 4G 内存小服务器收敛：实测 worker 常驻 <650MB、hub <260MB，显式限堆避免依赖
 # JVM「按物理内存 1/4 取默认堆上限」的漂移行为（换台大内存机器反而可能堆上限过高吃满内存）。
@@ -193,6 +210,9 @@ def render_compose(cfg) -> str:
     web_port = getattr(cfg, "web_port", 80) or 80
     worker_volumes = [
         "      - ./worker/app.jar:/app/app.jar:ro",
+        # runtime/ 程序附属文件(rg 等):与 app.jar 同源 staging 上传;worker 按
+        # <cwd>/runtime/bin 解析(RipgrepBinary),故配合 working_dir: /app 命中。
+        "      - ./worker/runtime:/app/runtime:ro",
         "      - worker-home:/everyagent",
     ]
     worker_id = getattr(cfg, "worker_id", "company-pc") or "company-pc"
@@ -238,6 +258,9 @@ services:
     image: {WORKER_IMAGE}
     container_name: everyagent-worker
     command: {worker_cmd}
+    # user.dir 决定 runtime/ 解析基点(<cwd>/runtime/bin/rg)与插件扫描(<cwd>/every-agent-plugins/)，
+    # 不设则默认 / ，rg 命不中、插件也扫不到。
+    working_dir: /app
     volumes:
 {"\n".join(worker_volumes)}
     environment:
@@ -549,6 +572,65 @@ def stage_builtin_plugins(cfg, out_dir: Path) -> int:
     return sum(1 for p in out_dir.iterdir() if p.is_dir()) if out_dir.is_dir() else 0
 
 
+def ensure_runtime_rg() -> Path | None:
+    """仓库根 runtime/bin/rg 在位性探测；缺失时按钉死版本下载 musl 静态版。
+
+    返回 rg 文件路径；下载全失败返回 None（调用方 WARN 降级，不阻塞部署——
+    搜索功能缺失远比「部署中断」可接受，且用户可手动放置后重跑）。
+    """
+    rg = REPO_ROOT / "runtime" / "bin" / "rg"
+    if rg.is_file():
+        return rg
+    rg.parent.mkdir(parents=True, exist_ok=True)
+    member = f"ripgrep-{RG_VERSION}-x86_64-unknown-linux-musl/rg"
+    for url in RG_DOWNLOAD_URLS:
+        try:
+            log(f"[rg] 本机缺失 runtime/bin/rg，尝试下载 {RG_VERSION}（musl 静态）: {url}")
+            req = urllib.request.Request(url, headers={"User-Agent": "everyagent-deploy"})
+            with urllib.request.urlopen(req, timeout=120) as resp, tempfile.TemporaryFile() as tmp:
+                shutil.copyfileobj(resp, tmp)
+                tmp.seek(0)
+                # 只取成员字节流，不经 extract 落盘（不信任下载内容里的任意路径）
+                with tarfile.open(fileobj=tmp, mode="r:gz") as tar:
+                    f = tar.extractfile(member)
+                    if f is None:
+                        raise RuntimeError(f"tar 内未找到 {member}")
+                    data = f.read()
+            if not data.startswith(b"\x7fELF"):
+                raise RuntimeError("下载内容不是 ELF 二进制")
+            tmp_target = rg.with_suffix(".part")
+            tmp_target.write_bytes(data)
+            os.chmod(tmp_target, 0o755)
+            tmp_target.replace(rg)
+            log(f"[rg] 已就位 {rg}（{len(data) // 1024} KB，{RG_VERSION} musl 静态）")
+            return rg
+        except Exception as e:  # noqa: BLE001 —— 逐源尝试，最后统一降级
+            log(f"[rg] 下载失败（{url}）: {e}")
+    return None
+
+
+def stage_runtime(worker_dir: Path) -> None:
+    """把仓库根 runtime/（程序附属文件唯一真源，架构 §5.9）整体搬到 release 的 worker/ 下。
+
+    与 desktop 打包（electron-builder extraResources from: ../runtime）同一份源、同一布局：
+    服务端 worker 的 JVM 工作目录即 worker/（systemd WorkingDirectory / compose working_dir），
+    <cwd>/runtime/bin/rg 命中。缺 rg 时先 ensure_runtime_rg() 自动补齐再搬。
+    """
+    rg = ensure_runtime_rg()
+    if rg is None:
+        log("[警告] runtime/bin/rg 不可得（本机缺失且下载失败）：服务端 worker 搜索引擎与 "
+            "shell 的 rg PATH 注入将降级（启动日志会告警）。修复：手动放置 musl 静态 rg 到 "
+            "runtime/bin/rg（https://github.com/BurntSushi/ripgrep/releases，x86_64-unknown-linux-musl）后重部署。")
+        return
+    src = REPO_ROOT / "runtime"
+    dst = worker_dir / "runtime"
+    if dst.exists():
+        shutil.rmtree(dst)
+    shutil.copytree(src, dst)
+    os.chmod(dst / "bin" / "rg", 0o755)  # copytree 保留源权限；显式钉一次防 Windows 源丢执行位
+    log(f"已暂存 runtime/ 附属文件（rg {RG_VERSION} 等） -> worker/runtime/")
+
+
 def build_artifacts(cfg, services) -> Path:
     staging = Path(tempfile.mkdtemp(prefix="eadeploy-"))
     log(f"本地构建产物到临时目录: {staging}")
@@ -595,6 +677,9 @@ def build_artifacts(cfg, services) -> Path:
             build_builtin_plugins(cfg)
             count = stage_builtin_plugins(cfg, d / "every-agent-plugins")
             log(f"已暂存 {count} 个内置插件 -> worker/every-agent-plugins/")
+        # runtime/ 附属文件（rg 等）：搜索引擎与 shell PATH 注入都按 <cwd>/runtime/bin 解析，
+        # 只发 jar 的话服务端启动即告警 rg 缺失、搜索降级（docker 模式 compose 已挂 /app/runtime）。
+        stage_runtime(d)
     if "webapp" in services:
         src = REPO_ROOT / "every-agent-web" / "dist"
         if not src.is_dir():
@@ -850,6 +935,9 @@ def extract_command(cfg, services, ts: str) -> str:
     lines.append(f"rm -rf {cur}; ln -sfn {rel} {cur}")
     # .env 内含 hub/worker 密钥原文：解包后立即收紧为 600，避免同机其它用户读取
     lines.append(f"[ -f {rel}/.env ] && chmod 600 {rel}/.env || true")
+    # runtime/bin/rg 的执行位：打包机多为 Windows（NTFS 无 POSIX 执行位，tar 保留不了 755），
+    # 服务端统一钉回；worker 的 RipgrepBinary 按 isExecutable 判定，缺执行位等同 rg 缺失。
+    lines.append(f'[ -f {rel}/worker/runtime/bin/rg ] && chmod 755 {rel}/worker/runtime/bin/rg || true')
     if "webapp" in services:
         # nginx 以 www-data 运行，站点根在用户 home 下时需保证其对整条路径
         # 有遍历(x)权限、对 dist 静态文件有读(r)权限，否则 stat 报 13: Permission denied。
