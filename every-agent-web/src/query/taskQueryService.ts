@@ -73,6 +73,24 @@ export const taskQueryService = {
   },
 
   /**
+   * 拉取任务数据目录完整路径(task.dataDir RPC):workspaces/<workspaceId>/tasks/<taskId>/
+   * 在 worker 宿主上的绝对路径。任务列表「复制任务路径」按需拉取,路径不进列表 wire。
+   * 按任务归属 worker 定向调用;失败抛可读错误。
+   */
+  async getTaskDataDir(taskId: string): Promise<string> {
+    const ownerWorkerId = taskStore.get(taskId)?.workerId
+    if (!ownerWorkerId) {
+      throw new Error('无法确定任务所属 worker(任务数据不可用)')
+    }
+    const result = await hubSession.rpcTo(ownerWorkerId, 'task.dataDir', { taskId })
+    const path = String(result?.path ?? '')
+    if (!path) {
+      throw new Error('worker 未返回任务路径')
+    }
+    return path
+  },
+
+  /**
    * 运行任务(task.run RPC,创建/续跑合一):
    * - 不传 taskId = 新建(workspace 必填,worker 侧强校验),worker 立即返回
    *   taskId 并开始执行,taskStore 由 task.created 事件校准(此处先落占位);

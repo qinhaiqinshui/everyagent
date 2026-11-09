@@ -18,6 +18,11 @@ public final class RpcMethods {
     public static final String TASK_AGENTS = "task.agents";
     public static final String TASK_CANCEL = "task.cancel";
     public static final String TASK_DELETE = "task.delete";
+    /**
+     * 任务数据目录路径拉取(前端任务列表右键「复制任务路径」):
+     * 返回 workspaces/&lt;workspaceId&gt;/tasks/&lt;taskId&gt;/ 在 worker 宿主上的绝对路径,按需随取随发。
+     */
+    public static final String TASK_DATA_DIR = "task.dataDir";
     /** 队列快照拉取：返回当前排队中的任务列表及位置。 */
     public static final String TASK_QUEUE_LIST = "task.queueList";
     /** 删除某条队列输入(参数 taskId, index)。 */
