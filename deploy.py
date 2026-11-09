@@ -35,6 +35,11 @@ SSH 密码：优先级 DEPLOY_SSH_PASSWORD 环境变量 > 交互输入 > --passw
   # 只部署 worker（--no-deps 不连带拉起依赖的 hub）
   python deploy.py worker --no-deps --host 1.2.3.4 --user root -k ~/.ssh/id_rsa
 
+  # worker 连远程 hub（hub 不与 worker 同机时必须显式指向；不填 = 打包默认 ws://localhost:6101/ws
+  # 即「连本机 hub」，hub 不在本机时表现为无限重连失败。凭据用目标 hub 的 api-key / hub-key）
+  python deploy.py worker --host 1.2.3.4 --worker-hub-url ws://120.25.206.241:6101/ws \
+      --worker-api-key <数据归属密钥> --hub-key <远程hub的HUB_KEY>
+
   # worker/hub 的 JVM 内存参数默认按 4G 内存小服务器收敛（worker -Xmx1g / hub -Xmx256m，
   # 显式限堆，避免依赖 JVM 按物理内存 1/4 取默认堆上限的漂移行为）；大内存机器可覆盖：
   python deploy.py worker --host 1.2.3.4 --worker-java-opts "-Xmx2g -XX:MaxMetaspaceSize=256m"
@@ -58,6 +63,7 @@ SSH 密码：优先级 DEPLOY_SSH_PASSWORD 环境变量 > 交互输入 > --passw
   #                                              # docker 模式必填(worker 拒绝空凭据启动)，
   #                                              # host 模式也可由服务器上 application-worker.yaml 提供
   #   WORKSPACE_ROOT=/srv/everyagent/workspaces
+  #   WORKER_HUB_URL=ws://120.25.206.241:6101/ws   # worker 要连的 hub(留空 = 同机 localhost:6101)
   #   DEPLOY_HOST=1.2.3.4
   #   DEPLOY_USER=ubuntu
   #   DEPLOY_KEY=~/.ssh/id_rsa
@@ -190,6 +196,7 @@ def render_compose(cfg) -> str:
         "      - worker-home:/everyagent",
     ]
     worker_id = getattr(cfg, "worker_id", "company-pc") or "company-pc"
+    worker_hub_url = (getattr(cfg, "worker_hub_url", "") or "").strip() or "ws://hub:6101/ws"
     worker_env = [
         f'      WORKER_ID: "{worker_id}"',
         "      EVERYAGENT_HOME: /everyagent",
@@ -200,8 +207,9 @@ def render_compose(cfg) -> str:
         # 打包默认已无任何密钥(fail-closed):worker 凭据必须显式注入——
         # api-key=数据归属密钥(WORKER_API_KEY),hub-key=与 hub 同一密钥(HUB_KEY)
         f'      WORKER_API_KEY: "{worker_api_key}"',
-        # 容器内经服务名访问 hub(打包默认 url=localhost,容器网络里不通)
-        '      WORKER_HUB_URL: "ws://hub:6101/ws"',
+        # 容器内经服务名访问 hub(打包默认 url=localhost,容器网络里不通);
+        # --worker-hub-url / DEPLOY_WORKER_HUB_URL 显式给出时以之为准(hub 跨机部署)
+        f'      WORKER_HUB_URL: "{worker_hub_url}"',
     ]
     if ws:
         if not ws.startswith("/"):
@@ -371,6 +379,11 @@ def render_runtime_env_file(cfg) -> str:
     ]
     if ws:
         lines.append(f"WORKSPACE_ROOT={ws}")
+    hub_url = (getattr(cfg, "worker_hub_url", "") or "").strip()
+    if hub_url:
+        # worker 连接的 hub 地址:打包默认 ws://localhost:6101/ws(同机 hub);hub 与 worker
+        # 不同机时经本变量显式指向远程(systemd 注入后命中打包 yml 的 ${WORKER_HUB_URL:} 占位符)
+        lines.append(f"WORKER_HUB_URL={hub_url}")
     return "\n".join(lines) + "\n"
 
 
@@ -906,6 +919,9 @@ def deploy(cfg, services) -> None:
         log("[警告] docker 模式未提供 WORKER_API_KEY（--worker-api-key / DEPLOY_WORKER_API_KEY / 配置文件 WORKER_API_KEY=）："
             "worker 凭据 fail-closed,容器将因缺 api-key 拒绝启动——"
             "除非 EVERYAGENT_HOME 卷内已有提供凭据的 application-worker.yaml。")
+    if "worker" in services and mode == "host" and not (getattr(cfg, "worker_hub_url", "") or "").strip():
+        log("[提示] 未设置 --worker-hub-url：worker 将连接打包默认 ws://localhost:6101/ws（同机 hub）。"
+            "hub 与 worker 不同机时请传 --worker-hub-url ws://<hub地址>:6101/ws，否则会无限重连本机。")
     if cfg.dry_run:
         log("== DRY RUN: 仅本地预览, 不执行本地构建、不连接服务器 ==")
         print("\n---- 本地将执行的构建命令 ----")
@@ -1042,6 +1058,10 @@ def parse_args(argv):
     p.add_argument("--workspace-root", help="宿主工作区根(绝对路径)；bind mount 进 worker 使工作区落在宿主真实目录。不填则 worker 用容器内默认目录（DEPLOY_WORKSPACE_ROOT）")
     p.add_argument("--hub-key", help="原始 hub key(必填,hub/worker 启动自算 sha256)；前端设置页与 worker hubs[].hub-key 填同一密钥。也可写在 --config 文件的 HUB_KEY= 一行。")
     p.add_argument("--worker-api-key", help="worker 数据归属密钥(前端连接该 worker 时填同值)；docker 模式必填(worker 凭据 fail-closed,空则容器拒绝启动)，host 模式可留空(由服务器上 application-worker.yaml 提供凭据)。也可写在 --config 文件的 WORKER_API_KEY= 一行。")
+    p.add_argument("--worker-hub-url", default=None,
+                   help="worker 要连接的 hub 地址(如 ws://1.2.3.4:6101/ws)；host 模式写入 .env 的 WORKER_HUB_URL，"
+                        "docker 模式覆盖 compose 默认 ws://hub:6101/ws；不填 = 打包默认 ws://localhost:6101/ws(同机 hub)。"
+                        "也可用 DEPLOY_WORKER_HUB_URL / 配置文件 WORKER_HUB_URL= 提供")
     p.add_argument("--keep-releases", type=int, default=3, help="保留最近几个 release（默认 3）")
     p.add_argument("--no-deps", action="store_true", help="部署时不连带拉起所依赖的服务")
     p.add_argument("--pull", action="store_true", help="up 时强制拉取最新官方镜像")
@@ -1097,6 +1117,10 @@ def parse_args(argv):
     args.hub_key = args.hub_key or os.environ.get("DEPLOY_HUB_KEY") or local.get("HUB_KEY", "")
     args.worker_api_key = (args.worker_api_key or os.environ.get("DEPLOY_WORKER_API_KEY")
                            or local.get("WORKER_API_KEY", ""))
+    args.worker_hub_url = (args.worker_hub_url or os.environ.get("DEPLOY_WORKER_HUB_URL")
+                           or local.get("WORKER_HUB_URL", ""))
+    if args.worker_hub_url and not args.worker_hub_url.strip().lower().startswith(("ws://", "wss://")):
+        p.error("--worker-hub-url 必须以 ws:// 或 wss:// 开头（当前值不含合法 scheme）")
     args.web_port = args.web_port or int(os.environ.get("DEPLOY_WEB_PORT") or local.get("DEPLOY_WEB_PORT", "80"))
     args.compose = args.compose or os.environ.get("DEPLOY_COMPOSE") or local.get("DEPLOY_COMPOSE", "docker compose")
     args.mode = args.mode or os.environ.get("DEPLOY_MODE") or local.get("DEPLOY_MODE", "host")
