@@ -44,13 +44,19 @@ import java.util.concurrent.TimeUnit;
  * 档案口按 agentId 中性重建会话续跑(主/子/审议同一条重建路径,§5.3)——进程重启后
  * 历史照常恢复,不再依赖任何进程内存。
  *
- * <p><b>会话交替不变量</b>:子 agent 会话跨轮复用(同 agentId 的 run_agent 续跑),
- * 而 agent 执行链不回写会话内存(worker 的 {@code WorkerToolEventAdvisor} 只发
- * message 事件、{@code AgentRunner} 只把会话副本交给 ChatClient),故复用方必须自己
- * 把上一轮最终回答补回会话——每轮收口由 {@link #runSub} 的 finally 调用
- * {@link #appendFinalAnswerTurn} 补 assistant 轮,保证「append 新 user 之前 assistant
- * 已在场」。缺了这一步,子 agent 续跑时会看到两条连续 user,重复回答上一轮指令
- * (主 agent 侧同一条不变量由 task 层 {@code ConversationLoader.catchUpRuntime} 维持)。
+ * <p><b>会话交替不变量与续跑保真</b>:agent 执行链不回写会话内存(worker 的
+ * {@code WorkerToolEventAdvisor} 只发 message 事件、{@code AgentRunner} 只把会话副本
+ * 交给 ChatClient),内存会话因此只含装配种子与 {@link #runSub} 收口回写的
+ * 「指令→最终汇报」配对(低保真——工具轮因孤儿消息取舍被丢弃,§7.9)。续跑
+ * (同 agentId 的 run_agent)不信任内存会话:已落定实体(轮内)与跨轮/重启统一经
+ * {@link ExecContext#conversationArchive()} 档案口从 {@code <agentId>.jsonl}
+ * <b>全保真重建</b>(user/message/tool.result 谓词,工具对完整)再追加新指令——
+ * 2026-11 修复:此前轮内续跑直接续内存会话,低保真「指令→汇报」少样本模式下高模式
+ * 坍缩倾向模型会跳过全部执行直接编造完成汇报(kimi-k3.1-pro 实测 ~29%/轮零工具
+ * 假汇报,35 例全部落此路径;全保真路径零观测)。档案读失败(空表)才回退内存续跑,
+ * 此时由 {@link #appendFinalAnswerTurn} 收口回写保证「append 新 user 之前 assistant
+ * 已在场」,防两条连续 user 重复回答上一轮指令(主 agent 侧同一条不变量由 task 层
+ * {@code ConversationLoader.catchUpRuntime} 维持)。
  */
 public class SubAgentManager {
 
@@ -122,8 +128,9 @@ public class SubAgentManager {
 
     /**
      * run_agent 工具入口:返回给主 agent 的文本。
-     * 同 agentId 仅在"运行中"时拒绝;已落定(完成/停止/失败)→ 复用原实体续跑
-     * (原会话追加新指令,不重做已完成部分,§5.6/agent-dispatch 技能)。
+     * 同 agentId 仅在"运行中"时拒绝;已落定(完成/停止/失败)→ 续跑:与跨轮/重启
+     * 统一走档案口全保真重建(工具对完整,不重做已完成部分;档案读失败回退内存会话,
+     * §5.6/agent-dispatch 技能;2026-11 修复见类注释「续跑保真」)。
      * <p>跨轮/跨重启:实体不在 {@code ctx.agents()}(per-run 注册表)→ 经
      * {@link ExecContext#conversationArchive()} 档案口按 agentId 重建会话续跑
      * (磁盘唯一事实源,worker 重启后历史照常恢复);磁盘亦无档案(凭空 id)→ 同 id 全新会话。
@@ -168,12 +175,31 @@ public class SubAgentManager {
                 st.stopRequested = false;
             }
             if (reuse) {
-                sub = (Agent) ctx.agents().get(id);
-                sub.resetForRerun();
-                // 续跑:原会话历史(含上一轮最终回答,由 runSub 收口时回写)+ 新指令
-                sub.conversation().add(new UserMessage(input));
-                // 复用路径不经过 build():agent.started 由 AgentStatusAdvisor 在本轮
-                // run() 的流入口自动发射(与新建路径同一发射点),此处不再手动补发。
+                // 轮内续跑(实体已落定):统一走磁盘档案全保真重建(2026-11 修复,与跨轮/
+                // 重启同路径)。此前直接在内存会话上追加新指令——内存会话仅含收口回写的
+                // 「指令→最终汇报」配对(工具轮被 §7.9 取舍丢弃),模板化密集续跑时高模式
+                // 坍缩倾向模型按少样本模式跳过全部执行、直接编造完成汇报(kimi-k3.1-pro
+                // 实测 ~29%/轮零工具假汇报,35 例全部落此路径;全保真路径零观测)。
+                // 档案读失败(空表,如 jsonl 损坏/落盘异常)回退原内存续跑并 warn,不中断。
+                Agent prev = (Agent) ctx.agents().get(id);
+                List<org.springframework.ai.chat.messages.Message> prior = loadArchive(ctx, id);
+                if (!prior.isEmpty()) {
+                    // title 优先显式参数,缺省沿用活实体原始身份(磁盘台账依赖收口
+                    // persistFinal,轮内密集续跑可能尚未落盘,不可只靠台账回退)
+                    String keepTitle = title != null && !title.isEmpty() ? title : prev.title();
+                    sub = rebuildFromArchive(ctx, id, keepTitle, prior, input);
+                    log.info("[sub] 档案重建续跑(轮内) agentId={} subjectId={} 历史轮数={}",
+                            id, ctx.subjectId(), prior.size());
+                } else {
+                    sub = prev;
+                    sub.resetForRerun();
+                    // 回退:内存会话续跑(低保真)——appendFinalAnswerTurn 已保交替不变量
+                    sub.conversation().add(new UserMessage(input));
+                    log.warn("[sub] 会话档案为空,轮内续跑回退内存会话(低保真) agentId={} subjectId={}",
+                            id, ctx.subjectId());
+                }
+                // 两条路径 agent.started 均由 AgentStatusAdvisor 在本轮 run() 的流入口
+                // 自动发射(与新建路径同一发射点),此处不手动补发(§7.20.1)。
             } else if (agentId != null && !agentId.isEmpty()) {
                 // 指定 agentId 但本轮实体不在场:跨轮/跨重启续跑,或凭空 id 全新开始
                 List<org.springframework.ai.chat.messages.Message> prior = loadArchive(ctx, agentId);

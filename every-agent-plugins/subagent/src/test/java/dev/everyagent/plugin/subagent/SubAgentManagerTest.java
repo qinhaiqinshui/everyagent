@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
+import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import tools.jackson.databind.JsonNode;
 
@@ -24,6 +25,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -51,6 +53,11 @@ class SubAgentManagerTest {
     private final java.util.List<dev.everyagent.plugin.api.model.EmitEvent> emitted =
             new java.util.ArrayList<>();
 
+    /** 每次装配实际传入的 title(按 agentId;轮内重建续跑的 title 保留断言用)。 */
+    private final Map<String, String> builtTitles = new HashMap<>();
+
+    /** 回退路径(档案读失败/缺失 → 空表):轮内续跑退回内存会话续跑,appendFinalAnswerTurn
+     *  维持交替不变量。本测试档案口为 null,即该回退形态。 */
     @Test
     void reuseRunWritesBackFinalAnswerBeforeNextInstruction() throws Exception {
         SubAgentManager manager = new SubAgentManager();
@@ -99,6 +106,64 @@ class SubAgentManagerTest {
         AssistantMessage placeholder = assertInstanceOf(AssistantMessage.class, conv.get(2));
         assertEquals("[上一轮被中断,无最终回答]", placeholder.getText(),
                 "空结论路径记占位轮,防续跑时出现连续 user");
+    }
+
+    /**
+     * 轮内复用续跑统一走档案全保真重建(2026-11 修复主场景):已落定实体(上一轮 waitFor
+     * 报 completed)再次 run_agent 时,不得再续低保真内存会话(仅「指令→最终汇报」配对,
+     * 高模式坍缩模型在该少样本模式下会跳过工具直接编造完成汇报),应经档案口重建——
+     * 上一轮的工具调用轮与工具结果轮完整保留,新指令追加在全保真历史之后;title 缺省时
+     * 沿用活实体原始身份(不回退「子任务」)。
+     */
+    @Test
+    void reuseRunRebuildsFullFidelityFromArchive(@org.junit.jupiter.api.io.TempDir Path tmp) throws Exception {
+        SubAgentManager manager = new SubAgentManager();
+        AtomicReference<String> lastText = new AtomicReference<>("第一轮结论");
+        dataDir = tmp;
+        // 档案口桩:首跑时空(新建路径),落定后模拟磁盘已 flush(全保真,含工具对)
+        List<Message> archived = new ArrayList<>();
+        ExecContext ctx = execContext("t-1", lastText, agentId -> archived);
+
+        manager.run(ctx, "第一条指令", "标题", "sub-1");
+        Agent first = (Agent) agents.get("sub-1");
+        manager.waitFor(ctx, "sub-1", 5_000L);
+
+        // 模拟收口后的磁盘档案:指令 → 工具调用轮 → 工具结果轮 → 最终汇报
+        archived.add(new UserMessage("第一条指令"));
+        archived.add(AssistantMessage.builder()
+                .content("先看草稿")
+                .toolCalls(List.of(new AssistantMessage.ToolCall(
+                        "call-1", "function", "read_file", "{\"path\":\"draft.md\"}")))
+                .build());
+        archived.add(ToolResponseMessage.builder()
+                .responses(List.of(new ToolResponseMessage.ToolResponse("call-1", "read_file", "草稿内容")))
+                .build());
+        archived.add(new AssistantMessage("第一轮结论"));
+
+        lastText.set("第二轮结论");
+        manager.run(ctx, "第二条指令", null, "sub-1");
+        manager.waitFor(ctx, "sub-1", 5_000L);
+
+        Agent second = (Agent) agents.get("sub-1");
+        assertNotSame(first, second, "轮内续跑经档案重建新实体(build() 重注册),不复用旧实体对象");
+        List<Message> conv = second.conversation();
+        assertEquals(7, conv.size(), "重建会话应为 [system, user1, assistant(tool), toolResp, assistant1, user2, assistant2],实际: "
+                + conv.stream().map(m -> m.getClass().getSimpleName()).toList());
+        assertInstanceOf(SystemMessage.class, conv.get(0), "档案不含 system 轮,重建时由装配注入");
+        AssistantMessage toolTurn = assertInstanceOf(AssistantMessage.class, conv.get(2));
+        assertEquals(1, toolTurn.getToolCalls().size(), "上一轮工具调用轮必须保真保留(修复点)");
+        assertEquals("read_file", toolTurn.getToolCalls().get(0).name());
+        ToolResponseMessage toolResp = assertInstanceOf(ToolResponseMessage.class, conv.get(3));
+        assertEquals(1, toolResp.getResponses().size(), "上一轮工具结果轮必须保真保留(修复点)");
+        assertEquals("call-1", toolResp.getResponses().get(0).id());
+        assertEquals("第一轮结论", ((AssistantMessage) conv.get(4)).getText());
+        assertEquals("第二条指令", ((UserMessage) conv.get(5)).getText(), "新指令追加在全保真历史之后");
+        assertEquals("第二轮结论", ((AssistantMessage) conv.get(6)).getText());
+        for (int i = 1; i < conv.size(); i++) {
+            assertTrue(!(conv.get(i) instanceof UserMessage && conv.get(i - 1) instanceof UserMessage),
+                    "重建会话内不得出现连续 user(第 " + i + " 项)");
+        }
+        assertEquals("标题", builtTitles.get("sub-1"), "title 缺省时沿用活实体原始身份,不回退「子任务」");
     }
 
     /**
@@ -243,16 +308,21 @@ class SubAgentManagerTest {
         AtomicReference<String> creatingId = new AtomicReference<>();
         AtomicReference<String> systemPrompt = new AtomicReference<>();
         AtomicReference<String> userInput = new AtomicReference<>();
+        AtomicReference<String> pendingTitle = new AtomicReference<>();
         List<Message> seed = new ArrayList<>();
 
         when(factory.create(anyString())).thenAnswer(inv -> {
             creatingId.set(inv.getArgument(0));
             systemPrompt.set(null);
             userInput.set(null);
+            pendingTitle.set(null);
             seed.clear();
             return build;
         });
-        when(build.title(anyString())).thenReturn(build);
+        when(build.title(anyString())).thenAnswer(inv -> {
+            pendingTitle.set(inv.getArgument(0));
+            return build;
+        });
         when(build.creator(anyString())).thenReturn(build);
         when(build.tools(any(), any())).thenReturn(build);
         when(build.systemPrompt(anyString())).thenAnswer(inv -> {
@@ -269,6 +339,7 @@ class SubAgentManagerTest {
         });
         when(build.build()).thenAnswer(inv -> {
             String id = creatingId.get();
+            builtTitles.put(id, pendingTitle.get());
             List<Message> conversation = new ArrayList<>();
             if (systemPrompt.get() != null) {
                 conversation.add(new SystemMessage(systemPrompt.get()));
