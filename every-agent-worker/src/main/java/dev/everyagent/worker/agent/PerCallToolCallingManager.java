@@ -471,5 +471,14 @@ public final class PerCallToolCallingManager implements ToolCallingManager {
         @Override public Map<String, dev.everyagent.plugin.api.agent.AgentContext> agents() {
             return run.execution().agents();
         }
+        @Override public dev.everyagent.plugin.api.agent.ConversationArchive conversationArchive() {
+            // 2026-11 修复:此槽位曾漏委托(接口 default 返回 null),subagent 插件续跑
+            // 读档恒空——轮内回退内存会话(低保真),跨轮静默退化为同 id 全新会话
+            // (2026-12 的档案重建在产线从未生效,即由此而来)。必须透传。
+            return run.execution().conversationArchive();
+        }
+        @Override public dev.everyagent.plugin.api.agent.CompressionSeed compressionSeed(String agentId) {
+            return run.execution().compressionSeed(agentId);
+        }
     }
 }

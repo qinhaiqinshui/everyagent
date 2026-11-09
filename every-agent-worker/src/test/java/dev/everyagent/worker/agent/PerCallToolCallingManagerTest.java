@@ -44,6 +44,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -152,7 +153,7 @@ class PerCallToolCallingManagerTest {
         return FAILURE_PREFIX + " " + (cause == null ? "boom" : cause.getMessage());
     };
 
-    private static final class Run implements ExecContext {
+    private static class Run implements ExecContext {
 
         final RecordingEmitter emitter = new RecordingEmitter();
         final ToolOutcomeLog outcomes = new ToolOutcomeLog();
@@ -558,6 +559,34 @@ class PerCallToolCallingManagerTest {
         assertThrows(IllegalStateException.class, () -> built.tcm.executeToolCalls(
                 built.prompt(List.of(new org.springframework.ai.chat.messages.UserMessage("go"))),
                 built.response(new AssistantMessage("plain text"))));
+    }
+
+    /**
+     * 回归(2026-11 修复):per-call ctx 必须把 ExecContext 的会话档案口/压缩种子口
+     * 透传给插件工具——此前 {@code PerCallToolExecutionContext} 漏委托这两个 default
+     * 方法(返回 null),subagent 插件续跑读档恒空:轮内回退低保真内存会话、跨轮静默
+     * 退化为同 id 全新会话(2026-12 档案重建在产线从未生效的根因)。
+     */
+    @Test
+    void perCallCtxForwardsConversationArchiveAndCompressionSeedSlots() {
+        dev.everyagent.plugin.api.agent.ConversationArchive archive = id -> java.util.List.of();
+        dev.everyagent.plugin.api.agent.CompressionSeed seed =
+                new dev.everyagent.plugin.api.agent.CompressionSeed(100, 90, "m");
+        Run run = new Run() {
+            @Override public dev.everyagent.plugin.api.agent.ConversationArchive conversationArchive() {
+                return archive;
+            }
+            @Override public dev.everyagent.plugin.api.agent.CompressionSeed compressionSeed(String agentId) {
+                return seed;
+            }
+        };
+        PerCallToolCallingManager.PerCallToolExecutionContext ctx =
+                new PerCallToolCallingManager.PerCallToolExecutionContext(
+                        new PerCallToolCallingManager.RunContext("a_main", run.emitter, run, run.outcomes),
+                        null, null, null, null, null, "{}");
+        assertSame(archive, ctx.conversationArchive(),
+                "conversationArchive 必须透传 execution 同款实例(漏委托即 null→续跑读档恒空)");
+        assertSame(seed, ctx.compressionSeed("a_main"), "compressionSeed 必须透传(同批补齐的 default 槽位)");
     }
 
     // ── 辅助 ──
