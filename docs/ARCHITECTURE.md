@@ -533,7 +533,7 @@ ask 管道承载第二类阻塞请求:**危险操作授权**。`PermissionGate` 
 **`worker.sandbox.type` 配置项:** `auto`(默认)| `wsl-ubuntu` | `none`。归一化别名:旧值 `wsl-direct`/`direct` → `wsl-ubuntu`(静默兼容);`wsl-bwrap`/`wsl`/`bwrap` → 归一为 `auto` 并 WARN;`windows-mic`/`acl`/`mic`(sandbox-windows-mic 插件已移除)→ 归一为 `auto` 并 WARN;未知/空 → `auto`。各后端专属配置(distro/tarball/codex 账户等)由各插件通过 plugin.json `contributes.config` 自管。
 
 **核心宿主访问工具与沙箱命令工具共存:**
-- **核心的命令工具**(DIRECT 后端):核心自带,Windows 上 PowerShellTool 以 `powershell` 工具名注册;Linux 上 BashTool 以 `bash` 工具名注册。直接 ProcessBuilder 执行,走自己的授权链。
+- **核心的命令工具**(DIRECT 后端):核心自带,Windows 上 PowerShellTool 以 `powershell` 工具名注册;Linux 上 BashTool 以 `bash` 工具名注册。直接 ProcessBuilder 执行,走自己的授权链。**Windows 宿主可执行文件解析**(与 codex 后端 `detectShell` 同策略,核心自带最小实现、不依赖插件):PATH 探测 `pwsh.exe`(PowerShell 7+)优先,未装回退出厂 `powershell.exe`(5.1),进程级缓存一次探测;脚本组装(`buildPowerShellScript`)、UTF-8 BOM、`-File` + 文件承载、CLIXML 还原、退出码尾部等管线两种宿主(PS 5.1 / pwsh 7)实测兼容,pwsh 7 下 OEM 码页类怪癖(GBK 转码/CLIXML 包装)天然消失、错误流 ANSI 着色由 `ExecResults` 剥离。
 - **沙箱插件的命令工具**:沙箱插件不只提供 `SandboxBackend`,还提供 `ToolProvider`(命令工具)。沙箱完全自由:自己实现 CommandExecutor、自己扫描路径、自己决定授权策略。通过 `appliesTo(ToolContext)` 控制生效条件(如 `ctx.sandbox().id().equals("wsl-ubuntu")`)。
 - 两者通过 `ToolProvider.appliesTo()` 各自控制生效条件,不冲突。核心 `DirectShellToolProvider` appliesTo = 生效后端 id == `direct`;各沙箱插件提供自己方言的命令工具。
 - **只有某后端才做得到的隔离能力,其命令与状态一律归该插件**:如 wsl-ubuntu 的 `/禁用网络` 由 `sandbox-wsl-ubuntu` 自己注册 slash 命令与 token 解析器,worker 核心不持有该开关。
