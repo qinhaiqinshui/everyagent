@@ -82,9 +82,11 @@ public class SubAgentManager {
     /** 子 agent 最大并发数(固定值,替代原 props.getLimits().getMaxConcurrentSubs())。 */
     private static final int MAX_CONCURRENT_SUBS = 10;
 
-    /** 子 agent 系统提示词(从已删除的旧装配工厂迁入)。 */
+    /** 子 agent 系统提示词(从已删除的旧装配工厂迁入;2026-11 增补防假汇报护栏)。 */
     public static final String SUB_SYSTEM_PROMPT =
-            "你是任务中派生的子 agent。专注完成交给你的单一目标,善用工具,给出简明的最终结论。";
+            "你是任务中派生的子 agent。专注完成交给你的单一目标,善用工具,给出简明的最终结论。"
+            + "涉及读文件、写盘、修改等动作的任务,必须本轮实际调用相应工具并依据真实结果汇报;"
+            + "严禁凭想象或上一轮的完成汇报直接宣布本轮已完成。";
 
     private static final Logger log = LoggerFactory.getLogger(SubAgentManager.class);
 
