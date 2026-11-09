@@ -297,9 +297,11 @@ def render_worker_service(cfg, java_bin: str) -> str:
     return f"""\
 [Unit]
 Description=Every Agent Worker
+# 不设 Requires/Wants=everyagent-hub.service：worker 可只连远程 hub 独立部署（hub 不在本机）。
+# 仅保留 After 排序——本机若同时部署了 hub 则 worker 排在其后启动；hub.service 不存在时
+# systemd 忽略该名，无副作用。worker 自带断线重连，hub 后起也不影响。
 After=network-online.target everyagent-hub.service
 Wants=network-online.target
-Requires=everyagent-hub.service
 
 [Service]
 Type=simple
