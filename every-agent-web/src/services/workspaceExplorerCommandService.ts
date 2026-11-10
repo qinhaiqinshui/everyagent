@@ -22,6 +22,15 @@ export const workspaceExplorerCommandService = {
   },
 
   /**
+   * 递归复制文件/目录到完整目标路径(资源树「复制/粘贴」,对标 VSCode explorer):
+   * from/to 为工作区相对路径,to 含目标名——目标名冲突由调用方经 allocatePasteName
+   * 探测生成「- 副本」后缀;目标已存在/位于源子树内时抛错(竞态冲突时调用方换名重试)。
+   */
+  async copyPath(workspaceRoot: string, from: string, to: string): Promise<void> {
+    await workspaceGateway.copy(workspaceRoot, from, to)
+  },
+
+  /**
    * 重命名工作区根目录下的文件或目录（UI 人工操作，位置不变、仅改名称）。
    * 返回重命名后的完整相对路径。
    */

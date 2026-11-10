@@ -2,7 +2,7 @@ import React from 'react'
 import { Dropdown, Tree, Tooltip, theme } from 'antd'
 import type { MenuProps, TreeDataNode } from 'antd'
 import type { AlignType } from '@rc-component/trigger'
-import { ChevronDownIcon, ChevronRightIcon, FolderIcon } from '../shared/AppGlyphs'
+import { ChevronDownIcon, ChevronRightIcon, CopyIcon, FolderIcon, PasteIcon } from '../shared/AppGlyphs'
 import { FileTypeIcon } from '../shared/FileTypeGlyphs'
 import type { ListRowActionItem } from '../shared/ui/ListRowActions'
 import { MenuList } from '../shared/ui/Menu'
@@ -40,6 +40,10 @@ export default function WorkspaceExplorerTree({
   selectedPaths,
   onMultiSelectChange,
   onMoveToDirectory,
+  onCopyNode,
+  onPasteNode,
+  pasteEnabled,
+  cutPaths,
 }: {
   /** 所属工作区根(上下文菜单 target 需携带,命令落对应工作区)。 */
   workspaceRoot: string
@@ -60,6 +64,14 @@ export default function WorkspaceExplorerTree({
   onMultiSelectChange?: (paths: Set<string>) => void
   /** 拖拽移动落点提交:起点为已选中节点的拖动松手时回调,参数为目标目录(business 绝对路径,'' = 工作区根)。 */
   onMoveToDirectory?: (targetDir: string) => void
+  /** 行内「复制」按钮(hover 显示):把该行(或含该行的选中集合)放入文件剪贴板;选中归一由面板实现。 */
+  onCopyNode?: (target: WorkspaceExplorerContextTarget) => void
+  /** 行内「粘贴」按钮(仅目录行 hover 显示):把剪贴板内容粘贴到该目录下。 */
+  onPasteNode?: (target: WorkspaceExplorerContextTarget) => void
+  /** 粘贴可用态(文件剪贴板非空且与本工作区同源);false 时粘贴按钮/菜单禁用。 */
+  pasteEnabled?: boolean
+  /** 剪切中的路径集合(业务绝对路径;对标 VSCode:剪切项在树中半透明,粘贴后恢复)。 */
+  cutPaths?: string[] | null
 }) {
   const isMobile = useResponsiveViewport().isMobile
   const { token } = useToken()
@@ -385,6 +397,7 @@ export default function WorkspaceExplorerTree({
 
   const titleRender = (dataNode: TreeDataNode) => {
     const node = (dataNode as TreeDataNode & { dataRef: WorkspaceExplorerNode }).dataRef
+    const isDirectory = node.type === 'directory'
     const isMultiSelect = !!onMultiSelectChange
     const isSelected = isMultiSelect && !!selectedPaths?.has(node.path)
     const target: WorkspaceExplorerContextTarget = {
@@ -426,6 +439,10 @@ export default function WorkspaceExplorerTree({
         onOpenFile={onOpenFile}
         onMultiSelectClick={handleMultiSelectClick}
         onContextMenuSelect={normalizeSelectionForPath}
+        onCopyClick={onCopyNode ? () => onCopyNode(target) : undefined}
+        onPasteClick={onPasteNode && isDirectory ? () => onPasteNode(target) : undefined}
+        pasteDisabled={!pasteEnabled}
+        isCut={Boolean(cutPaths?.some((p) => node.path === p || node.path.startsWith(`${p}/`)))}
       />
     )
   }
@@ -564,6 +581,10 @@ function TreeNodeRow({
   onOpenFile,
   onMultiSelectClick,
   onContextMenuSelect,
+  onCopyClick,
+  onPasteClick,
+  pasteDisabled,
+  isCut,
 }: {
   node: WorkspaceExplorerNode
   target: WorkspaceExplorerContextTarget
@@ -584,9 +605,22 @@ function TreeNodeRow({
   onMultiSelectClick?: (path: string, e: React.MouseEvent) => void
   /** 右键/长按打开菜单前归一选中集合:被操作行不在选中集合内时收缩为该行,已在集合内则保持多选不变。 */
   onContextMenuSelect?: (path: string) => void
+  /** 行内「复制」按钮回调(hover 显示;桌面端)。 */
+  onCopyClick?: () => void
+  /** 行内「粘贴」按钮回调(仅目录行 hover 显示;桌面端)。 */
+  onPasteClick?: () => void
+  /** 粘贴按钮禁用态(文件剪贴板空或跨工作区)。 */
+  pasteDisabled?: boolean
+  /** 剪切中(对标 VSCode:剪切项半透明,粘贴/清空后恢复)。 */
+  isCut?: boolean
 }) {
   const { token } = useToken()
   const isDirectory = node.type === 'directory'
+  // 行 hover 态:驱动行尾「复制/粘贴」内联按钮的显示(桌面端,对标 VSCode inline actions)。
+  const [hovered, setHovered] = React.useState(false)
+  // 行内按钮存在性:桌面端且提供了回调(移动端不渲染——长按菜单里已有复制/粘贴入口,
+  // 行内小按钮在触屏上易与行点击/长按冲突)。
+  const showRowActions = !isMobile && (Boolean(onCopyClick) || Boolean(onPasteClick))
   // 默认(none)不显示行尾元信息；「显示大小」/「显示最后编辑时间」才各自启用对应文本。
   const metaText =
     metaMode === 'size'
@@ -686,6 +720,8 @@ function TreeNodeRow({
         gap: token.paddingXXS,
         width: '100%',
         cursor: 'default',
+        // 剪切中的条目半透明(对标 VSCode cut 视觉);粘贴/清空剪贴板后恢复。
+        ...(isCut ? { opacity: 0.55 } : null),
         // 节点名称一律禁止浏览器文本选中:文件名的复制走「属性」弹窗与右键菜单,不靠选词,
         // 同时避免长按触发系统选词/放大镜与自定义长按右键菜单冲突。
         userSelect: 'none',
@@ -698,6 +734,8 @@ function TreeNodeRow({
           borderRadius: 'var(--radius-sm)',
         } : null),
       }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
       onClick={(e) => {
         if (wasLongPressed()) return
         if (suppressNextClickRef?.current) {
@@ -762,11 +800,41 @@ function TreeNodeRow({
               fontSize: token.fontSizeSM,
               color: token.colorTextTertiary,
               fontFamily: '"Cascadia Code", "Fira Code", Consolas, monospace',
+              // hover 出现行内操作按钮时淡出元信息,为按钮让位(对标 VSCode inline actions)。
+              opacity: showRowActions && hovered ? 0 : 1,
+              transition: 'opacity 0.12s',
             }}
           >
             {metaText}
           </span>
         </Tooltip>
+      ) : null}
+      {showRowActions ? (
+        <span
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 2,
+            flexShrink: 0,
+            // 常驻占位(避免 hover 时名称区宽度跳动),仅淡入淡出;未显示时不响应指针。
+            opacity: hovered ? 1 : 0,
+            pointerEvents: hovered ? 'auto' : 'none',
+            transition: 'opacity 0.12s',
+          }}
+          onClick={(e) => e.stopPropagation()}
+          onDoubleClick={(e) => e.stopPropagation()}
+        >
+          {onCopyClick ? (
+            <TreeRowActionButton title="复制 (Ctrl+C)" onClick={onCopyClick}>
+              <CopyIcon size={13} />
+            </TreeRowActionButton>
+          ) : null}
+          {onPasteClick ? (
+            <TreeRowActionButton title="粘贴 (Ctrl+V)" disabled={pasteDisabled} onClick={onPasteClick}>
+              <PasteIcon size={13} />
+            </TreeRowActionButton>
+          ) : null}
+        </span>
       ) : null}
     </div>
   )
@@ -825,6 +893,55 @@ function TreeNodeRow({
     >
       {content}
     </Dropdown>
+  )
+}
+
+/**
+ * 树行内 hover 操作按钮(复制/粘贴,对标 VSCode explorer inline actions)。
+ * 点击/双击均不向行冒泡(不触发行选中/双击打开);禁用态灰化且不可点击。
+ */
+function TreeRowActionButton({
+  title,
+  disabled,
+  onClick,
+  children,
+}: {
+  title: string
+  disabled?: boolean
+  onClick: () => void
+  children: React.ReactNode
+}) {
+  const { token } = useToken()
+  const [btnHovered, setBtnHovered] = React.useState(false)
+  return (
+    <button
+      type="button"
+      title={title}
+      disabled={disabled}
+      onClick={(e) => {
+        e.stopPropagation()
+        if (!disabled) onClick()
+      }}
+      onDoubleClick={(e) => e.stopPropagation()}
+      onMouseEnter={() => setBtnHovered(true)}
+      onMouseLeave={() => setBtnHovered(false)}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: 20,
+        height: 20,
+        padding: 0,
+        border: 'none',
+        borderRadius: 'var(--radius-sm)',
+        background: btnHovered && !disabled ? 'var(--bg-hover)' : 'transparent',
+        color: disabled ? token.colorTextDisabled : (btnHovered ? 'var(--text-primary)' : 'var(--text-muted)'),
+        cursor: disabled ? 'default' : 'pointer',
+        transition: 'background 0.12s, color 0.12s',
+      }}
+    >
+      {children}
+    </button>
   )
 }
 

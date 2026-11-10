@@ -293,6 +293,21 @@ export const workspaceGateway = {
     await this.writeBytes(workspaceRoot, targetPath, content)
   },
 
+  /**
+   * 递归复制文件/目录(fs.copy 原语,资源树「复制/粘贴」对标 VSCode explorer):
+   * from/to 均为工作区相对路径,to 为完整目标路径(含新名)。目标已存在、目标位于
+   * 源子树内 → RPC 错误(前端生成「- 副本」后缀后重试);符号链接按链接自身复制。
+   */
+  async copy(workspaceRoot: string, from: string, to: string): Promise<void> {
+    wireFsChanged()
+    const src = normalizeWorkspaceRelativePath(from)
+    const dst = normalizeWorkspaceRelativePath(to)
+    await rpcForWorkspace(workspaceRoot, 'fs.copy', { from: src, to: dst }, {
+      timeoutMs: 120_000,
+    })
+    emitFileChanged(workspaceRoot, dst, 'modify', false)
+  },
+
   async rename(workspaceRoot: string, oldPath: string, newPath: string): Promise<void> {
     wireFsChanged()
     const from = normalizeWorkspaceRelativePath(oldPath)
