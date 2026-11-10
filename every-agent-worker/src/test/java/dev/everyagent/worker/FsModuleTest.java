@@ -256,6 +256,45 @@ class FsModuleTest {
         assertTrue(rpc("fs.read", p("{\"path\":\"a/moved.txt\"}")).contains("NOT_FOUND"), "删除后不可读");
     }
 
+    /**
+     * fs.copy(资源树「复制/粘贴」对标 VSCode explorer):递归复制文件/目录树、
+     * 源保留;目标已存在拒绝、目标位于源子树内拒绝(防递归爆盘)。
+     */
+    @Test
+    @Order(15)
+    void fsCopyTree() throws Exception {
+        Files.createDirectories(WS.resolve("cp/src/nested"));
+        Files.writeString(WS.resolve("cp/src/f.txt"), "内容A");
+        Files.writeString(WS.resolve("cp/src/nested/g.txt"), "内容B");
+
+        // 文件复制
+        rpc("fs.copy", p("{\"from\":\"cp/src/f.txt\",\"to\":\"cp/f2.txt\"}"));
+        assertTrue(rpc("fs.read", p("{\"path\":\"cp/f2.txt\"}")).contains("rpc.ok"), "复制的文件可读");
+        assertTrue(rpc("fs.read", p("{\"path\":\"cp/src/f.txt\"}")).contains("rpc.ok"), "源文件保留");
+
+        // 目录树递归复制
+        rpc("fs.copy", p("{\"from\":\"cp/src\",\"to\":\"cp/dst\"}"));
+        String nested = rpc("fs.read", p("{\"path\":\"cp/dst/nested/g.txt\"}"));
+        assertTrue(nested.contains("rpc.ok"), nested);
+        String got = Json.parse(nested).path("payload").path("result").path("base64").asString();
+        assertEquals("内容B", new String(Base64.getDecoder().decode(got), StandardCharsets.UTF_8));
+
+        // 目标已存在 → 拒绝(前端负责生成「- 副本」后缀重试)
+        assertTrue(rpc("fs.copy", p("{\"from\":\"cp/src/f.txt\",\"to\":\"cp/f2.txt\"}"))
+                .contains("BAD_PARAMS"), "目标已存在应拒绝");
+        // 目标位于源子树内 → 拒绝(防无限递归)
+        assertTrue(rpc("fs.copy", p("{\"from\":\"cp/src\",\"to\":\"cp/src/inside\"}"))
+                .contains("BAD_PARAMS"), "复制进源子树应拒绝");
+        // 越界路径 → 沙箱拒绝
+        assertTrue(rpc("fs.copy", p("{\"from\":\"../escape.txt\",\"to\":\"cp/x.txt\"}"))
+                .contains("SANDBOX_DENIED"), "越界源应拒绝");
+        // 工作区根不能整根复制
+        assertTrue(rpc("fs.copy", p("{\"from\":\".\",\"to\":\"cp/root-clone\"}"))
+                .contains("SANDBOX_DENIED"), "工作区根拒收");
+
+        rpc("fs.delete", p("{\"path\":\"cp\"}"));
+    }
+
     @Test
     @Order(13)
     void fsBigFileBatchedRead() {

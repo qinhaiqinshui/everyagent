@@ -85,6 +85,7 @@ public class FsService {
         dispatcher.register(RpcMethods.FS_MKDIR, this::mkdir);
         dispatcher.register(RpcMethods.FS_MOVE, this::move);
         dispatcher.register(RpcMethods.FS_DELETE, this::delete);
+        dispatcher.register(RpcMethods.FS_COPY, this::copy);
         dispatcher.register(RpcMethods.FS_BROWSE, this::browse);
         dispatcher.register(RpcMethods.FS_READ_RAW, this::readRaw);
         dispatcher.register(RpcMethods.FS_WRITE_RAW, this::writeRaw);
@@ -421,6 +422,63 @@ public class FsService {
         deleteRecursively(target);
         changed(ctx, sb, sb.display(target), "delete");
         ctx.ok(Json.obj().put("path", sb.display(target)));
+    }
+
+    /**
+     * 递归复制文件/目录(资源树「复制/粘贴」,对标 VSCode explorer Copy/Paste):
+     * from 必须存在且非工作区根;to 为完整目标路径(含新名)——目标已存在时拒绝
+     * (FileAlreadyExistsException → BAD_PARAMS,前端负责探测同名并生成「- 副本」后缀);
+     * 目标位于源子树内拒绝(否则目录递归复制一边遍历一边在自身之下创建新文件,无限
+     * 递归直到路径超长/磁盘爆满);符号链接按链接自身复制(NOFOLLOW——不跟随,链接
+     * 指向祖先形成循环时也不会无限下钻,悬空链接同样可复制)。成功后广播 fs.changed
+     * (kind=write,前端刷新目标所在目录)。
+     */
+    private void copy(RpcContext ctx) throws IOException {
+        Sandbox sb = sandbox(ctx);
+        Path from = sb.resolveExisting(ctx.strParam("from"));
+        sb.requireNotRoot(from);
+        Path to = sb.resolveTarget(ctx.strParam("to"));
+        if (to.startsWith(from)) {
+            throw new BadParamsException("复制目标不能位于源目录内: " + sb.display(to));
+        }
+        if (Files.exists(to)) {
+            throw new BadParamsException("目标已存在: " + sb.display(to));
+        }
+        copyRecursively(from, to);
+        changed(ctx, sb, sb.display(to), "write");
+        ctx.ok(Json.obj().put("from", sb.display(from)).put("to", sb.display(to)));
+    }
+
+    /**
+     * 递归复制单棵子树。目录项判型用 NOFOLLOW(符号链接按链接自身属性 → 走文件
+     * 分支),链接以 {@link LinkOption#NOFOLLOW_LINKS} 复制链接本身(悬空链接可复制);
+     * 属性不可读的条目(Windows LX symlink 等 reparse 点)同样退化为按文件复制,
+     * 不拖垮整棵复制。
+     */
+    private static void copyRecursively(Path from, Path to) throws IOException {
+        boolean isDir;
+        try {
+            isDir = Files.readAttributes(from, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS).isDirectory();
+        } catch (IOException e) {
+            isDir = false;
+        }
+        if (isDir) {
+            Files.createDirectories(to);
+            try (DirectoryStream<Path> ds = Files.newDirectoryStream(from)) {
+                for (Path c : ds) {
+                    copyRecursively(c, to.resolve(c.getFileName()));
+                }
+            }
+            return;
+        }
+        if (to.getParent() != null) {
+            Files.createDirectories(to.getParent());
+        }
+        try {
+            Files.copy(from, to, LinkOption.NOFOLLOW_LINKS);
+        } catch (java.nio.file.FileAlreadyExistsException e) {
+            throw new BadParamsException("目标已存在: " + to);
+        }
     }
 
     // ---- 内部 ----

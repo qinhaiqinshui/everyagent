@@ -59,6 +59,12 @@ public final class RpcMethods {
     public static final String FS_MKDIR = "fs.mkdir";
     public static final String FS_MOVE = "fs.move";
     public static final String FS_DELETE = "fs.delete";
+    /**
+     * 递归复制文件/目录(参数 from/to,工作区内相对路径;资源树「复制/粘贴」对标
+     * VSCode explorer 的 Copy/Paste):目标已存在拒绝(前端生成「- 副本」后缀重试),
+     * 目标位于源子树内拒绝(防递归复制爆盘),符号链接按链接自身复制(NOFOLLOW)。
+     */
+    public static final String FS_COPY = "fs.copy";
     /** 浏览目录(方案 B:列盘符/根,再逐层列子目录;不经 workspace 沙箱,依赖 worker 进程权限)。 */
     public static final String FS_BROWSE = "fs.browse";
     /** 按机器绝对路径读取文件(Raw 系列合法根校验,§5.5;文件标签页用户操作,非 AI 工具调用)。 */
