@@ -300,6 +300,7 @@ volumes:
 def render_hub_service(cfg, java_bin: str) -> str:
     cur = f"{cfg.remote_dir.rstrip('/')}/current"
     exec_start = java_cmd_line(java_bin, getattr(cfg, "hub_java_opts", DEFAULT_HUB_JAVA_OPTS), f"{cur}/hub/app.jar")
+    user_line = service_user_line(cfg)
     return f"""\
 [Unit]
 Description=Every Agent Hub
@@ -308,7 +309,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory={cur}/hub
+{user_line}WorkingDirectory={cur}/hub
 ExecStart={exec_start}
 EnvironmentFile={cur}/.env
 # hub 打包默认只监听 127.0.0.1(安全整改);host 部署显式放开保持既有行为
@@ -326,6 +327,7 @@ WantedBy=multi-user.target
 def render_worker_service(cfg, java_bin: str) -> str:
     cur = f"{cfg.remote_dir.rstrip('/')}/current"
     exec_start = java_cmd_line(java_bin, getattr(cfg, "worker_java_opts", DEFAULT_WORKER_JAVA_OPTS), f"{cur}/worker/app.jar")
+    user_line = service_user_line(cfg)
     return f"""\
 [Unit]
 Description=Every Agent Worker
@@ -337,7 +339,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory={cur}/worker
+{user_line}WorkingDirectory={cur}/worker
 ExecStart={exec_start}
 EnvironmentFile={cur}/.env
 Restart=on-failure
@@ -384,31 +386,48 @@ server {{
 
 def render_runtime_env_file(cfg) -> str:
     """生成远端运行期 .env（HUB_KEY 原文,hub/worker 启动自算 sha256;REMOTE_HUB_KEY
-    供 worker.yml 第二条 hub 条目用,同一台 hub 时与 HUB_KEY 同值）。"""
+    供 worker.yml 第二条 hub 条目用,同一台 hub 时与 HUB_KEY 同值）。
+
+    只写显式提供的键：凭据/WORKER_ID 未给时不写行——空值行无意义，且默认 WORKER_ID=company-pc
+    会以 env 优先级压过登录用户 ~/.everyagent/application-worker.yaml 里的 worker-id。
+    不设 EVERYAGENT_HOME：服务以登录用户运行(systemd User=)，worker home 落其家目录
+    ~/.everyagent，application-worker.yaml 等用户配置从那里读(重部署不丢)。"""
     ws = (getattr(cfg, "workspace_root", "") or "").strip()
     hub_key = getattr(cfg, "hub_key", "") or ""
     worker_api_key = getattr(cfg, "worker_api_key", "") or ""
-    lines = [
-        f"HUB_KEY={hub_key}",
-        f"REMOTE_HUB_KEY={hub_key}",
-        # worker 数据归属密钥(host 模式通常由服务器上 ${EVERYAGENT_HOME}/application-worker.yaml
-        # 的 worker.hubs 列表提供凭据;留空时该文件可用 ${WORKER_API_KEY} 占位符引用本行)
-        f"WORKER_API_KEY={worker_api_key}",
-        f"WORKER_ID={getattr(cfg, 'worker_id', 'company-pc') or 'company-pc'}",
-        "EVERYAGENT_HOME=/var/lib/everyagent",
+    lines = []
+    if hub_key:
+        lines.append(f"HUB_KEY={hub_key}")
+        lines.append(f"REMOTE_HUB_KEY={hub_key}")
+    if worker_api_key:
+        lines.append(f"WORKER_API_KEY={worker_api_key}")
+    worker_id = getattr(cfg, "worker_id", None)
+    if worker_id:
+        lines.append(f"WORKER_ID={worker_id}")
+    if ws:
+        lines.append(f"WORKSPACE_ROOT={ws}")
+    hub_url = (getattr(cfg, "worker_hub_url", "") or "").strip()
+    if hub_url:
+        # worker 连接的 hub 地址:仅当用户配置文件未定义 worker.hubs 时经占位符生效;
+        # application-worker.yaml 里写了 hubs 列表则以文件为准,本行不参与
+        lines.append(f"WORKER_HUB_URL={hub_url}")
+    lines += [
+        "# 未写出的键以登录用户 ~/.everyagent/application-worker.yaml 为准",
+        "# (worker.hubs 凭据/worker-id 等;该文件不在 release 内,重新部署不覆盖)。",
         "# hub 监听地址由 systemd 单元(hub.service)注入 SERVER_ADDRESS=0.0.0.0 保持既有行为;",
         "# 若 hub/worker/webapp 全部同机且无需跨机直连 6101,取消下一行注释收紧为仅回环",
         "# (本文件优先级高于单元内的 Environment=;worker 不受影响——其 server.address 在打包 yml 固定回环)。",
         "#SERVER_ADDRESS=127.0.0.1",
     ]
-    if ws:
-        lines.append(f"WORKSPACE_ROOT={ws}")
-    hub_url = (getattr(cfg, "worker_hub_url", "") or "").strip()
-    if hub_url:
-        # worker 连接的 hub 地址:打包默认 ws://localhost:6101/ws(同机 hub);hub 与 worker
-        # 不同机时经本变量显式指向远程(systemd 注入后命中打包 yml 的 ${WORKER_HUB_URL:} 占位符)
-        lines.append(f"WORKER_HUB_URL={hub_url}")
     return "\n".join(lines) + "\n"
+
+
+def service_user_line(cfg) -> str:
+    """systemd 运行用户：以 SSH 登录用户运行——其家目录即 worker/hub 的 ~/.everyagent，
+    用户配置 application-worker.yaml 从那里读；也避免服务以 root 跑 AI 下发的命令。
+    root 登录时不写 User=（维持 root 运行，home=/root）。"""
+    u = (getattr(cfg, "user", "") or "").strip()
+    return f"User={u}\n" if u and u != "root" else ""
 
 
 def host_deploy_command(cfg, services, ts: str) -> str:
@@ -443,7 +462,6 @@ def host_deploy_command(cfg, services, ts: str) -> str:
         lines.append(f"{sudo} cp {cur}/systemd/everyagent-hub.service /etc/systemd/system/")
     if "worker" in services:
         lines.append(f"{sudo} cp {cur}/systemd/everyagent-worker.service /etc/systemd/system/")
-        lines.append(f"{sudo} mkdir -p /var/lib/everyagent")
     lines.append(f"{sudo} systemctl daemon-reload")
     if "hub" in services:
         lines.append(f"{sudo} systemctl enable everyagent-hub")
@@ -1007,7 +1025,7 @@ def deploy(cfg, services) -> None:
                 "worker 将使用容器内默认工作区，且无法访问宿主目录（除非改用同路径 bind mount）。")
         else:
             log("[警告] 未设置 WORKSPACE_ROOT（--workspace-root / DEPLOY_WORKSPACE_ROOT），"
-                "worker 将使用 EVERYAGENT_HOME 默认工作区（/var/lib/everyagent），无法访问你指定的宿主目录。")
+                "worker 默认工作区将落在运行用户家目录 ~/.everyagent 下（/home/<登录用户>/.everyagent）。")
     if "worker" in services and mode == "docker" and not (getattr(cfg, "worker_api_key", "") or "").strip():
         log("[警告] docker 模式未提供 WORKER_API_KEY（--worker-api-key / DEPLOY_WORKER_API_KEY / 配置文件 WORKER_API_KEY=）："
             "worker 凭据 fail-closed,容器将因缺 api-key 拒绝启动——"
@@ -1015,6 +1033,10 @@ def deploy(cfg, services) -> None:
     if "worker" in services and mode == "host" and not (getattr(cfg, "worker_hub_url", "") or "").strip():
         log("[提示] 未设置 --worker-hub-url：worker 将连接打包默认 ws://localhost:6101/ws（同机 hub）。"
             "hub 与 worker 不同机时请传 --worker-hub-url ws://<hub地址>:6101/ws，否则会无限重连本机。")
+    if "worker" in services and mode == "host" and not (getattr(cfg, "worker_api_key", "") or "").strip():
+        log("[提示] host 模式未提供 WORKER_API_KEY：worker 凭据可改由登录用户 ~/.everyagent/application-worker.yaml "
+            "的 worker.hubs 列表提供（服务以登录用户运行，其家目录即 worker home；该文件不在 release 内，重部署不丢）。"
+            "两处都未提供时 worker 将因缺 api-key/hub-key 拒绝启动（fail-closed）。")
     if cfg.dry_run:
         log("== DRY RUN: 仅本地预览, 不执行本地构建、不连接服务器 ==")
         print("\n---- 本地将执行的构建命令 ----")
@@ -1049,6 +1071,8 @@ def deploy(cfg, services) -> None:
             print("  .env  (HUB_KEY 原文,hub/worker 启动自算 sha256;解包后 chmod 600)")
             print(f"  worker 启动命令: {cfg.java_bin} {cfg.worker_java_opts or '(无JVM参数)'} -jar <current>/worker/app.jar")
             print(f"  hub   启动命令: {cfg.java_bin} {cfg.hub_java_opts or '(无JVM参数)'} -jar <current>/hub/app.jar")
+            print(f"  systemd 运行用户: {cfg.user or 'root'}（worker/hub home = 其家目录 ~/.everyagent，"
+                  "application-worker.yaml 等用户配置从那里读）")
         # 预览统一打码(前4...后4)，密钥原文不落终端/CI 日志；
         # 实际上传到服务器的 .env / docker-compose.yml 仍写原文(服务端运行需要)。
         print("\n---- 运行期配置预览(敏感值已打码) ----")
@@ -1233,7 +1257,9 @@ def parse_args(argv):
 
     # 运行期变量来源（host 与 docker 共用）：--env-file > --config(deploy.env) > 硬默认。
     runtime = load_env_file(Path(args.env_file)) if args.env_file else {}
-    args.worker_id = runtime.get("WORKER_ID") or local.get("WORKER_ID", "company-pc")
+    # 不设硬默认 company-pc：未显式提供时 .env 不写 WORKER_ID 行——否则 env 会以更高优先级
+    # 压过登录用户 ~/.everyagent/application-worker.yaml 的 worker-id(用户在文件里改了也不生效)
+    args.worker_id = runtime.get("WORKER_ID") or local.get("WORKER_ID")
 
     if any(s in args.services for s in ("hub", "worker")) and not (args.hub_key or "").strip():
         p.error("部署 hub/worker 必须提供原始 hub key（--hub-key / DEPLOY_HUB_KEY / 配置文件 HUB_KEY=）；"
