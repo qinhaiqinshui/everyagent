@@ -553,11 +553,11 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
   const TableBlock = ({ node, children }: IntrinsicProps<'table'>) => {
     const { headers, rows } = extractTableMatrix(node)
     const widths = computeTableColumnWidths(headers, rows)
-    // 空格手型平移:默认原生选择复制;按住空格变抓手,拖动平移(仅大表格)。
+    // Ctrl 手型平移:默认原生选择复制;按住 Ctrl 变抓手,拖动平移(仅大表格)。
     const pan = useTablePan()
     const panCursor = pan.panning
       ? 'grabbing'
-      : pan.spacePan && pan.pannable ? 'grab' : undefined
+      : pan.ctrlPan && pan.pannable ? 'grab' : undefined
 
     // 表头吸顶:表头滚出视野且表格仍跨越阅读容器顶时,钉一个同列宽的表头克隆。
     // 表头单元格编辑期间关闭(克隆与在流编辑态不共享,避免内容不一致)。
@@ -599,7 +599,7 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
             ...(panCursor != null ? { cursor: panCursor } : null),
             ...(pan.panning ? { userSelect: 'none' as const } : null),
           }}
-          title={pan.pannable ? '按住 Space 拖动平移表格；直接拖动可选择复制文本' : undefined}
+          title={pan.pannable ? '按住 Ctrl 拖动平移表格；直接拖动可选择复制文本' : undefined}
         >
           <table style={s.table}>
             {colgroup}

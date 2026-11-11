@@ -315,7 +315,7 @@ describe('表格渲染(列宽与可编辑标注)', () => {
   it('静态渲染(无溢出判定)不携带手型光标与拖动提示——普通表格选择不受打扰', () => {
     const html = render(md)
     expect(html).not.toContain('cursor:grab')
-    expect(html).not.toContain('Space 拖动平移')
+    expect(html).not.toContain('Ctrl 拖动平移')
   })
 
   it('静态渲染不产生吸顶浮动表头(吸顶仅在真实滚动几何下经 portal 挂载)', () => {
