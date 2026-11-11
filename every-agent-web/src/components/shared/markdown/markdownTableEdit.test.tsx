@@ -279,7 +279,12 @@ describe('表格渲染(列宽与可编辑标注)', () => {
   it('colgroup 以 ch 单位输出列宽', () => {
     const html = render(md)
     expect(html).toContain('<colgroup>')
-    expect(html).toMatch(/<col style="width:\d+ch"\/>/)
+    expect(html).toMatch(/<col style="width:min\(\d+ch, 100vw\)"\/>/)
+  })
+
+  it('单列列宽上限钳到屏幕宽度(min(Nch, 100vw))——窄屏/超大字号下不超屏', () => {
+    const html = render('| aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa | b |\n| --- | --- |\n| 1 | 2 |')
+    expect(html).toMatch(/width:min\(60ch, 100vw\)/)
   })
 
   it('包裹层允许横向滚动(overflow-x auto)', () => {

@@ -78,6 +78,8 @@ const COLUMN_PAD_CH = 3
  * 容器时表格更宽、由外层横向滚动。
  * 每列 clamp 到 [MIN_COLUMN_CH, MAX_COLUMN_CH],防止列无限宽/被压扁;
  * 列很多时总和仍可超容器(横向滚动承载),不再回退压缩下限。
+ * 另有「单列 ≤ 屏幕宽度」的最终钳制,由渲染层 col 元素
+ * width: min(Nch, 100vw) 声明式完成(见 TableBlock colgroup),此处不管。
  */
 export function computeTableColumnWidths(headers: string[], rows: string[][]): string[] {
   const columnCount = headers.length
@@ -323,9 +325,10 @@ const cellInputStyle: React.CSSProperties = {
   cursor: 'text',
   // iOS Safari:输入框字号 < 16px 时聚焦会强制放大视口;取「继承字号与 16px 的较大者」。
   fontSize: 'max(16px, 1em)',
-  // 随内容自动增高(overflow hidden),超长内容封顶后内部滚动,不撑爆表格。
+  // 随内容自动增高(宽度吃满列宽);封顶 40vh 后出竖向滚动条,长内容编辑不撑爆表格。
   resize: 'none',
-  overflow: 'hidden',
+  overflowX: 'hidden',
+  overflowY: 'auto',
   maxHeight: '40vh',
 }
 
@@ -575,10 +578,12 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
       ) ?? null
     ), [children])
 
+    // colgroup 为在流表与吸顶克隆共用:列宽按内容计算(ch),再经 min(…,100vw)
+    // 把单列上限钳到屏幕宽度——窄屏/超大字号下单列不超屏,免横向滚动。
     const colgroup = widths.length > 0 ? (
       <colgroup>
         {widths.map((width, index) => (
-          <col key={`col-${index}`} style={{ width }} />
+          <col key={`col-${index}`} style={{ width: `min(${width}, 100vw)` }} />
         ))}
       </colgroup>
     ) : null
