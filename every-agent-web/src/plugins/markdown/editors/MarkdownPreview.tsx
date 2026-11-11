@@ -12,6 +12,7 @@ import { parseMarkdownHeadings, resolveMarkdownHeadingAnchor, type MarkdownHeadi
 import MarkdownImage from './MarkdownImage'
 import { rawHtmlRehypePlugins } from './rawHtmlPipeline'
 import { replaceMarkdownRange, type MarkdownTableCellEditRequest } from '@/components/shared/markdown/markdownTableEdit'
+import { APP_BUILD_ID } from '@/buildInfo'
 
 export type MarkdownPreviewHandle = {
   /** 大纲选中标题时调用；返回该 id 是否存在于当前文档（用于决定是否滚动）。不再有折叠展开逻辑。 */
@@ -160,6 +161,9 @@ const MarkdownPreview = React.forwardRef<MarkdownPreviewHandle, MarkdownPreviewP
 
   return (
     <div ref={rootRef} className="md-root" style={rootStyle}>
+      {/* TEMP-DEBUG(部署验证角标): 手机/无 DevTools 场景一眼判定页面构建。
+          确认部署链正常后移除此标记与 buildBadgeStyle。 */}
+      <span style={buildBadgeStyle} aria-hidden="true">build {APP_BUILD_ID}</span>
       <Markdown
         remarkPlugins={[remarkGfm, remarkFourTildeStrikethrough]}
         rehypePlugins={rawHtmlRehypePlugins}
@@ -180,4 +184,22 @@ const rootStyle: React.CSSProperties = {
   color: 'var(--reading-fg)',
   fontFamily: 'var(--reading-font-family)',
   fontSize: 'var(--editor-font-size)',
+  position: 'relative',
+}
+
+/** TEMP-DEBUG: 部署验证角标(醒目橙底白字,右上角)。 */
+const buildBadgeStyle: React.CSSProperties = {
+  position: 'absolute',
+  top: 4,
+  right: 4,
+  zIndex: 50,
+  padding: '1px 6px',
+  fontSize: 10,
+  lineHeight: 1.6,
+  borderRadius: 4,
+  background: '#f59e0b',
+  color: '#fff',
+  pointerEvents: 'none',
+  opacity: 0.9,
+  whiteSpace: 'nowrap',
 }
