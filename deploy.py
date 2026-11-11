@@ -42,7 +42,7 @@ SSH 密码：优先级 DEPLOY_SSH_PASSWORD 环境变量 > 交互输入 > --passw
   python deploy.py worker --host 1.2.3.4 --worker-hub-url ws://120.25.206.241:6101/ws \
       --worker-api-key <数据归属密钥> --hub-key <远程hub的HUB_KEY>
 
-  # worker/hub 的 JVM 内存参数默认按 4G 内存小服务器收敛（worker -Xmx1g / hub -Xmx256m，
+  # worker/hub 的 JVM 内存参数默认按 2c2G 小服务器收敛（worker -Xmx512m / hub -Xmx256m，
   # 显式限堆，避免依赖 JVM 按物理内存 1/4 取默认堆上限的漂移行为）；大内存机器可覆盖：
   python deploy.py worker --host 1.2.3.4 --worker-java-opts "-Xmx2g -XX:MaxMetaspaceSize=256m"
   # （也可经 --config 文件 WORKER_JAVA_OPTS= / HUB_JAVA_OPTS= 或环境变量
@@ -174,11 +174,12 @@ RG_DOWNLOAD_URLS = [
 ]
 
 # JVM 启动参数默认值（host 模式注入 systemd ExecStart，docker 模式注入 compose command）。
-# 默认面向 4G 内存小服务器收敛：实测 worker 常驻 <650MB、hub <260MB，显式限堆避免依赖
-# JVM「按物理内存 1/4 取默认堆上限」的漂移行为（换台大内存机器反而可能堆上限过高吃满内存）。
+# 默认面向 2c2G 小服务器收敛：hub+nginx+OS 常驻约 0.65G，worker 限堆 512m 后进程峰值约
+# 0.9G（堆+元空间+线程栈+直接内存），总占用约 1.5G 仍留余量；实测 worker 不限堆跑任务
+# 常驻 <650MB、hub <260MB。显式限堆避免依赖 JVM「按物理内存 1/4 取默认堆上限」的漂移行为。
 # 覆盖途径：--worker-java-opts / --hub-java-opts > DEPLOY_WORKER_JAVA_OPTS / DEPLOY_HUB_JAVA_OPTS
 # > --config 文件 WORKER_JAVA_OPTS= / HUB_JAVA_OPTS=；CLI 显式传空字符串可清除全部 JVM 参数。
-DEFAULT_WORKER_JAVA_OPTS = "-Xmx1g -XX:MaxMetaspaceSize=256m"
+DEFAULT_WORKER_JAVA_OPTS = "-Xmx512m -XX:MaxMetaspaceSize=192m"
 DEFAULT_HUB_JAVA_OPTS = "-Xmx256m -XX:MaxMetaspaceSize=128m"
 
 # 服务器端 docker-compose：官方镜像 + 挂载本地编译产物，不构建自定义镜像。
@@ -1137,7 +1138,7 @@ def parse_args(argv):
                                         "apt 安装的 openjdk-25-jre-headless；docker 模式忽略 / DEPLOY_JAVA_BIN）")
     p.add_argument("--worker-java-opts", default=None,
                    help="worker 的 JVM 启动参数（host 模式注入 systemd ExecStart，docker 模式注入 compose command；"
-                        "默认 '-Xmx1g -XX:MaxMetaspaceSize=256m'，按 4G 内存服务器收敛；"
+                        "默认 '-Xmx512m -XX:MaxMetaspaceSize=192m'，按 2c2G 小服务器收敛；"
                         "可用 DEPLOY_WORKER_JAVA_OPTS / 配置文件 WORKER_JAVA_OPTS= 覆盖，显式传空字符串清除）")
     p.add_argument("--hub-java-opts", default=None,
                    help="hub 的 JVM 启动参数（注入位置同上；默认 '-Xmx256m -XX:MaxMetaspaceSize=128m'；"
