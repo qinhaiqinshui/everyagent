@@ -568,27 +568,33 @@ function useTableCellEditor(
     onTableCellEdit({ start: range.start, end: range.end, original: range.original, next })
   }, [draft, onTableCellEdit, range])
 
-  React.useEffect(() => {
+  React.useLayoutEffect(() => {
     if (!editing) return
     const element = inputRef.current
     if (!element) return
+    // 先定高再检测(同一同步块内,读取 scrollHeight 会强制布局,顺序保证正确)。
     fitTextAreaHeight(element, editHeight)
     element.focus()
     element.select()
-    // 受控 value 渲染完成后再判溢出(scrollHeight > clientHeight → 出「展开」按钮)。
-    const raf = requestAnimationFrame(() => {
+    setOverflow(element.scrollHeight > element.clientHeight + 2)
+  }, [editing, editHeight, draft])
+
+  // 字体就绪兜底:晚加载字体会改变 scrollHeight,重判一次「展开」按钮出现条件。
+  React.useEffect(() => {
+    if (!editing) return
+    if (document.fonts?.ready == null) return
+    let cancelled = false
+    void document.fonts.ready.then(() => {
       const el = inputRef.current
-      if (el) setOverflow(el.scrollHeight > el.clientHeight + 2)
+      if (!cancelled && el) setOverflow(el.scrollHeight > el.clientHeight + 2)
     })
-    return () => cancelAnimationFrame(raf)
-  }, [editing, editHeight])
+    return () => {
+      cancelled = true
+    }
+  }, [editing])
 
   const handleDraftChange = React.useCallback((event: React.ChangeEvent<HTMLTextAreaElement>) => {
     setDraft(event.target.value)
-    requestAnimationFrame(() => {
-      const el = inputRef.current
-      if (el) setOverflow(el.scrollHeight > el.clientHeight + 2)
-    })
   }, [])
 
   // ── 展开浮层(Excel 公式栏展开式):内容超过编辑框时的完整编辑视图。 ──
