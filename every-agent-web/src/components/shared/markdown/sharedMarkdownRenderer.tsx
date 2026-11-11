@@ -326,11 +326,11 @@ const cellInputStyle: React.CSSProperties = {
   // iOS Safari:输入框字号 < 16px 时聚焦会强制放大视口;取「继承字号与 16px 的较大者」。
   fontSize: 'max(16px, 1em)',
   // 铺满单元格:宽度吃满列宽;高度在进入编辑时按单元格原高测量注入(见 editHeight)。
-  // 内容超出固定高度时内部竖向滚动;40vh 封顶防超屏。
+  // 内容超出固定高度时内部竖向滚动;屏幕 1/5(20vh) 封顶,超屏部分见展开编辑浮层。
   resize: 'none',
   overflowX: 'hidden',
   overflowY: 'auto',
-  maxHeight: '40vh',
+  maxHeight: '20vh',
 }
 
 /** textarea 高度 = 单元格原高(进入编辑时测量);测量失败回退自动增高。 */
