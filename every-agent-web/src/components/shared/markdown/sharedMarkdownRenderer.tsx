@@ -7,12 +7,12 @@ import { useTablePan } from './useTablePan'
 import { usePinnedTableHeader } from './usePinnedTableHeader'
 import {
   useTableLayout,
+  useTableGeometry,
   allocateColumnWidths,
   applyColumnOverrides,
   computeFallbackColumnWidths,
-  COLUMN_EDGE_PX,
-  ROW_EDGE_PX,
   MAX_ROW_PX,
+  MIN_COL_PX,
   type TableLayoutController,
 } from './useTableLayout'
 import { createPortal } from 'react-dom'
@@ -402,29 +402,6 @@ const cellDialogPreviewStyle: React.CSSProperties = {
   whiteSpace: 'normal',
 }
 
-/** 表头列宽拖动把手:常显小图标(↔),悬停高亮;按住拖动调列宽,双击重置。 */
-const columnHandleStyle: React.CSSProperties = {
-  position: 'absolute',
-  top: '50%',
-  right: 0,
-  transform: 'translateY(-50%)',
-  width: 16,
-  height: 22,
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  fontSize: 10,
-  lineHeight: 1,
-  color: 'var(--text-muted, var(--text-secondary))',
-  background: 'color-mix(in srgb, var(--bg-table) 85%, transparent)',
-  border: '1px solid var(--border-light)',
-  borderRadius: '4px 0 0 4px',
-  cursor: 'col-resize',
-  userSelect: 'none',
-  touchAction: 'none',
-  zIndex: 2,
-}
-
 /** 行高上限内容容器:td 是 table-cell,max-height 对其无效(CSS 规范),
  * 行高限制须作用于 td 内的块级内容层。超出以 -webkit-line-clamp 按行截断,
  * 末行尾显示省略号;行数 = 上限px ÷ 实测行高(见 Td)。 */
@@ -484,6 +461,54 @@ const floatHeaderBoxStyle: React.CSSProperties = {
   borderRadius: 'var(--radius-md)',
   background: 'var(--bg-table)',
   boxShadow: '0 4px 12px rgba(0, 0, 0, 0.18)',
+}
+
+// ───────────────────── 表格外把手栏(行高/列宽) ─────────────────────
+
+/** 顶栏(列宽把手)高度与左栏(行高把手)宽度(px)。 */
+const COL_GUTTER_PX = 18
+const ROW_GUTTER_PX = 20
+/** 把手命中区尺寸(px):命中区大于 9px 图标,便于精确抓取。 */
+const COL_HANDLE_W = 18
+const ROW_HANDLE_H = 18
+
+/** 把手栏外框:左栏(行高)+ 右列(顶栏 + 表格)。margin 沿用原 tableWrap 间距。 */
+const tableResizeFrameStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'stretch',
+}
+
+/** 左栏:每行一个 ⇕ 把手,槽高与表格行实测高对齐(顶部让位顶栏高度)。 */
+const rowGutterStyle: React.CSSProperties = {
+  width: ROW_GUTTER_PX,
+  flexShrink: 0,
+  paddingTop: COL_GUTTER_PX,
+}
+
+/** 顶栏:裁剪视口(宽=表格区),内部平移层随横向滚动移动。 */
+const colGutterClipStyle: React.CSSProperties = {
+  height: COL_GUTTER_PX,
+  overflow: 'hidden',
+  position: 'relative',
+}
+
+/** 行把手:跨坐在行底缘(槽内绝对定位,居中)。 */
+const rowHandleStyle: React.CSSProperties = {
+  position: 'absolute',
+  left: '50%',
+  bottom: -Math.floor(ROW_HANDLE_H / 2),
+  transform: 'translateX(-50%)',
+  width: 16,
+  height: ROW_HANDLE_H,
+}
+
+/** 列把手:跨坐在列右缘(平移层内绝对定位,left 按列边界计算)。 */
+const colHandleStyle: React.CSSProperties = {
+  position: 'absolute',
+  top: '50%',
+  transform: 'translateY(-50%)',
+  width: COL_HANDLE_W,
+  height: 16,
 }
 
 /** 单元格编辑弹窗互斥注册表:后开的弹窗让先开的提交收口(同一时刻至多一弹窗)。 */
@@ -779,20 +804,22 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
       () => allocateColumnWidths(headers, rows, layout.containerWidth, layout.chPx),
       [headers, layout.chPx, layout.containerWidth, rows],
     )
-    const effectiveWidths = React.useMemo(
-      () => (baseWidths.length > 0 ? applyColumnOverrides(baseWidths, layout.columnOverrides) : null),
-      [baseWidths, layout.columnOverrides],
-    )
     const fallbackWidths = React.useMemo(
       () => (baseWidths.length === 0 ? computeFallbackColumnWidths(headers, rows) : []),
       [baseWidths.length, headers, rows],
     )
 
-    // colgroup 为在流表与吸顶克隆共用:手调覆盖优先(px),否则初始分配(px)或 ch 兜底。
+    // colgroup 为在流表与吸顶克隆共用:手调列用覆盖 px(两种口径都生效,
+    // 未测得容器宽的 ch 兜底下也能手调),其余走初始分配(px)或 ch 兜底。
     const colWidthStyles = React.useMemo(() => {
-      if (effectiveWidths) return effectiveWidths.map((px) => `${px}px`)
-      return fallbackWidths
-    }, [effectiveWidths, fallbackWidths])
+      if (baseWidths.length > 0) {
+        return applyColumnOverrides(baseWidths, layout.columnOverrides).map((px) => `${px}px`)
+      }
+      return fallbackWidths.map((ch, index) => {
+        const override = layout.columnOverrides.get(index)
+        return override != null ? `${override}px` : ch
+      })
+    }, [baseWidths, fallbackWidths, layout.columnOverrides])
     const colgroup = colWidthStyles.length > 0 ? (
       <colgroup>
         {colWidthStyles.map((width, index) => (
@@ -801,8 +828,8 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
       </colgroup>
     ) : null
 
-    // 注入列/行索引(th→__columnIndex、td→__rowIndex):Th/Td 的边缘热区拖动需要
-    // 知道自己调整的是哪一列/哪一行。克隆 thead(吸顶)复用注入后的同一份。
+    // 注入列/行索引(th→__columnIndex、td→__rowIndex):Td 的行高上限
+    // (rowOverrides)需要知道自己属于哪一行。克隆 thead(吸顶)复用注入后的同一份。
     // Th/Td 为 buildMarkdownComponents 闭包常量(每次构建固定),随 children 一起
     // 进入 memo 即可;children 不变时二者引用也不变。
     const injectedChildren = React.useMemo(
@@ -821,24 +848,111 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
       layout.wrapRef.current = element
     }, [pan.wrapRef, layout.wrapRef])
 
+    // 表格外把手栏几何:实测行高/列宽/表头高(把手对齐与拖动原点);
+    // 行列数变化(内容编辑)时重扫观测目标。
+    const rescanKey = `${headers.length}|${rows.length}`
+    const { geometry, colHandleLayerRef } = useTableGeometry(layout.wrapRef, rescanKey)
+    // 列边界(累计列宽):顶栏 ↔ 把手的落点(每列右缘)。
+    const colBoundaries = React.useMemo(() => {
+      const boundaries: number[] = []
+      let x = 0
+      for (const width of geometry.colWidths) {
+        x += width
+        boundaries.push(x)
+      }
+      return boundaries
+    }, [geometry.colWidths])
+    // 把手栏渲染条件:几何已测得(无 RO 环境如 SSR 整栏不渲染,表格回到原生形态)。
+    const guttersReady = geometry.rowHeights.length > 0 || geometry.colWidths.length > 0
+
     return (
       <TableResizeContext.Provider value={layout}>
         <HeaderEditingContext.Provider value={headerEditingTracker}>
-          <div
-            ref={wrapRef}
-            {...sourceLineData(node)}
-            {...pan.handlers}
-            style={{
-              ...s.tableWrap,
-              ...(panCursor != null ? { cursor: panCursor } : null),
-              ...(pan.panning ? { userSelect: 'none' as const } : null),
-            }}
-            title={pan.pannable ? '按住 Ctrl 拖动平移表格；直接拖动可选择复制文本' : undefined}
-          >
-            <table className="md-table" style={s.table}>
-              {colgroup}
-              {injectedChildren}
-            </table>
+          <div {...sourceLineData(node)} style={{ ...tableResizeFrameStyle, margin: s.tableWrap.margin }}>
+            {/* 行高把手栏(表外左栏):每行底缘一个 ⇕,槽高与表格行实测高对齐。 */}
+            {guttersReady ? (
+              <div style={rowGutterStyle}>
+                <div style={{ height: geometry.headerHeight }} />
+                {geometry.rowHeights.map((height, rowIndex) => (
+                  <div key={`row-${rowIndex}`} style={{ position: 'relative', height }}>
+                    <span
+                      role="separator"
+                      aria-label="调整行高"
+                      className="md-table-gutter-handle md-table-gutter-handle--row"
+                      style={rowHandleStyle}
+                      title="拖动调整行高，双击重置"
+                      onPointerDown={(event) => { layout.beginRowResize(rowIndex, height, event) }}
+                      onPointerMove={layout.dragHandlers.onPointerMove}
+                      onPointerUp={layout.dragHandlers.onPointerUp}
+                      onPointerCancel={layout.dragHandlers.onPointerCancel}
+                      onDoubleClick={(event) => {
+                        event.preventDefault()
+                        layout.resetRow(rowIndex)
+                      }}
+                    >
+                      ⇕
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+              {/* 列宽把手栏(表外顶栏):每列右缘一个 ↔,平移层随横向滚动移动。 */}
+              {guttersReady ? (
+                <div style={colGutterClipStyle}>
+                  <div
+                    ref={colHandleLayerRef}
+                    style={{ position: 'relative', width: geometry.tableWidth || '100%', height: '100%' }}
+                  >
+                    {colBoundaries.map((boundary, columnIndex) => (
+                      <span
+                        key={`col-${columnIndex}`}
+                        role="separator"
+                        aria-label="调整列宽"
+                        className="md-table-gutter-handle md-table-gutter-handle--col"
+                        style={{
+                          ...colHandleStyle,
+                          left: Math.max(0, Math.min(boundary - COL_HANDLE_W / 2, geometry.tableWidth - COL_HANDLE_W)),
+                        }}
+                        title="拖动调整列宽，双击重置"
+                        onPointerDown={(event) => {
+                          layout.beginColumnResize(
+                            columnIndex,
+                            geometry.colWidths[columnIndex] || MIN_COL_PX,
+                            event,
+                          )
+                        }}
+                        onPointerMove={layout.dragHandlers.onPointerMove}
+                        onPointerUp={layout.dragHandlers.onPointerUp}
+                        onPointerCancel={layout.dragHandlers.onPointerCancel}
+                        onDoubleClick={(event) => {
+                          event.preventDefault()
+                          layout.resetColumn(columnIndex)
+                        }}
+                      >
+                        ↔
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+              <div
+                ref={wrapRef}
+                {...pan.handlers}
+                style={{
+                  ...s.tableWrap,
+                  margin: 0,
+                  ...(panCursor != null ? { cursor: panCursor } : null),
+                  ...(pan.panning ? { userSelect: 'none' as const } : null),
+                }}
+                title={pan.pannable ? '按住 Ctrl 拖动平移表格；直接拖动可选择复制文本' : undefined}
+              >
+                <table className="md-table" style={s.table}>
+                  {colgroup}
+                  {injectedChildren}
+                </table>
+              </div>
+            </div>
           </div>
         {pin.pinned && theadElement && typeof document !== 'undefined'
           ? createPortal(
@@ -860,11 +974,7 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
               >
                 <table className="md-table" style={{ ...s.table, width: pin.pinned.tableWidth }}>
                   {colgroup}
-                  {/* 克隆经 portal 落在 body 下,脱离 TableResizeContext.Provider 树;
-                      重新包一层让克隆表头的列宽把手同样可拖。 */}
-                  <TableResizeContext.Provider value={layout}>
-                    {theadElement}
-                  </TableResizeContext.Provider>
+                  {theadElement}
                 </table>
               </div>
             </div>,
@@ -877,13 +987,12 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
   }
 
   const Th = (props: IntrinsicProps<'th'> & TableCellIndexProps) => {
-    const { children, align, node, __columnIndex } = props
+    const { children, align, node } = props
     const rest = stripNode(props)
     delete rest.align
     delete rest.__columnIndex
     delete rest.__rowIndex
     const cell = useTableCellEditor(node, sourceText, onTableCellEdit)
-    const resize = React.useContext(TableResizeContext)
     // 表头单元格编辑态上报:编辑期间所属表格关闭表头吸顶(克隆表头与在流编辑态不共享)。
     const headerEditingTracker = React.useContext(HeaderEditingContext)
     React.useEffect(() => {
@@ -892,53 +1001,20 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
       return () => headerEditingTracker.onChange(false)
     }, [cell.editing, headerEditingTracker])
 
-    // 单击表头 = 切换本列调宽把手(再点同列收起,点其他列转移);双击仍编辑单元格。
-    const showHandle = resize != null && resize.activeColumnHandle === __columnIndex && __columnIndex != null && !cell.editing
-
-    const handleClick = React.useCallback(() => {
-      if (resize == null || __columnIndex == null || cell.editing) return
-      resize.setActiveColumnHandle(resize.activeColumnHandle === __columnIndex ? null : __columnIndex)
-    }, [__columnIndex, cell.editing, resize])
-
+    // 列宽/行高调整全部走表外把手栏(顶栏 ↔ / 左栏 ⇕),表头自身只保留双击编辑。
     return (
       <th
         ref={cell.hostRef}
         {...rest}
         style={{
           ...s.th,
-          position: 'relative',
-          ...(showHandle ? { background: 'color-mix(in srgb, var(--accent-blue, #3b82f6) 12%, var(--bg-table))' } : null),
           textAlign: (align ?? node?.properties?.align ?? 'left') as React.CSSProperties['textAlign'],
         }}
-        onClick={handleClick}
-        onPointerMove={resize?.dragHandlers.onPointerMove}
-        onPointerUp={resize?.dragHandlers.onPointerUp}
-        onPointerCancel={resize?.dragHandlers.onPointerCancel}
         onDoubleClick={cell.editable && !cell.editing ? cell.beginEdit : undefined}
-        title={cell.editable ? '点击显示列宽把手；双击编辑单元格' : '点击显示列宽把手'}
+        title={cell.editable ? '双击编辑单元格' : undefined}
       >
         {children}
         {cell.editor}
-        {showHandle ? (
-          <span
-            role="separator"
-            aria-label="调整列宽"
-            style={columnHandleStyle}
-            title="拖动调整列宽，双击重置"
-            onPointerDown={(event) => {
-              event.stopPropagation()
-              resize!.beginColumnResize(__columnIndex!, event)
-            }}
-            onClick={(event) => event.stopPropagation()}
-            onDoubleClick={(event) => {
-              event.stopPropagation()
-              event.preventDefault()
-              resize!.resetColumn(__columnIndex!)
-            }}
-          >
-            ↔
-          </span>
-        ) : null}
       </th>
     )
   }
@@ -951,7 +1027,7 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
     delete rest.__rowIndex
     const cell = useTableCellEditor(node, sourceText, onTableCellEdit)
     const resize = React.useContext(TableResizeContext)
-    /** 行高上限:用户手调优先,默认 MAX_ROW_PX;编辑态同样生效(编辑框=格高)。 */
+    /** 行高上限:用户手调(表外左栏 ⇕ 把手)优先,默认 MAX_ROW_PX;编辑态同样生效。 */
     const rowMaxHeight = resize && __rowIndex != null
       ? resize.rowOverrides.get(__rowIndex) ?? MAX_ROW_PX
       : MAX_ROW_PX
@@ -972,83 +1048,20 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
       setLineHeightPx((prev) => (Math.abs(prev - next) > 0.5 ? next : prev))
     }, [cell.hostRef])
 
-    /** 命中底缘热区(行高拖动)。 */
-    const hitRowEdge = (event: React.PointerEvent<HTMLElement>) => {
-      const rect = event.currentTarget.getBoundingClientRect()
-      return event.clientY - rect.top >= rect.height - ROW_EDGE_PX
-    }
-
-    const handlePointerDown = (event: React.PointerEvent<HTMLElement>) => {
-      if (resize && __rowIndex != null && hitRowEdge(event)) {
-        resize.beginRowResize(__rowIndex, event)
-        return
-      }
-      cell.touchHandlers.onPointerDown(event)
-    }
-
+    // 行高调整走表外左栏 ⇕ 把手,单元格自身只保留触屏双击编辑与内容截断。
     return (
       <td
         ref={cell.hostRef}
         {...rest}
         style={{
           ...s.td,
-          position: 'relative',
           textAlign: (align ?? node?.properties?.align) as React.CSSProperties['textAlign'],
         }}
-        onPointerDown={handlePointerDown}
-        onPointerMove={resize?.dragHandlers.onPointerMove}
-        onPointerUp={(event) => {
-          resize?.dragHandlers.onPointerUp(event)
-          cell.touchHandlers.onPointerUp(event)
-        }}
-        onPointerCancel={resize?.dragHandlers.onPointerCancel}
-        onDoubleClick={(event) => {
-          if (resize && __rowIndex != null && hitRowEdge(event as unknown as React.PointerEvent<HTMLElement>)) {
-            resize.resetRow(__rowIndex)
-            return
-          }
-          if (cell.editable && !cell.editing) cell.beginEdit()
-        }}
+        onPointerDown={cell.touchHandlers.onPointerDown}
+        onPointerUp={cell.touchHandlers.onPointerUp}
+        onDoubleClick={cell.editable && !cell.editing ? cell.beginEdit : undefined}
         title={plainText || undefined}
       >
-        {cell.editing || resize == null || __rowIndex == null
-          ? null
-          : (
-            <span
-              role="separator"
-              aria-label="调整行高"
-              style={{
-                position: 'absolute',
-                left: '50%',
-                bottom: 0,
-                transform: 'translateX(-50%)',
-                width: 22,
-                height: 12,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                fontSize: 9,
-                lineHeight: 1,
-                color: 'var(--text-muted, var(--text-secondary))',
-                cursor: 'row-resize',
-                userSelect: 'none',
-                touchAction: 'none',
-                zIndex: 2,
-              }}
-              title="拖动调整行高，双击重置"
-              onPointerDown={(event) => {
-                event.stopPropagation()
-                resize.beginRowResize(__rowIndex, event)
-              }}
-              onDoubleClick={(event) => {
-                event.stopPropagation()
-                event.preventDefault()
-                resize.resetRow(__rowIndex)
-              }}
-            >
-              ⇕
-            </span>
-          )}
         <div style={rowClampStyle(rowMaxHeight, lineHeightPx)}>{children}</div>
         {/* 编辑浮层(portal 到 body,不占位);编辑期间单元格保持原内容显示。 */}
         {cell.editor}

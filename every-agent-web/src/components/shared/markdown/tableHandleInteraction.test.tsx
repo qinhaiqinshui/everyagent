@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 /**
- * 表格列宽/行高把手的交互级测试(需 DOM 事件序列):
- * 索引注入(injectTableCellIndices)按组件引用匹配 Th/Td——react-markdown 在
- * 进入 table 组件前已完成 components 映射,children 里的 th/td 已是组件元素,
- * 若按宿主标签字符串匹配会静默失效(列宽把手单击不出现、行高把手缺失)。
- * 本文件用真实 DOM 事件(pointerdown/click)覆盖该回归。
+ * 表格外把手栏交互测试(需 DOM 事件序列):
+ * - 行高 ⇕ 把手在表外左栏,每行一个(回归:曾渲染在每个单元格底部 = 行×列个);
+ * - 列宽 ↔ 把手在表外顶栏,每列右缘一个(回归:曾藏在 th 内需单击表头唤出);
+ * - 把手不落在任何 th/td 内(不压单元格内容);
+ * - 拖动调列宽(colgroup 覆盖为 px),双击重置(回到 ch 口径)。
  */
 import { describe, it, expect, afterEach, beforeAll } from 'vitest'
 import React from 'react'
@@ -13,26 +13,36 @@ import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { buildMarkdownComponents } from './sharedMarkdownRenderer'
 
-const md = '| 列一 | 列二 |\n| --- | --- |\n| 1 | 2 |'
+const md = [
+  '| 列一 | 列二 |',
+  '| --- | --- |',
+  '| alpha | beta |',
+  '| gamma | delta |',
+].join('\n')
 
-// jsdom 未实现指针捕获 API,拖动路径(beginColumnResize/beginRowResize)会调用,
-// 桩掉避免合成事件下的 TypeError(真实浏览器原生支持)。
 beforeAll(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
-  if (typeof Element.prototype.setPointerCapture !== 'function') {
-    Element.prototype.setPointerCapture = () => {}
+  // jsdom 无 ResizeObserver(几何测量钩子依赖):桩掉,首次测量走 effect 内同步 measure()。
+  if (typeof (globalThis as { ResizeObserver?: unknown }).ResizeObserver === 'undefined') {
+    ;(globalThis as { ResizeObserver?: unknown }).ResizeObserver = class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
   }
-  if (typeof Element.prototype.releasePointerCapture !== 'function') {
-    Element.prototype.releasePointerCapture = () => {}
-  }
-  if (typeof Element.prototype.hasPointerCapture !== 'function') {
-    Element.prototype.hasPointerCapture = () => false
+  // jsdom 无指针捕获 API(拖动路径调用)且无布局(矩形全零):桩成统一矩形,
+  // 让把手可渲染(几何非空)且拖动原点可预期(列宽/行高均 100×30)。
+  Element.prototype.setPointerCapture = () => {}
+  Element.prototype.releasePointerCapture = () => {}
+  Element.prototype.hasPointerCapture = () => false
+  Element.prototype.getBoundingClientRect = function () {
+    return { top: 0, left: 0, right: 100, bottom: 30, width: 100, height: 30, x: 0, y: 0, toJSON: () => ({}) } as DOMRect
   }
 })
 
-/** 派发原生鼠标口径事件(React 合成事件与全局 capture 监听均按类型分发)。 */
-function fire(el: Element, type: string): void {
-  el.dispatchEvent(new window.MouseEvent(type, { bubbles: true, cancelable: true, button: 0 }))
+/** 派发原生鼠标口径事件(React 合成事件按类型分发)。 */
+function fire(el: Element, type: string, init: MouseEventInit = {}): void {
+  el.dispatchEvent(new window.MouseEvent(type, { bubbles: true, cancelable: true, button: 0, ...init }))
 }
 
 const roots: { container: HTMLElement; root: Root }[] = []
@@ -47,7 +57,7 @@ afterEach(async () => {
   }
 })
 
-async function renderTable(markdown = md): Promise<HTMLElement> {
+async function renderTable(): Promise<HTMLElement> {
   const container = document.createElement('div')
   document.body.appendChild(container)
   const root = createRoot(container)
@@ -58,89 +68,75 @@ async function renderTable(markdown = md): Promise<HTMLElement> {
         remarkPlugins={[remarkGfm]}
         components={buildMarkdownComponents({
           variant: 'preview',
-          sourceText: markdown,
+          sourceText: md,
           onTableCellEdit: () => {},
         })}
       >
-        {markdown}
+        {md}
       </Markdown>,
     )
   })
   return container
 }
 
-describe('表格把手交互(单击表头/索引注入)', () => {
-  it('正文单元格注入行索引:td 内渲染行高把手 ⇕(缺失即索引注入失效)', async () => {
+const colHandles = (): NodeListOf<Element> => document.querySelectorAll('[aria-label="调整列宽"]')
+const rowHandles = (): NodeListOf<Element> => document.querySelectorAll('[aria-label="调整行高"]')
+
+describe('表格外把手栏(行高/列宽)', () => {
+  it('行高把手:每行一个(2 行 2 列 → 2 个),不在任何 th/td 内', async () => {
     const container = await renderTable()
-    // __rowIndex 已注入 → td 内渲染行高把手(⇕,aria-label=调整行高)。
-    expect(container.querySelectorAll('[aria-label="调整行高"]').length).toBe(2)
+    expect(rowHandles().length).toBe(2)
+    container.querySelectorAll('th, td').forEach((cell) => {
+      expect(cell.querySelector('[aria-label="调整行高"], [aria-label="调整列宽"]')).toBeNull()
+    })
+    rowHandles().forEach((handle) => expect(handle.closest('table')).toBeNull())
   })
 
-  it('单击表头 → ↔ 列宽把手出现在该列表头内并保持显示', async () => {
+  it('列宽把手:每列一个(2 列 → 2 个),不在表格内', async () => {
     const container = await renderTable()
-    const th = container.querySelector('th')!
-    expect(container.querySelectorAll('[aria-label="调整列宽"]').length).toBe(0)
-
-    await React.act(async () => {
-      fire(th, 'pointerdown')
-      fire(th, 'pointerup')
-      fire(th, 'click')
-    })
-    const handles = container.querySelectorAll('[aria-label="调整列宽"]')
-    expect(handles.length).toBe(1)
-    expect(th.contains(handles[0])).toBe(true)
-
-    // 无后续事件时把手保持(不闪烁消失)。
-    await new Promise((resolve) => setTimeout(resolve, 50))
-    expect(container.querySelectorAll('[aria-label="调整列宽"]').length).toBe(1)
+    expect(colHandles().length).toBe(2)
+    colHandles().forEach((handle) => expect(handle.closest('table')).toBeNull())
   })
 
-  it('再次单击同一表头 → 把手收起(切换)', async () => {
+  it('拖动列把手加宽:colgroup 首列覆盖为拖动后的 px 宽', async () => {
     const container = await renderTable()
-    const th = container.querySelector('th')!
+    const handle = colHandles()[0]
     await React.act(async () => {
-      fire(th, 'pointerdown')
-      fire(th, 'click')
+      fire(handle, 'pointerdown', { clientX: 100, clientY: 9 })
+      fire(handle, 'pointermove', { clientX: 130, clientY: 9 })
+      fire(handle, 'pointerup', { clientX: 130, clientY: 9 })
     })
-    expect(container.querySelectorAll('[aria-label="调整列宽"]').length).toBe(1)
-
-    await React.act(async () => {
-      fire(th, 'pointerdown')
-      fire(th, 'click')
-    })
-    expect(container.querySelectorAll('[aria-label="调整列宽"]').length).toBe(0)
+    const firstCol = container.querySelector('col')
+    expect(firstCol?.getAttribute('style')).toContain('130px')
   })
 
-  it('把手显示后点击表头之外的单元格(pointerdown) → 把手收起', async () => {
+  it('双击列把手:重置为自动列宽(回到 ch 口径)', async () => {
     const container = await renderTable()
-    const th = container.querySelector('th')!
+    const handle = colHandles()[0]
     await React.act(async () => {
-      fire(th, 'pointerdown')
-      fire(th, 'click')
+      fire(handle, 'pointerdown', { clientX: 100, clientY: 9 })
+      fire(handle, 'pointermove', { clientX: 150, clientY: 9 })
+      fire(handle, 'pointerup', { clientX: 150, clientY: 9 })
     })
-    expect(container.querySelectorAll('[aria-label="调整列宽"]').length).toBe(1)
-
-    const td = container.querySelector('td')!
+    expect(container.querySelector('col')?.getAttribute('style')).toContain('150px')
     await React.act(async () => {
-      fire(td, 'pointerdown')
-      fire(td, 'click')
+      fire(handle, 'dblclick')
     })
-    expect(container.querySelectorAll('[aria-label="调整列宽"]').length).toBe(0)
+    expect(container.querySelector('col')?.getAttribute('style')).toContain('ch')
   })
 
-  it('单击另一列表头 → 把手转移到新列(单把手机制)', async () => {
+  it('拖动/双击行把手不抛错,行把手保持(行高覆盖走内容层 clamp)', async () => {
     const container = await renderTable()
-    const [first, second] = Array.from(container.querySelectorAll('th'))
+    const handle = rowHandles()[0]
     await React.act(async () => {
-      fire(first, 'pointerdown')
-      fire(first, 'click')
+      fire(handle, 'pointerdown', { clientX: 10, clientY: 30 })
+      fire(handle, 'pointermove', { clientX: 10, clientY: 120 })
+      fire(handle, 'pointerup', { clientX: 10, clientY: 120 })
     })
+    expect(rowHandles().length).toBe(2)
     await React.act(async () => {
-      fire(second, 'pointerdown')
-      fire(second, 'click')
+      fire(handle, 'dblclick')
     })
-    const handles = container.querySelectorAll('[aria-label="调整列宽"]')
-    expect(handles.length).toBe(1)
-    expect(second.contains(handles[0])).toBe(true)
+    expect(rowHandles().length).toBe(2)
   })
 })

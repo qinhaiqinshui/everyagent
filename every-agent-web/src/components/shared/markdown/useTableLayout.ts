@@ -7,9 +7,10 @@ import React from 'react'
  * - 行高:内容默认上限 96px(约 4 行)裁剪,用户拖行边界覆盖;
  * - 手调数据仅存 React state(内存态),刷新/卸载即失。
  *
- * 交互(th/td 边缘热区,无需额外把手元素):
- * - th 右缘 5px 拖动 = 调列宽;td/th 底缘 4px 拖动 = 调行高;
- * - 双击热区 = 重置该列/行为自动;拖动期间 pointer capture 跟踪。
+ * 交互(表格外把手栏,不侵入单元格):
+ * - 顶栏:每列右缘一个 ↔ 把手(TableBlock 渲染),拖动调列宽,双击重置;
+ * - 左栏:每行底缘一个 ⇕ 把手,拖动调行高,双击重置;
+ * - 拖动期间 pointer capture 跟踪;把手几何由 useTableGeometry 实测对齐。
  */
 
 /** CJK/全角类字符集:渲染宽度约为拉丁字符 2 倍,列宽估算按 2 计。 */
@@ -125,16 +126,16 @@ type DragState = {
   pointerId: number
 }
 
-/** 表格调整回调(经 context 注入 Th/Td)。 */
+/** 表格调整回调(经 context 注入,表格外把手栏消费)。 */
 export type TableResizeController = {
-  /** th 右缘热区按下:开始列宽拖动。 */
-  beginColumnResize: (columnIndex: number, event: React.PointerEvent<HTMLElement>) => void
-  /** th/td 底缘热区按下:开始行高拖动。 */
-  beginRowResize: (rowIndex: number, event: React.PointerEvent<HTMLElement>) => void
-  /** 双击热区:重置该列/行为自动。 */
+  /** 列宽把手按下:以当前列宽(originWidthPx,实测口径)为原点开始拖动。 */
+  beginColumnResize: (columnIndex: number, originWidthPx: number, event: React.PointerEvent<HTMLElement>) => void
+  /** 行高把手按下:以当前行高(originHeightPx,实测口径)为原点开始拖动。 */
+  beginRowResize: (rowIndex: number, originHeightPx: number, event: React.PointerEvent<HTMLElement>) => void
+  /** 双击把手:重置该列/行为自动。 */
   resetColumn: (columnIndex: number) => void
   resetRow: (rowIndex: number) => void
-  /** 拖动进行中的 move/up/cancel(挂到热区宿主元素,capture 后事件都来这)。 */
+  /** 拖动进行中的 move/up/cancel(挂到把手元素,capture 后事件都来这)。 */
   dragHandlers: {
     onPointerMove: (event: React.PointerEvent<HTMLElement>) => void
     onPointerUp: (event: React.PointerEvent<HTMLElement>) => void
@@ -153,15 +154,7 @@ export type TableLayoutController = TableResizeController & {
   columnOverrides: Map<number, number>
   /** 手调行高(行 idx → max-height px)。 */
   rowOverrides: Map<number, number>
-  /** 当前显示调宽把手的列索引(null=无);单击表头切换/转移,点表外收起。 */
-  activeColumnHandle: number | null
-  setActiveColumnHandle: (index: number | null) => void
 }
-
-/** 列宽热区宽(px):th 右缘命中即列拖动。 */
-export const COLUMN_EDGE_PX = 5
-/** 行高热区高(px):td/th 底缘命中即行拖动。 */
-export const ROW_EDGE_PX = 4
 
 export function useTableLayout(): TableLayoutController {
   const wrapRef = React.useRef<HTMLDivElement | null>(null)
@@ -169,24 +162,7 @@ export function useTableLayout(): TableLayoutController {
   const [chPx, setChPx] = React.useState(0)
   const [columnOverrides, setColumnOverrides] = React.useState(() => new Map<number, number>())
   const [rowOverrides, setRowOverrides] = React.useState(() => new Map<number, number>())
-  const [activeColumnHandle, setActiveColumnHandle] = React.useState<number | null>(null)
   const dragRef = React.useRef<DragState | null>(null)
-
-  // 把手收起规则:点击落在表头之外(其他单元格/表外)即清空——单击表头本身的
-  // 点击由 Th 的 onClick 设置(覆盖本规则,时序在后)。capture 阶段监听,
-  // 不与链接点击等原生行为冲突。
-  React.useEffect(() => {
-    const onPointerDown = (event: PointerEvent) => {
-      const target = event.target as HTMLElement | null
-      if (!target) return
-      const wrap = wrapRef.current
-      const th = target.closest('th')
-      if (wrap && th && wrap.contains(th)) return
-      setActiveColumnHandle((prev) => (prev == null ? prev : null))
-    }
-    window.addEventListener('pointerdown', onPointerDown, true)
-    return () => window.removeEventListener('pointerdown', onPointerDown, true)
-  }, [])
 
   // 容器宽度:ResizeObserver 持续跟踪(窗口缩放/布局变化)。
   React.useEffect(() => {
@@ -214,13 +190,13 @@ export function useTableLayout(): TableLayoutController {
     }
   }, [])
 
-  const beginColumnResize = React.useCallback((columnIndex: number, event: React.PointerEvent<HTMLElement>) => {
+  const beginColumnResize = React.useCallback((columnIndex: number, originWidthPx: number, event: React.PointerEvent<HTMLElement>) => {
     if (event.button !== 0) return
     const host = event.currentTarget
     dragRef.current = {
       kind: 'column',
       index: columnIndex,
-      originPx: host.getBoundingClientRect().width,
+      originPx: originWidthPx,
       startPoint: event.clientX,
       pointerId: event.pointerId,
     }
@@ -228,13 +204,13 @@ export function useTableLayout(): TableLayoutController {
     event.preventDefault()
   }, [])
 
-  const beginRowResize = React.useCallback((rowIndex: number, event: React.PointerEvent<HTMLElement>) => {
+  const beginRowResize = React.useCallback((rowIndex: number, originHeightPx: number, event: React.PointerEvent<HTMLElement>) => {
     if (event.button !== 0) return
     const host = event.currentTarget
     dragRef.current = {
       kind: 'row',
       index: rowIndex,
-      originPx: host.getBoundingClientRect().height,
+      originPx: originHeightPx,
       startPoint: event.clientY,
       pointerId: event.pointerId,
     }
@@ -290,8 +266,6 @@ export function useTableLayout(): TableLayoutController {
     chPx,
     columnOverrides,
     rowOverrides,
-    activeColumnHandle,
-    setActiveColumnHandle,
     beginColumnResize,
     beginRowResize,
     resetColumn,
@@ -302,4 +276,93 @@ export function useTableLayout(): TableLayoutController {
       onPointerCancel: endDrag,
     },
   }
+}
+
+// ───────────────────────── 表格几何实测 ─────────────────────────
+
+/** 表格渲染几何(实测口径):供表格外把手栏对齐与拖动原点。 */
+export type TableGeometry = {
+  /** 表头(thead)总高(px)。 */
+  headerHeight: number
+  /** tbody 各行高(px,索引与行对齐)。 */
+  rowHeights: number[]
+  /** 各列实测宽(px,表头单元格口径;border-collapse 折算后的真实值)。 */
+  colWidths: number[]
+  /** 表格整体渲染宽(px)。 */
+  tableWidth: number
+}
+
+const EMPTY_TABLE_GEOMETRY: TableGeometry = { headerHeight: 0, rowHeights: [], colWidths: [], tableWidth: 0 }
+
+function sameTableGeometry(a: TableGeometry, b: TableGeometry): boolean {
+  if (a.headerHeight !== b.headerHeight || a.tableWidth !== b.tableWidth) return false
+  if (a.rowHeights.length !== b.rowHeights.length || a.colWidths.length !== b.colWidths.length) return false
+  return a.rowHeights.every((v, i) => v === b.rowHeights[i])
+    && a.colWidths.every((v, i) => v === b.colWidths[i])
+}
+
+export type TableGeometryController = {
+  /** 实测几何;空(rowHeights/colWidths 空) = 未测得(SSR、无 RO 环境) → 把手栏不渲染。 */
+  geometry: TableGeometry
+  /** 顶栏列把手平移层 ref(随 wrap 横向滚动命令式平移,不触发 React 渲染)。 */
+  colHandleLayerRef: React.MutableRefObject<HTMLDivElement | null>
+}
+
+/**
+ * 实测表格几何:thead 高、各行高、各列宽、表宽。ResizeObserver 跟踪
+ * (列宽/行高手调、窗口缩放、字体就绪、内容变化都会触发重测),setGeometry
+ * 前做相等判定避免测量→渲染循环。无 ResizeObserver 的环境(SSR)退化为
+ * 空几何——把手栏整体不渲染,与旧版无把手表现一致。
+ *
+ * @param wrapRef 表格包裹层(滚动容器,与布局引擎/平移共用)。
+ * @param rescanKey 行/列数变化时重扫观测目标(内容编辑会重建行/列)。
+ */
+export function useTableGeometry(
+  wrapRef: React.MutableRefObject<HTMLDivElement | null>,
+  rescanKey: string,
+): TableGeometryController {
+  const [geometry, setGeometry] = React.useState<TableGeometry>(EMPTY_TABLE_GEOMETRY)
+  const colHandleLayerRef = React.useRef<HTMLDivElement | null>(null)
+
+  React.useLayoutEffect(() => {
+    const wrap = wrapRef.current
+    if (!wrap || typeof ResizeObserver === 'undefined') return
+    const measure = () => {
+      const table = wrap.querySelector('table')
+      if (!table) return
+      const next: TableGeometry = {
+        headerHeight: table.querySelector('thead')?.getBoundingClientRect().height ?? 0,
+        rowHeights: Array.from(table.querySelectorAll('tbody tr'))
+          .map((row) => row.getBoundingClientRect().height),
+        colWidths: Array.from(table.querySelectorAll('thead th, thead td'))
+          .map((cell) => cell.getBoundingClientRect().width),
+        tableWidth: table.getBoundingClientRect().width,
+      }
+      setGeometry((prev) => (sameTableGeometry(prev, next) ? prev : next))
+    }
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(wrap)
+    const table = wrap.querySelector('table')
+    if (table) {
+      observer.observe(table)
+      table.querySelectorAll('tr, thead th, thead td').forEach((element) => observer.observe(element))
+    }
+    return () => observer.disconnect()
+  }, [rescanKey, wrapRef])
+
+  // 顶栏把手层横向滚动跟随:命令式平移(与吸顶表头同思路)。
+  React.useEffect(() => {
+    const wrap = wrapRef.current
+    if (!wrap) return
+    const sync = () => {
+      const layer = colHandleLayerRef.current
+      if (layer) layer.style.transform = `translateX(${-wrap.scrollLeft}px)`
+    }
+    sync()
+    wrap.addEventListener('scroll', sync, { passive: true })
+    return () => wrap.removeEventListener('scroll', sync)
+  }, [wrapRef])
+
+  return { geometry, colHandleLayerRef }
 }

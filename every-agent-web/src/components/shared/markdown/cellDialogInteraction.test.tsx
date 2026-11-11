@@ -46,15 +46,6 @@ function setNativeValue(el: HTMLTextAreaElement, value: string): void {
 /** 等 rAF 回调(beginEdit 聚焦/设光标)执行完。 */
 const nextFrame = (): Promise<void> => new Promise((resolve) => { setTimeout(resolve, 30) })
 
-/** jsdom 的 getBoundingClientRect 全零 → Td 双击被底缘行高分支(hitRowEdge)拦截,
- *  给出正常矩形让双击落到编辑分支(真实浏览器矩形非零,无此问题)。 */
-function mockRect(el: Element, top = 100, height = 40): void {
-  el.getBoundingClientRect = () => ({
-    top, left: 0, right: 100, bottom: top + height, width: 100, height, x: 0, y: top,
-    toJSON: () => ({}),
-  }) as DOMRect
-}
-
 const roots: { container: HTMLElement; root: Root }[] = []
 
 afterEach(async () => {
@@ -99,7 +90,6 @@ describe('单元格编辑弹窗交互', () => {
   it('双击正文单元格弹出编辑窗:聚焦但不全选,光标落在内容末尾', async () => {
     const container = await renderTable()
     const td = container.querySelector('td')!
-    mockRect(td)
     await React.act(async () => {
       fire(td, 'dblclick')
     })
@@ -117,7 +107,6 @@ describe('单元格编辑弹窗交互', () => {
     const onEdit = vi.fn()
     const container = await renderTable(onEdit)
     const td = container.querySelector('td')!
-    mockRect(td)
     await React.act(async () => {
       fire(td, 'dblclick')
     })
@@ -138,8 +127,6 @@ describe('单元格编辑弹窗交互', () => {
     const onEdit = vi.fn()
     const container = await renderTable(onEdit)
     const [first, second] = Array.from(container.querySelectorAll('td'))
-    mockRect(first)
-    mockRect(second)
     await React.act(async () => {
       fire(first, 'dblclick')
     })
@@ -162,7 +149,6 @@ describe('单元格编辑弹窗交互', () => {
     const onEdit = vi.fn()
     const container = await renderTable(onEdit)
     const td = container.querySelector('td')!
-    mockRect(td)
     await React.act(async () => {
       fire(td, 'dblclick')
     })
@@ -182,7 +168,6 @@ describe('单元格编辑弹窗交互', () => {
     const onEdit = vi.fn()
     const container = await renderTable(onEdit)
     const td = container.querySelector('td')!
-    mockRect(td)
     await React.act(async () => {
       fire(td, 'dblclick')
     })

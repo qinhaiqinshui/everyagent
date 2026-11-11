@@ -23,21 +23,40 @@
   border-right: 1px solid var(--border-light);
 }
 
-/* 列宽/行高调整热区视觉反馈:悬停表头右缘显列宽调节亮线,悬停单元格底缘显
- * 行高调节亮线(实际拖动热区为边缘 5px/4px,亮线整缘提示可调)。 */
-.md-table th:hover {
-  box-shadow: inset -4px 0 0 -1px var(--accent-blue, #3b82f6);
+/* 表格外把手栏(TableBlock 渲染的顶栏/左栏,经 markdown 渲染流全局生效):
+ * 列宽 ↔ 在顶栏每列右缘,行高 ⇕ 在左栏每行底缘;悬停高亮,双击重置。
+ * 把手图标仅为抓手提示,拖动几何与图标解耦(原点/边界由布局引擎实测)。 */
+.md-table-gutter-handle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  line-height: 1;
+  border-radius: 4px;
+  color: color-mix(in srgb, var(--text-muted, #888) 78%, transparent);
+  user-select: none;
+  touch-action: none;
+  z-index: 3;
 }
 
-.md-table td:hover {
-  box-shadow: inset 0 -4px 0 -1px var(--accent-blue, #3b82f6);
+.md-table-gutter-handle:hover {
+  background: var(--bg-tertiary);
+  color: var(--accent-blue, #3b82f6);
+}
+
+.md-table-gutter-handle--col {
+  cursor: col-resize;
+}
+
+.md-table-gutter-handle--row {
+  cursor: row-resize;
 }
 
 /* 单击单元格/把手:浏览器默认 :focus-visible outline 偏粗(移动端尤显),
  * 收紧为 2px 细环;键盘导航(Tab)仍保留可见焦点。 */
 .md-table th:focus-visible,
 .md-table td:focus-visible,
-.md-table [role='separator']:focus-visible {
+.md-table-gutter-handle:focus-visible {
   outline: 2px solid var(--accent-blue, #3b82f6);
   outline-offset: -2px;
 }

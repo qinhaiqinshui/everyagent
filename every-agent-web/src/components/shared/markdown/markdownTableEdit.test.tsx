@@ -385,4 +385,10 @@ describe('表格渲染(列宽与可编辑标注)', () => {
     const html = render(md)
     expect(html).not.toContain('position:fixed')
   })
+
+  it('静态渲染(几何未测得)不渲染表外把手栏——SSR 表格保持原生形态', () => {
+    const html = render(md)
+    expect(html).not.toContain('调整列宽')
+    expect(html).not.toContain('调整行高')
+  })
 })
