@@ -269,8 +269,16 @@ export type TableCellIndexProps = {
  * thead/tbody > tr > th/td 逐层 cloneElement 加 __columnIndex/__rowIndex,
  * 供 Th/Td 的边缘拖动(调列宽/行高)定位目标。纯函数、渲染期执行;
  * 吸顶克隆的 thead 复用注入后的同一份元素。
+ *
+ * 注意:react-markdown 在进入 table 组件前就已完成 components 映射,
+ * children 里的 th/td 已是 Th/Td 组件元素而非宿主标签元素——按字符串
+ * 'th'/'td' 匹配永远不成立,必须按注入的组件引用匹配(否则索引注入
+ * 静默失效,列宽/行高把手全部不出现)。
  */
-function injectTableCellIndices(children: React.ReactNode): React.ReactNode {
+function injectTableCellIndices(
+  children: React.ReactNode,
+  cellTypes: { headerCell: unknown; bodyCell: unknown },
+): React.ReactNode {
   type WithChildren = React.ReactElement<{ children?: React.ReactNode }>
   const cloneWith = (element: unknown, props: Record<string, unknown>) => (
     React.cloneElement(element as WithChildren, props)
@@ -292,16 +300,16 @@ function injectTableCellIndices(children: React.ReactNode): React.ReactNode {
             return cloneWith(row, {
               children: mapChildren(row, (cell) => {
                 if (!React.isValidElement(cell)) return cell
-                if (cell.type === 'th' || cell.type === 'td') {
-                  const indexProps: TableCellIndexProps = isBody
-                    ? { __rowIndex: rowIndex }
-                    : { __columnIndex: columnIndex++ }
-                  // tbody 行的 td 也带列索引(备用),thead 的 th 不带行索引。
-                  return cloneWith(cell, isBody && cell.type === 'td'
-                    ? { ...indexProps, __columnIndex: columnIndex++ }
-                    : indexProps)
-                }
-                return cell
+                const isHeaderCell = cell.type === cellTypes.headerCell
+                const isBodyCell = cell.type === cellTypes.bodyCell
+                if (!isHeaderCell && !isBodyCell) return cell
+                const indexProps: TableCellIndexProps = isBody
+                  ? { __rowIndex: rowIndex }
+                  : { __columnIndex: columnIndex++ }
+                // tbody 行的 td 也带列索引(备用),thead 的 th 不带行索引。
+                return cloneWith(cell, isBody && isBodyCell
+                  ? { ...indexProps, __columnIndex: columnIndex++ }
+                  : indexProps)
               }),
             })
           },
@@ -812,8 +820,10 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
 
     // 注入列/行索引(th→__columnIndex、td→__rowIndex):Th/Td 的边缘热区拖动需要
     // 知道自己调整的是哪一列/哪一行。克隆 thead(吸顶)复用注入后的同一份。
+    // Th/Td 为 buildMarkdownComponents 闭包常量(每次构建固定),随 children 一起
+    // 进入 memo 即可;children 不变时二者引用也不变。
     const injectedChildren = React.useMemo(
-      () => injectTableCellIndices(children),
+      () => injectTableCellIndices(children, { headerCell: Th, bodyCell: Td }),
       [children],
     )
     const theadElement = React.useMemo(() => (
