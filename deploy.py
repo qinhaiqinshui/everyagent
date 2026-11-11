@@ -342,6 +342,11 @@ Type=simple
 {user_line}WorkingDirectory={cur}/worker
 ExecStart={exec_start}
 EnvironmentFile={cur}/.env
+# worker.restart 的 systemd 交接(架构 §5.5):worker 优雅关闭后以退出码 75 请求重启;
+# SuccessExitStatus 把 75 记为成功(避免 journal 误报 failed),RestartForceExitStatus
+# 强制对该码执行重启(覆盖 Restart=on-failure 不重启成功退出的默认)。
+SuccessExitStatus=75
+RestartForceExitStatus=75
 Restart=on-failure
 RestartSec=5
 
