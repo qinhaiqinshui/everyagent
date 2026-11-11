@@ -222,8 +222,8 @@ describe('applyColumnOverrides(手调合并,Excel 式)', () => {
 })
 
 describe('computeFallbackColumnWidths(ch 兜底)', () => {
-  it('输出 min(Nch, 100vw) 声明式宽度(短内容钳下限 10ch)', () => {
-    expect(computeFallbackColumnWidths(['ab'], [])).toEqual(['min(10ch, 100vw)'])
+  it('输出 min(Nch, 100vw) 声明式宽度(短内容钳下限 15ch = 6 个中文字)', () => {
+    expect(computeFallbackColumnWidths(['ab'], [])).toEqual(['min(15ch, 100vw)'])
   })
 })
 

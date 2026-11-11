@@ -450,8 +450,35 @@ const cellDialogPreviewStyle: React.CSSProperties = {
   whiteSpace: 'normal',
 }
 
-/** 展示态超高单元格:内容限高由行高模型承担(td maxHeight + overflow hidden),
- * 不再使用独立的限高容器/渐隐遮罩/展开按钮。 */
+/** 表头列宽拖动把手:常显小图标(↔),悬停高亮;按住拖动调列宽,双击重置。 */
+const columnHandleStyle: React.CSSProperties = {
+  position: 'absolute',
+  top: '50%',
+  right: 0,
+  transform: 'translateY(-50%)',
+  width: 16,
+  height: 22,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  fontSize: 10,
+  lineHeight: 1,
+  color: 'var(--text-muted, var(--text-secondary))',
+  background: 'color-mix(in srgb, var(--bg-table) 85%, transparent)',
+  border: '1px solid var(--border-light)',
+  borderRadius: '4px 0 0 4px',
+  cursor: 'col-resize',
+  userSelect: 'none',
+  touchAction: 'none',
+  zIndex: 2,
+}
+
+/** 行高上限内容容器:td 是 table-cell,max-height 对其无效(CSS 规范),
+ * 行高限制须作用于 td 内的块级内容层。 */
+const rowClampStyle = (maxPx: number): React.CSSProperties => ({
+  maxHeight: maxPx,
+  overflow: 'hidden',
+})
 
 /** textarea 高度 = 单元格原高(进入编辑时测量);测量失败回退自动增高。 */
 function fitTextAreaHeight(element: HTMLTextAreaElement | null, height: number | null): void {
@@ -979,7 +1006,11 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
               >
                 <table className="md-table" style={{ ...s.table, width: pin.pinned.tableWidth }}>
                   {colgroup}
-                  {theadElement}
+                  {/* 克隆经 portal 落在 body 下,脱离 TableResizeContext.Provider 树;
+                      重新包一层让克隆表头的列宽把手同样可拖。 */}
+                  <TableResizeContext.Provider value={layout}>
+                    {theadElement}
+                  </TableResizeContext.Provider>
                 </table>
               </div>
             </div>,
@@ -1006,16 +1037,11 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
       headerEditingTracker.onChange(true)
       return () => headerEditingTracker.onChange(false)
     }, [cell.editing, headerEditingTracker])
-
-    /** 命中右缘热区(列宽拖动)。 */
-    const hitColumnEdge = (event: React.PointerEvent<HTMLElement>) => {
-      const rect = event.currentTarget.getBoundingClientRect()
-      return event.clientX - rect.left >= rect.width - COLUMN_EDGE_PX
-    }
+    const showHandle = resize != null && __columnIndex != null && !cell.editing
 
     const handlePointerDown = (event: React.PointerEvent<HTMLElement>) => {
-      if (resize && __columnIndex != null && event.pointerType === 'mouse' && hitColumnEdge(event)) {
-        resize.beginColumnResize(__columnIndex, event)
+      if (showHandle) {
+        resize!.beginColumnResize(__columnIndex!, event)
         return
       }
       cell.touchHandlers.onPointerDown(event)
@@ -1025,32 +1051,35 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
       <th
         ref={cell.hostRef}
         {...rest}
-        {...cell.touchHandlers}
-        onPointerDown={handlePointerDown}
-        onPointerMove={(event) => {
-          resize?.dragHandlers.onPointerMove(event)
-        }}
-        onPointerUp={(event) => {
-          resize?.dragHandlers.onPointerUp(event)
-          cell.touchHandlers.onPointerUp(event)
-        }}
-        onPointerCancel={resize?.dragHandlers.onPointerCancel}
-        onDoubleClick={(event) => {
-          if (resize && __columnIndex != null && hitColumnEdge(event as unknown as React.PointerEvent<HTMLElement>)) {
-            resize.resetColumn(__columnIndex)
-            return
-          }
-          if (cell.editable && !cell.editing) cell.beginEdit()
-        }}
-        title={cell.editable ? '双击编辑单元格；右缘拖动调整列宽，双击右缘重置' : '右缘拖动调整列宽，双击右缘重置'}
         style={{
           ...s.th,
+          position: 'relative',
           textAlign: (align ?? node?.properties?.align ?? 'left') as React.CSSProperties['textAlign'],
-          ...(cell.editable && !cell.editing ? { cursor: 'text' } : null),
           ...(cell.editing ? { padding: 3 } : null),
         }}
+        onDoubleClick={cell.editable && !cell.editing ? cell.beginEdit : undefined}
+        title={cell.editable ? '双击编辑单元格；拖动 ↔ 调整列宽，双击 ↔ 重置' : '拖动 ↔ 调整列宽，双击 ↔ 重置'}
       >
         {cell.editing ? cell.editor : children}
+        {showHandle ? (
+          <span
+            role="separator"
+            aria-label="调整列宽"
+            style={columnHandleStyle}
+            title="拖动调整列宽，双击重置"
+            onPointerDown={(event) => {
+              event.stopPropagation()
+              resize!.beginColumnResize(__columnIndex!, event)
+            }}
+            onDoubleClick={(event) => {
+              event.stopPropagation()
+              event.preventDefault()
+              resize!.resetColumn(__columnIndex!)
+            }}
+          >
+            ↔
+          </span>
+        ) : null}
       </th>
     )
   }
@@ -1087,11 +1116,13 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
       <td
         ref={cell.hostRef}
         {...rest}
-        {...cell.touchHandlers}
-        onPointerDown={handlePointerDown}
-        onPointerMove={(event) => {
-          resize?.dragHandlers.onPointerMove(event)
+        style={{
+          ...s.td,
+          position: 'relative',
+          textAlign: (align ?? node?.properties?.align) as React.CSSProperties['textAlign'],
         }}
+        onPointerDown={handlePointerDown}
+        onPointerMove={resize?.dragHandlers.onPointerMove}
         onPointerUp={(event) => {
           resize?.dragHandlers.onPointerUp(event)
           cell.touchHandlers.onPointerUp(event)
@@ -1105,16 +1136,48 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
           if (cell.editable && !cell.editing) cell.beginEdit()
         }}
         title={plainText || undefined}
-        style={{
-          ...s.td,
-          textAlign: (align ?? node?.properties?.align) as React.CSSProperties['textAlign'],
-          maxHeight: rowMaxHeight,
-          overflow: 'hidden',
-          ...(cell.editable && !cell.editing ? { cursor: 'text' } : null),
-          ...(cell.editing ? { padding: 3 } : null),
-        }}
       >
-        {cell.editing ? cell.editor : children}
+        {cell.editing || resize == null || __rowIndex == null
+          ? null
+          : (
+            <span
+              role="separator"
+              aria-label="调整行高"
+              style={{
+                position: 'absolute',
+                left: '50%',
+                bottom: 0,
+                transform: 'translateX(-50%)',
+                width: 22,
+                height: 12,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: 9,
+                lineHeight: 1,
+                color: 'var(--text-muted, var(--text-secondary))',
+                cursor: 'row-resize',
+                userSelect: 'none',
+                touchAction: 'none',
+                zIndex: 2,
+              }}
+              title="拖动调整行高，双击重置"
+              onPointerDown={(event) => {
+                event.stopPropagation()
+                resize.beginRowResize(__rowIndex, event)
+              }}
+              onDoubleClick={(event) => {
+                event.stopPropagation()
+                event.preventDefault()
+                resize.resetRow(__rowIndex)
+              }}
+            >
+              ⇕
+            </span>
+          )}
+        {cell.editing
+          ? <div style={rowClampStyle(rowMaxHeight)}>{cell.editor}</div>
+          : <div style={rowClampStyle(rowMaxHeight)}>{children}</div>}
       </td>
     )
   }

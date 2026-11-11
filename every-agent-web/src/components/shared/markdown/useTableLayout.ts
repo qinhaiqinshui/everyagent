@@ -32,8 +32,8 @@ function stripMarkdownInlineSyntax(text: string): string {
     .replace(/`([^`]+)`/g, '$1')
 }
 
-/** 列宽下限(ch):短列(如二字表头)也能舒适容纳内容与内边距,不至于被压扁。 */
-const MIN_COLUMN_CH = 10
+/** 列宽下限(ch):保证至少容纳 6 个中文字(全角 2ch × 6 = 12ch)再换行,加内边距 3ch。 */
+const MIN_COLUMN_CH = 15
 /** 列宽上限(ch):单列过宽严重伤可读性,超出的内容换行。60ch ≈ 30 个中文字。 */
 const MAX_COLUMN_CH = 60
 /** 单元格左右内边距折算(10px 12px × 2 ≈ 24px,按 ch 近似)。 */
@@ -42,8 +42,8 @@ const COLUMN_PAD_CH = 3
 /** 行高初始上限(px,约 4 行正文):超出裁剪,用户可拖行边界放大。 */
 export const MAX_ROW_PX = 96
 
-/** 列宽下限(px):手调与分配共用的绝对下限,防止列被拖没。 */
-export const MIN_COL_PX = 64
+/** 列宽绝对下限(px):手调与分配共用;120px ≈ 6 个中文字(14px 字号),再窄不可读。 */
+export const MIN_COL_PX = 120
 
 /** 每列理想宽(ch 单位,内容口径):max 单元格视觉长 + 内边距,钳 [10ch, 60ch]。 */
 function idealColumnCh(headers: string[], rows: string[][]): number[] {
@@ -70,7 +70,8 @@ export function computeFallbackColumnWidths(headers: string[], rows: string[][])
 
 /**
  * 初始列宽分配(px 数值,主路径):
- * 1. 每列理想宽 = idealCh × 1ch 实测 px,钳 [MIN_COL_PX, 容器宽 20%];
+ * 1. 每列理想宽 = idealCh × 1ch 实测 px,钳 [max(MIN_COL_PX, 15ch), 容器宽 20%]
+ *    ——下限优先于 20% 上限:列至少容纳 6 个中文字再换行,可读性 > 初始美观;
  * 2. Σ理想宽 < 容器宽 → 同比放大撑满(比例不变;放大后单列可超 20%,
  *    否则永远填不满——20% 上限只约束内容估算法,不约束撑满);
  * 3. Σ理想宽 ≥ 容器宽 → 维持理想宽,表格横向滚动。
@@ -89,7 +90,7 @@ export function allocateColumnWidths(
 
   const maxCol = Math.max(MIN_COL_PX, containerWidth * 0.2)
   const ideal = idealColumnCh(headers, rows).map((ch) =>
-    Math.min(maxCol, Math.max(MIN_COL_PX, ch * chPx)))
+    Math.max(MIN_COL_PX, Math.min(maxCol, ch * chPx)))
 
   const sum = ideal.reduce((acc, value) => acc + value, 0)
   if (sum < containerWidth) {
