@@ -13,6 +13,14 @@ import './assets/styles/ui-tokens.css'
 import './assets/styles/ui-primitives.css'
 import './assets/styles/ui-utilities.css'
 import './assets/styles/ui-controls.css'
+
+// 构建指纹(F12 console 一眼判定页面版本;部署/缓存排查用)。__APP_VERSION__ 由 vite define 注入。
+declare const __APP_VERSION__: string | undefined
+declare const __APP_BUILD_ID__: string | undefined
+console.info(
+  `[every-agent] version=${typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '?'}`
+  + ` build=${typeof __APP_BUILD_ID__ !== 'undefined' ? __APP_BUILD_ID__ : '?'}`
+)
 import './assets/styles/ui-overlays.css'
 import './assets/styles/ui-patterns.css'
 import './index.css'
