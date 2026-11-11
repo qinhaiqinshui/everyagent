@@ -521,10 +521,14 @@ def find_hub_jar() -> Path:
 
 def find_worker_jar() -> Path:
     d = REPO_ROOT / "every-agent-worker" / "target"
-    cands = [p for p in d.glob("every-agent-worker-*.jar") if not p.name.endswith(".original")]
+    # 只认 spring-boot repackage 的 classifier=exec 产物(fat jar,带 Main-Class):
+    # 同目录无后缀 jar 是 thin(供插件模块依赖,-Dmaven.test.skip 打包必产出,无 Main-Class,
+    # java -jar 报「没有主清单属性」),-tests.jar 是 test-jar;旧 glob 全量匹配后取字典序
+    # 最大者恰是 thin('-'<'.' ,719K 即此),必错。mtime 最新防多版本共存时旧版本字典序更高。
+    cands = list(d.glob("every-agent-worker-*-exec.jar"))
     if not cands:
-        raise FileNotFoundError(f"未找到 worker 的可运行 jar，请确认本地已执行 mvn package（期望 {d} 下有 *.jar）")
-    return sorted(cands)[-1]
+        raise FileNotFoundError(f"未找到 worker 的可执行 jar，请确认本地已执行 mvn package（期望 {d} 下有 *-exec.jar）")
+    return max(cands, key=lambda p: p.stat().st_mtime)
 
 
 def build_builtin_plugins(cfg) -> None:
