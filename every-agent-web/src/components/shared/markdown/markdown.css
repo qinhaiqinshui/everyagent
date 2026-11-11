@@ -22,3 +22,13 @@
 .md-table td:not(:last-child) {
   border-right: 1px solid var(--border-light);
 }
+
+/* 列宽/行高调整热区视觉反馈:悬停表头右缘显列宽调节亮线,悬停单元格底缘显
+ * 行高调节亮线(实际拖动热区为边缘 5px/4px,亮线整缘提示可调)。 */
+.md-table th:hover {
+  box-shadow: inset -4px 0 0 -1px var(--accent-blue, #3b82f6);
+}
+
+.md-table td:hover {
+  box-shadow: inset 0 -4px 0 -1px var(--accent-blue, #3b82f6);
+}

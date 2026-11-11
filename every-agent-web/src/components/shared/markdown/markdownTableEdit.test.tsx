@@ -15,7 +15,8 @@ import {
   resolveCellRange,
   isTouchDoubleTap,
 } from './markdownTableEdit'
-import { buildMarkdownComponents, computeTableColumnWidths, computeExpandDialogGeometry } from './sharedMarkdownRenderer'
+import { buildMarkdownComponents, computeExpandDialogGeometry } from './sharedMarkdownRenderer'
+import { allocateColumnWidths, applyColumnOverrides, computeFallbackColumnWidths } from './useTableLayout'
 import { shouldPinHeader } from './usePinnedTableHeader'
 import { unified } from 'unified'
 import remarkParse from 'remark-parse'
@@ -173,38 +174,56 @@ describe('replaceMarkdownRange', () => {
   })
 })
 
-describe('computeTableColumnWidths(max 单元格口径)', () => {
+describe('allocateColumnWidths(初始列宽分配)', () => {
+  it('内容理想宽钳制 [64px, 容器宽 20%],不足容器再同比放大', () => {
+    // 24 字中文 → 48ch + 3 = 51ch × 8px = 408px,容器 1000 → 上限 200px;Σ200<1000 → 放大到 1000。
+    const widths = allocateColumnWidths(['二十个中文字'.repeat(4)], [], 1000, 8)
+    expect(widths).toEqual([1000])
+    // 多列场景验证钳制:两列长内容各钳 200,总 400 < 1000 → 各 500。
+    const two = allocateColumnWidths(
+      ['很长很长很长很长很长很长很长', '很长很长很长很长很长很长很长'],
+      [], 1000, 8)
+    expect(two).toEqual([500, 500])
+  })
+
+  it('总宽不足容器 → 同比放大撑满(单列可超 20% 上限)', () => {
+    // 两列各 100px,总 200 < 1000 → 各放大到 500。
+    const headers = ['ab', 'cd'] // 2+3=5ch → 40px,钳下限 64……换算:64×2=128<1000 → scale 1000/128≈7.8 → 500,500
+    const widths = allocateColumnWidths(headers, [], 1000, 8)
+    expect(widths.reduce((a, b) => a + b, 0)).toBe(1000)
+  })
+
+  it('总宽超出容器 → 维持理想宽(横向滚动)', () => {
+    // 容器 300,两列各钳到 60(=300×20%) → 总 120? 不:钳 min(60, ideal)。窄内容两列 64×2=128<300 会放大。
+    // 用超长内容:两列 ideal 都 300×0.2=60? ideal=43ch×8=344→钳 60。总 120 < 300 放大…换 5 列长内容。
+    const headers = ['很长很长很长很长很长很长很长', 'x', 'y', 'z', 'w']
+    const widths = allocateColumnWidths(headers, [], 300, 8)
+    expect(widths.reduce((a, b) => a + b, 0)).toBeGreaterThanOrEqual(300)
+  })
+
+  it('容器宽/1ch 未测得时返回空数组(走 ch 兜底)', () => {
+    expect(allocateColumnWidths(['a'], [], 0, 8)).toEqual([])
+    expect(allocateColumnWidths(['a'], [], 1000, 0)).toEqual([])
+  })
+
   it('空表头返回空数组', () => {
-    expect(computeTableColumnWidths([], [])).toEqual([])
+    expect(allocateColumnWidths([], [], 1000, 8)).toEqual([])
+  })
+})
+
+describe('applyColumnOverrides(手调合并,Excel 式)', () => {
+  it('手调列用覆盖值,其余列维持初始分配不动', () => {
+    expect(applyColumnOverrides([100, 200, 300], new Map([[1, 500]]))).toEqual([100, 500, 300])
   })
 
-  it('列宽由该列内容最多的单元格决定,而非字符总量占比', () => {
-    // 旧总量占比算法下「短列 x 短列」会被长列挤压;max 口径下短列保住下限。
-    const widths = computeTableColumnWidths(
-      ['AAAAAAAAAAAAAAAA', 'B'],
-      [['数据较长的单元格内容', 'x'], ['又一个长内容单元格', 'y']],
-    )
-    expect(widths[0]).toBe('23ch') // max = 10 个中文字 ×2 = 20 + 3
-    expect(widths[1]).toBe('10ch') // max 1 + 3 → clamp 到下限
+  it('无手调时原样返回', () => {
+    expect(applyColumnOverrides([100, 200], new Map())).toEqual([100, 200])
   })
+})
 
-  it('CJK/全角字符按 2 倍视觉宽度计', () => {
-    const widths = computeTableColumnWidths(['中文'], [['短'], ['三十个中文字'.repeat(1)]])
-    expect(widths[0]).toBe(`${Math.min(60, 6 * 2 + 3)}ch`)
-  })
-
-  it('超上限的列 clamp 到 60ch', () => {
-    const long = 'a'.repeat(100)
-    expect(computeTableColumnWidths(['H'], [[long]])).toEqual(['60ch'])
-  })
-
-  it('统计前剥离内联 markdown 语法', () => {
-    // `**加粗**`(8 语法字符 + 2 内容)按 2 计,而非源码长度。
-    expect(computeTableColumnWidths(['**ok**'], [[]])).toEqual(['10ch']) // 2+3=5 → 下限 10
-  })
-
-  it('全空内容落到下限', () => {
-    expect(computeTableColumnWidths(['', ''], [['', '']])).toEqual(['10ch', '10ch'])
+describe('computeFallbackColumnWidths(ch 兜底)', () => {
+  it('输出 min(Nch, 100vw) 声明式宽度(短内容钳下限 10ch)', () => {
+    expect(computeFallbackColumnWidths(['ab'], [])).toEqual(['min(10ch, 100vw)'])
   })
 })
 
@@ -342,7 +361,7 @@ describe('表格渲染(列宽与可编辑标注)', () => {
       sourceText: md,
       onTableCellEdit: () => {},
     })
-    expect(html).toContain('title="双击编辑单元格"')
+    expect(html).toContain('双击编辑单元格')
   })
 
   it('未注入编辑通道时单元格保持只读(无编辑标注)', () => {

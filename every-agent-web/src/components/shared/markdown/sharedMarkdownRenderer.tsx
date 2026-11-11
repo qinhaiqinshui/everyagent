@@ -5,6 +5,16 @@ import CodeBlock from './CodeBlock'
 import { escapeTableCellText, resolveCellRange, isTouchDoubleTap, type MarkdownTableCellEditRequest, type TouchTap } from './markdownTableEdit'
 import { useTablePan } from './useTablePan'
 import { usePinnedTableHeader } from './usePinnedTableHeader'
+import {
+  useTableLayout,
+  allocateColumnWidths,
+  applyColumnOverrides,
+  computeFallbackColumnWidths,
+  COLUMN_EDGE_PX,
+  ROW_EDGE_PX,
+  MAX_ROW_PX,
+  type TableLayoutController,
+} from './useTableLayout'
 import { createPortal } from 'react-dom'
 import './markdown.css'
 
@@ -19,6 +29,9 @@ type HeaderEditingTracker = {
 }
 
 const HeaderEditingContext = React.createContext<HeaderEditingTracker | null>(null)
+
+/** 表格调整(列宽/行高拖动)通道:TableBlock 的布局引擎经 context 下发 Th/Td。 */
+const TableResizeContext = React.createContext<TableLayoutController | null>(null)
 
 export type MarkdownVariant = 'preview' | 'display'
 
@@ -43,63 +56,6 @@ export type MarkdownComponentOptions = {
 }
 
 /** 统计列宽前剥离内联 markdown 语法（图片取 alt），避免语法符号干扰字符数占比。 */
-function stripMarkdownInlineSyntax(text: string): string {
-  return text
-    .replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1')
-    .replace(/\*\*([^*]+)\*\*/g, '$1')
-    .replace(/`([^`]+)`/g, '$1')
-}
-
-/** CJK/全角类字符集:这些字符渲染宽度约为拉丁字符 2 倍,列宽估算按 2 计。 */
-const WIDE_CHAR = /[\u1100-\u115f\u2e80-\u303f\u3041-\u33ff\u3400-\u4dbf\u4e00-\u9fff\ua000-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe4f\uff00-\uff60\uffe0-\uffe6]/
-
-/** 单元格视觉长度:CJK/全角计 2,其余计 1(与 ch 单位的宽度比例近似)。 */
-function visualCellLength(text: string): number {
-  let length = 0
-  for (const char of text) {
-    length += WIDE_CHAR.test(char) ? 2 : 1
-  }
-  return length
-}
-
-/** 列宽下限(ch):短列(如二字表头)也能舒适容纳内容与内边距,不至于被压扁。 */
-const MIN_COLUMN_CH = 10
-/** 列宽上限(ch):单列过宽严重伤可读性,超出的内容换行。60ch ≈ 30 个中文字。 */
-const MAX_COLUMN_CH = 60
-/** 单元格左右内边距折算(10px 12px × 2 ≈ 24px ≈ 3ch,随字号等比缩放取近似值)。 */
-const COLUMN_PAD_CH = 3
-
-/**
- * 按列内容计算列宽(ch 单位):每列取内容最多的那个单元格的视觉长度。
- *
- * 与旧版「全列字符总量占比百分比」不同,max 口径保证内容最多的单元格
- * 决定本列宽度——长内容列获得足够横向空间而不是被挤压换行。
- * 搭配 tableLayout:fixed + width:100%:表格至少撑满容器,列宽总和超出
- * 容器时表格更宽、由外层横向滚动。
- * 每列 clamp 到 [MIN_COLUMN_CH, MAX_COLUMN_CH],防止列无限宽/被压扁;
- * 列很多时总和仍可超容器(横向滚动承载),不再回退压缩下限。
- * 另有「单列 ≤ 屏幕宽度」的最终钳制,由渲染层 col 元素
- * width: min(Nch, 100vw) 声明式完成(见 TableBlock colgroup),此处不管。
- */
-export function computeTableColumnWidths(headers: string[], rows: string[][]): string[] {
-  const columnCount = headers.length
-  if (columnCount === 0) return []
-
-  const maxLens = new Array<number>(columnCount).fill(0)
-  const measure = (text: string, index: number) => {
-    if (index >= columnCount) return
-    const length = visualCellLength(stripMarkdownInlineSyntax(text))
-    if (length > maxLens[index]) maxLens[index] = length
-  }
-  headers.forEach(measure)
-  rows.forEach((row) => row.forEach(measure))
-
-  return maxLens.map((maxLen) => {
-    const width = Math.min(MAX_COLUMN_CH, Math.max(MIN_COLUMN_CH, maxLen + COLUMN_PAD_CH))
-    return `${width}ch`
-  })
-}
-
 /** 递归收集 hast 节点的纯文本内容。 */
 function collectHastText(node: ElementContent | undefined): string {
   if (!node) return ''
@@ -300,6 +256,62 @@ const variantStyles: Record<MarkdownVariant, {
 
 type IntrinsicProps<Tag extends keyof JSX.IntrinsicElements> = JSX.IntrinsicElements[Tag] & ExtraProps
 
+/** th/td 注入的内部索引 props(TableBlock 渲染期 cloneElement 注入,组件内消费后剥离)。 */
+export type TableCellIndexProps = {
+  /** 列索引(thead/tbody 的 tr 内按 th/td 出现顺序计数)。 */
+  __columnIndex?: number
+  /** 行索引(tbody 内按 tr 顺序计数)。 */
+  __rowIndex?: number
+}
+
+/**
+ * 渲染期向 react-markdown 的 table children 注入列/行索引:
+ * thead/tbody > tr > th/td 逐层 cloneElement 加 __columnIndex/__rowIndex,
+ * 供 Th/Td 的边缘拖动(调列宽/行高)定位目标。纯函数、渲染期执行;
+ * 吸顶克隆的 thead 复用注入后的同一份元素。
+ */
+function injectTableCellIndices(children: React.ReactNode): React.ReactNode {
+  type WithChildren = React.ReactElement<{ children?: React.ReactNode }>
+  const cloneWith = (element: unknown, props: Record<string, unknown>) => (
+    React.cloneElement(element as WithChildren, props)
+  )
+  const mapChildren = (node: React.ReactNode, fn: (child: React.ReactNode) => React.ReactNode) => (
+    React.Children.map(React.isValidElement(node) ? (node as WithChildren).props.children : null, fn)
+  )
+
+  return React.Children.map(children, (section) => {
+    if (!React.isValidElement(section)) return section
+    if (section.type === 'thead' || section.type === 'tbody') {
+      const isBody = section.type === 'tbody'
+      return cloneWith(section, {
+        children: React.Children.map(
+          (section as WithChildren).props.children,
+          (row, rowIndex) => {
+            if (!React.isValidElement(row) || row.type !== 'tr') return row
+            let columnIndex = 0
+            return cloneWith(row, {
+              children: mapChildren(row, (cell) => {
+                if (!React.isValidElement(cell)) return cell
+                if (cell.type === 'th' || cell.type === 'td') {
+                  const indexProps: TableCellIndexProps = isBody
+                    ? { __rowIndex: rowIndex }
+                    : { __columnIndex: columnIndex++ }
+                  // tbody 行的 td 也带列索引(备用),thead 的 th 不带行索引。
+                  return cloneWith(cell, isBody && cell.type === 'td'
+                    ? { ...indexProps, __columnIndex: columnIndex++ }
+                    : indexProps)
+                }
+                return cell
+              }),
+            })
+          },
+        ),
+      })
+    }
+    return section
+  })
+}
+
 /** 从 react-markdown 传入的 props 中剥离 node，避免泄漏到 DOM 属性。 */
 function stripNode<T extends object>(props: T): Omit<T, 'node'> {
   const { node, ...rest } = props as Record<string, unknown>
@@ -431,6 +443,16 @@ const cellDialogSaveButtonStyle: React.CSSProperties = {
   color: '#fff',
 }
 
+/** 浮层查看态内容预览区(富内联渲染,长内容内部滚动)。 */
+const cellDialogPreviewStyle: React.CSSProperties = {
+  ...cellDialogAreaStyle,
+  lineHeight: 1.8,
+  whiteSpace: 'normal',
+}
+
+/** 展示态超高单元格:内容限高由行高模型承担(td maxHeight + overflow hidden),
+ * 不再使用独立的限高容器/渐隐遮罩/展开按钮。 */
+
 /** textarea 高度 = 单元格原高(进入编辑时测量);测量失败回退自动增高。 */
 function fitTextAreaHeight(element: HTMLTextAreaElement | null, height: number | null): void {
   if (!element) return
@@ -522,6 +544,8 @@ function useTableCellEditor(
   const expandedRef = React.useRef(false)
   const dialogRef = React.useRef<HTMLDivElement | null>(null)
   const dialogInputRef = React.useRef<HTMLTextAreaElement | null>(null)
+  /** 展示态限高容器 ref(自测溢出:scrollHeight > clientHeight 即超高)。 */
+  const displayWrapRef = React.useRef<HTMLDivElement | null>(null)
   // 触屏/笔轻触轨迹:按下落点(抬起时判位移,滚动/长滑不算轻触)与上一次轻触时空坐标。
   const touchDownRef = React.useRef<{ x: number; y: number } | null>(null)
   const lastTapRef = React.useRef<TouchTap | null>(null)
@@ -579,14 +603,17 @@ function useTableCellEditor(
     setOverflow(element.scrollHeight > element.clientHeight + 2)
   }, [editing, editHeight, draft])
 
-  // 字体就绪兜底:晚加载字体会改变 scrollHeight,重判一次「展开」按钮出现条件。
+  // 字体就绪兜底:晚加载字体会改变 scrollHeight,重判一次「展开」按钮出现条件
+  // (编辑态测输入框;展示态测限高容器)。
   React.useEffect(() => {
-    if (!editing) return
     if (document.fonts?.ready == null) return
     let cancelled = false
     void document.fonts.ready.then(() => {
+      if (cancelled) return
       const el = inputRef.current
-      if (!cancelled && el) setOverflow(el.scrollHeight > el.clientHeight + 2)
+      if (editing && el) {
+        setOverflow(el.scrollHeight > el.clientHeight + 2)
+      }
     })
     return () => {
       cancelled = true
@@ -847,12 +874,14 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
 
   const TableBlock = ({ node, children }: IntrinsicProps<'table'>) => {
     const { headers, rows } = extractTableMatrix(node)
-    const widths = computeTableColumnWidths(headers, rows)
     // Ctrl 手型平移:默认原生选择复制;按住 Ctrl 变抓手,拖动平移(仅大表格)。
     const pan = useTablePan()
     const panCursor = pan.panning
       ? 'grabbing'
       : pan.ctrlPan && pan.pannable ? 'grab' : undefined
+
+    // 表格布局引擎:初始列宽分配(内容理想宽 + 撑满放大)+ 用户手调列宽/行高(内存态)。
+    const layout = useTableLayout()
 
     // 表头吸顶:表头滚出视野且表格仍跨越阅读容器顶时,钉一个同列宽的表头克隆。
     // 表头单元格编辑期间关闭(克隆与在流编辑态不共享,避免内容不一致)。
@@ -866,41 +895,70 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
     }), [])
     const pin = usePinnedTableHeader(pan.wrapRef, variant === 'preview' && !headerEditing)
 
-    // 从 react-markdown 的 children 中取在流 thead 元素克隆渲染(同列宽同单元格组件)。
-    const theadElement = React.useMemo(() => (
-      React.Children.toArray(children).find(
-        (child): child is React.ReactElement => React.isValidElement(child) && child.type === 'thead',
-      ) ?? null
-    ), [children])
+    // 初始分配(容器宽/字体度量就绪后走 px 数值口径;未测得时 colgroup 用 ch 兜底)。
+    const baseWidths = React.useMemo(
+      () => allocateColumnWidths(headers, rows, layout.containerWidth, layout.chPx),
+      [headers, layout.chPx, layout.containerWidth, rows],
+    )
+    const effectiveWidths = React.useMemo(
+      () => (baseWidths.length > 0 ? applyColumnOverrides(baseWidths, layout.columnOverrides) : null),
+      [baseWidths, layout.columnOverrides],
+    )
+    const fallbackWidths = React.useMemo(
+      () => (baseWidths.length === 0 ? computeFallbackColumnWidths(headers, rows) : []),
+      [baseWidths.length, headers, rows],
+    )
 
-    // colgroup 为在流表与吸顶克隆共用:列宽按内容计算(ch),再经 min(…,100vw)
-    // 把单列上限钳到屏幕宽度——窄屏/超大字号下单列不超屏,免横向滚动。
-    const colgroup = widths.length > 0 ? (
+    // colgroup 为在流表与吸顶克隆共用:手调覆盖优先(px),否则初始分配(px)或 ch 兜底。
+    const colWidthStyles = React.useMemo(() => {
+      if (effectiveWidths) return effectiveWidths.map((px) => `${px}px`)
+      return fallbackWidths
+    }, [effectiveWidths, fallbackWidths])
+    const colgroup = colWidthStyles.length > 0 ? (
       <colgroup>
-        {widths.map((width, index) => (
-          <col key={`col-${index}`} style={{ width: `min(${width}, 100vw)` }} />
+        {colWidthStyles.map((width, index) => (
+          <col key={`col-${index}`} style={{ width }} />
         ))}
       </colgroup>
     ) : null
 
+    // 注入列/行索引(th→__columnIndex、td→__rowIndex):Th/Td 的边缘热区拖动需要
+    // 知道自己调整的是哪一列/哪一行。克隆 thead(吸顶)复用注入后的同一份。
+    const injectedChildren = React.useMemo(
+      () => injectTableCellIndices(children),
+      [children],
+    )
+    const theadElement = React.useMemo(() => (
+      React.Children.toArray(injectedChildren).find(
+        (child): child is React.ReactElement => React.isValidElement(child) && child.type === 'thead',
+      ) ?? null
+    ), [injectedChildren])
+
+    // wrap ref 双挂:平移(pan)与布局测量(layout)共用同一包裹层。
+    const wrapRef = React.useCallback((element: HTMLDivElement | null) => {
+      pan.wrapRef.current = element
+      layout.wrapRef.current = element
+    }, [pan.wrapRef, layout.wrapRef])
+
     return (
-      <HeaderEditingContext.Provider value={headerEditingTracker}>
-        <div
-          ref={pan.wrapRef}
-          {...sourceLineData(node)}
-          {...pan.handlers}
-          style={{
-            ...s.tableWrap,
-            ...(panCursor != null ? { cursor: panCursor } : null),
-            ...(pan.panning ? { userSelect: 'none' as const } : null),
-          }}
-          title={pan.pannable ? '按住 Ctrl 拖动平移表格；直接拖动可选择复制文本' : undefined}
-        >
-          <table className="md-table" style={s.table}>
-            {colgroup}
-            {children}
-          </table>
-        </div>
+      <TableResizeContext.Provider value={layout}>
+        <HeaderEditingContext.Provider value={headerEditingTracker}>
+          <div
+            ref={wrapRef}
+            {...sourceLineData(node)}
+            {...pan.handlers}
+            style={{
+              ...s.tableWrap,
+              ...(panCursor != null ? { cursor: panCursor } : null),
+              ...(pan.panning ? { userSelect: 'none' as const } : null),
+            }}
+            title={pan.pannable ? '按住 Ctrl 拖动平移表格；直接拖动可选择复制文本' : undefined}
+          >
+            <table className="md-table" style={s.table}>
+              {colgroup}
+              {injectedChildren}
+            </table>
+          </div>
         {pin.pinned && theadElement && typeof document !== 'undefined'
           ? createPortal(
             <div
@@ -928,15 +986,19 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
             document.body,
           )
           : null}
-      </HeaderEditingContext.Provider>
+        </HeaderEditingContext.Provider>
+      </TableResizeContext.Provider>
     )
   }
 
-  const Th = (props: IntrinsicProps<'th'>) => {
-    const { children, align, node } = props
+  const Th = (props: IntrinsicProps<'th'> & TableCellIndexProps) => {
+    const { children, align, node, __columnIndex } = props
     const rest = stripNode(props)
     delete rest.align
+    delete rest.__columnIndex
+    delete rest.__rowIndex
     const cell = useTableCellEditor(node, sourceText, onTableCellEdit)
+    const resize = React.useContext(TableResizeContext)
     // 表头单元格编辑态上报:编辑期间所属表格关闭表头吸顶(克隆表头与在流编辑态不共享)。
     const headerEditingTracker = React.useContext(HeaderEditingContext)
     React.useEffect(() => {
@@ -944,13 +1006,43 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
       headerEditingTracker.onChange(true)
       return () => headerEditingTracker.onChange(false)
     }, [cell.editing, headerEditingTracker])
+
+    /** 命中右缘热区(列宽拖动)。 */
+    const hitColumnEdge = (event: React.PointerEvent<HTMLElement>) => {
+      const rect = event.currentTarget.getBoundingClientRect()
+      return event.clientX - rect.left >= rect.width - COLUMN_EDGE_PX
+    }
+
+    const handlePointerDown = (event: React.PointerEvent<HTMLElement>) => {
+      if (resize && __columnIndex != null && event.pointerType === 'mouse' && hitColumnEdge(event)) {
+        resize.beginColumnResize(__columnIndex, event)
+        return
+      }
+      cell.touchHandlers.onPointerDown(event)
+    }
+
     return (
       <th
         ref={cell.hostRef}
         {...rest}
         {...cell.touchHandlers}
-        onDoubleClick={cell.editable && !cell.editing ? cell.beginEdit : undefined}
-        title={cell.editable ? '双击编辑单元格' : undefined}
+        onPointerDown={handlePointerDown}
+        onPointerMove={(event) => {
+          resize?.dragHandlers.onPointerMove(event)
+        }}
+        onPointerUp={(event) => {
+          resize?.dragHandlers.onPointerUp(event)
+          cell.touchHandlers.onPointerUp(event)
+        }}
+        onPointerCancel={resize?.dragHandlers.onPointerCancel}
+        onDoubleClick={(event) => {
+          if (resize && __columnIndex != null && hitColumnEdge(event as unknown as React.PointerEvent<HTMLElement>)) {
+            resize.resetColumn(__columnIndex)
+            return
+          }
+          if (cell.editable && !cell.editing) cell.beginEdit()
+        }}
+        title={cell.editable ? '双击编辑单元格；右缘拖动调整列宽，双击右缘重置' : '右缘拖动调整列宽，双击右缘重置'}
         style={{
           ...s.th,
           textAlign: (align ?? node?.properties?.align ?? 'left') as React.CSSProperties['textAlign'],
@@ -963,21 +1055,61 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
     )
   }
 
-  const Td = (props: IntrinsicProps<'td'>) => {
-    const { children, align, node } = props
+  const Td = (props: IntrinsicProps<'td'> & TableCellIndexProps) => {
+    const { children, align, node, __rowIndex } = props
     const rest = stripNode(props)
     delete rest.align
+    delete rest.__columnIndex
+    delete rest.__rowIndex
     const cell = useTableCellEditor(node, sourceText, onTableCellEdit)
+    const resize = React.useContext(TableResizeContext)
+    /** 行高上限:用户手调优先,默认 MAX_ROW_PX;编辑态同样生效(编辑框=格高)。 */
+    const rowMaxHeight = resize && __rowIndex != null
+      ? resize.rowOverrides.get(__rowIndex) ?? MAX_ROW_PX
+      : MAX_ROW_PX
+    const plainText = React.useMemo(() => collectHastText(node), [node])
+
+    /** 命中底缘热区(行高拖动)。 */
+    const hitRowEdge = (event: React.PointerEvent<HTMLElement>) => {
+      const rect = event.currentTarget.getBoundingClientRect()
+      return event.clientY - rect.top >= rect.height - ROW_EDGE_PX
+    }
+
+    const handlePointerDown = (event: React.PointerEvent<HTMLElement>) => {
+      if (resize && __rowIndex != null && hitRowEdge(event)) {
+        resize.beginRowResize(__rowIndex, event)
+        return
+      }
+      cell.touchHandlers.onPointerDown(event)
+    }
+
     return (
       <td
         ref={cell.hostRef}
         {...rest}
         {...cell.touchHandlers}
-        onDoubleClick={cell.editable && !cell.editing ? cell.beginEdit : undefined}
-        title={cell.editable ? '双击编辑单元格' : undefined}
+        onPointerDown={handlePointerDown}
+        onPointerMove={(event) => {
+          resize?.dragHandlers.onPointerMove(event)
+        }}
+        onPointerUp={(event) => {
+          resize?.dragHandlers.onPointerUp(event)
+          cell.touchHandlers.onPointerUp(event)
+        }}
+        onPointerCancel={resize?.dragHandlers.onPointerCancel}
+        onDoubleClick={(event) => {
+          if (resize && __rowIndex != null && hitRowEdge(event as unknown as React.PointerEvent<HTMLElement>)) {
+            resize.resetRow(__rowIndex)
+            return
+          }
+          if (cell.editable && !cell.editing) cell.beginEdit()
+        }}
+        title={plainText || undefined}
         style={{
           ...s.td,
           textAlign: (align ?? node?.properties?.align) as React.CSSProperties['textAlign'],
+          maxHeight: rowMaxHeight,
+          overflow: 'hidden',
           ...(cell.editable && !cell.editing ? { cursor: 'text' } : null),
           ...(cell.editing ? { padding: 3 } : null),
         }}
