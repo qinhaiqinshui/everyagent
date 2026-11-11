@@ -862,8 +862,10 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
       }
       return boundaries
     }, [geometry.colWidths])
-    // 把手栏渲染条件:几何已测得(无 RO 环境如 SSR 整栏不渲染,表格回到原生形态)。
-    const guttersReady = geometry.rowHeights.length > 0 || geometry.colWidths.length > 0
+    // 把手栏渲染条件:几何已测得且用户已唤出(默认隐藏,单击表头切换;
+    // 无 RO 环境如 SSR 整栏不渲染,表格回到原生形态)。
+    const guttersReady = layout.handlesVisible
+      && (geometry.rowHeights.length > 0 || geometry.colWidths.length > 0)
 
     return (
       <TableResizeContext.Provider value={layout}>
@@ -871,7 +873,7 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
           <div {...sourceLineData(node)} style={{ ...tableResizeFrameStyle, margin: s.tableWrap.margin }}>
             {/* 行高把手栏(表外左栏):每行底缘一个 ⇕,槽高与表格行实测高对齐。 */}
             {guttersReady ? (
-              <div style={rowGutterStyle}>
+              <div className="md-table-gutter" style={rowGutterStyle}>
                 <div style={{ height: geometry.headerHeight }} />
                 {geometry.rowHeights.map((height, rowIndex) => (
                   <div key={`row-${rowIndex}`} style={{ position: 'relative', height }}>
@@ -899,7 +901,7 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
             <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
               {/* 列宽把手栏(表外顶栏):每列右缘一个 ↔,平移层随横向滚动移动。 */}
               {guttersReady ? (
-                <div style={colGutterClipStyle}>
+                <div className="md-table-gutter" style={colGutterClipStyle}>
                   <div
                     ref={colHandleLayerRef}
                     style={{ position: 'relative', width: geometry.tableWidth || '100%', height: '100%' }}
@@ -974,7 +976,11 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
               >
                 <table className="md-table" style={{ ...s.table, width: pin.pinned.tableWidth }}>
                   {colgroup}
-                  {theadElement}
+                  {/* 克隆经 portal 落在 body 下,脱离 TableResizeContext.Provider 树;
+                      重新包一层让克隆表头的单击切换把手同样生效。 */}
+                  <TableResizeContext.Provider value={layout}>
+                    {theadElement}
+                  </TableResizeContext.Provider>
                 </table>
               </div>
             </div>,
@@ -993,6 +999,7 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
     delete rest.__columnIndex
     delete rest.__rowIndex
     const cell = useTableCellEditor(node, sourceText, onTableCellEdit)
+    const resize = React.useContext(TableResizeContext)
     // 表头单元格编辑态上报:编辑期间所属表格关闭表头吸顶(克隆表头与在流编辑态不共享)。
     const headerEditingTracker = React.useContext(HeaderEditingContext)
     React.useEffect(() => {
@@ -1001,7 +1008,12 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
       return () => headerEditingTracker.onChange(false)
     }, [cell.editing, headerEditingTracker])
 
-    // 列宽/行高调整全部走表外把手栏(顶栏 ↔ / 左栏 ⇕),表头自身只保留双击编辑。
+    // 单击表头 = 切换表外把手栏(列宽 ↔ / 行高 ⇕)显示/隐藏;双击仍编辑单元格。
+    const handleClick = React.useCallback(() => {
+      if (resize == null || cell.editing) return
+      resize.setHandlesVisible(!resize.handlesVisible)
+    }, [cell.editing, resize])
+
     return (
       <th
         ref={cell.hostRef}
@@ -1010,8 +1022,9 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
           ...s.th,
           textAlign: (align ?? node?.properties?.align ?? 'left') as React.CSSProperties['textAlign'],
         }}
+        onClick={handleClick}
         onDoubleClick={cell.editable && !cell.editing ? cell.beginEdit : undefined}
-        title={cell.editable ? '双击编辑单元格' : undefined}
+        title={cell.editable ? '点击显示/隐藏调整把手；双击编辑单元格' : '点击显示/隐藏调整把手'}
       >
         {children}
         {cell.editor}

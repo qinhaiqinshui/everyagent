@@ -8,8 +8,10 @@ import React from 'react'
  * - 手调数据仅存 React state(内存态),刷新/卸载即失。
  *
  * 交互(表格外把手栏,不侵入单元格):
+ * - 把手栏默认隐藏;单击表头切换显示/隐藏(整表一组,顶栏+左栏同显隐);
  * - 顶栏:每列右缘一个 ↔ 把手(TableBlock 渲染),拖动调列宽,双击重置;
  * - 左栏:每行底缘一个 ⇕ 把手,拖动调行高,双击重置;
+ * - 点击把手栏之外的非表头区域(单元格/表外)自动收起(capture 监听);
  * - 拖动期间 pointer capture 跟踪;把手几何由 useTableGeometry 实测对齐。
  */
 
@@ -154,6 +156,9 @@ export type TableLayoutController = TableResizeController & {
   columnOverrides: Map<number, number>
   /** 手调行高(行 idx → max-height px)。 */
   rowOverrides: Map<number, number>
+  /** 表外把手栏可见性:默认隐藏;单击表头切换,点把手栏外非表头区域收起。 */
+  handlesVisible: boolean
+  setHandlesVisible: (visible: boolean) => void
 }
 
 export function useTableLayout(): TableLayoutController {
@@ -162,7 +167,34 @@ export function useTableLayout(): TableLayoutController {
   const [chPx, setChPx] = React.useState(0)
   const [columnOverrides, setColumnOverrides] = React.useState(() => new Map<number, number>())
   const [rowOverrides, setRowOverrides] = React.useState(() => new Map<number, number>())
+  const [handlesVisible, setHandlesVisible] = React.useState(false)
+  // 把手可见性镜像(ref 形态供全局监听同步读取,避免闭包陈旧)。
+  const handlesVisibleRef = React.useRef(false)
   const dragRef = React.useRef<DragState | null>(null)
+
+  // 把手栏收起规则:点击落在把手栏之外的非表头区域(单元格/表外)即隐藏。
+  // 表头点击由 Th 的 onClick 切换(覆盖本规则,时序在后);把手栏自身
+  // (.md-table-gutter)内的点击(拖动把手等)不收起。capture 阶段监听,
+  // 不与链接点击等原生行为冲突。
+  React.useEffect(() => {
+    const onPointerDown = (event: PointerEvent) => {
+      if (!handlesVisibleRef.current) return
+      const target = event.target as HTMLElement | null
+      if (!target) return
+      if (target.closest('.md-table-gutter')) return
+      const wrap = wrapRef.current
+      const th = target.closest('th')
+      if (wrap && th && wrap.contains(th)) return
+      setHandlesVisible(false)
+    }
+    window.addEventListener('pointerdown', onPointerDown, true)
+    return () => window.removeEventListener('pointerdown', onPointerDown, true)
+  }, [])
+
+  const showHandles = React.useCallback((visible: boolean) => {
+    handlesVisibleRef.current = visible
+    setHandlesVisible(visible)
+  }, [])
 
   // 容器宽度:ResizeObserver 持续跟踪(窗口缩放/布局变化)。
   React.useEffect(() => {
@@ -266,6 +298,8 @@ export function useTableLayout(): TableLayoutController {
     chPx,
     columnOverrides,
     rowOverrides,
+    handlesVisible,
+    setHandlesVisible: showHandles,
     beginColumnResize,
     beginRowResize,
     resetColumn,
