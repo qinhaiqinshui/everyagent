@@ -16,6 +16,7 @@ import {
   isTouchDoubleTap,
 } from './markdownTableEdit'
 import { buildMarkdownComponents, computeTableColumnWidths } from './sharedMarkdownRenderer'
+import { shouldPinHeader } from './usePinnedTableHeader'
 import { unified } from 'unified'
 import remarkParse from 'remark-parse'
 import remarkRehype from 'remark-rehype'
@@ -231,6 +232,36 @@ describe('isTouchDoubleTap(触屏双击判定)', () => {
   })
 })
 
+describe('shouldPinHeader(表头吸顶判定)', () => {
+  // 场景坐标:阅读容器顶(吸顶线)在视口 y=0。
+  it('表头仍在视野内(表头底缘未过吸顶线)不吸顶', () => {
+    expect(shouldPinHeader(100, 800, 0, 40)).toBe(false)
+    expect(shouldPinHeader(-20, 800, 0, 40)).toBe(false) // 表头顶微出但表头底仍在视野
+  })
+
+  it('表头底缘滚出吸顶线且表格仍跨越吸顶线 → 吸顶', () => {
+    expect(shouldPinHeader(-100, 500, 0, 40)).toBe(true)
+    expect(shouldPinHeader(-41, 500, 0, 40)).toBe(true) // 表头底缘刚过线
+  })
+
+  it('表头底缘恰好贴线(最后一像素仍可见)不吸顶', () => {
+    expect(shouldPinHeader(-40, 500, 0, 40)).toBe(false)
+  })
+
+  it('表格整体滚出上方(底缘也过线)→ 还原不吸顶', () => {
+    expect(shouldPinHeader(-600, -100, 0, 40)).toBe(false)
+  })
+
+  it('表格在吸顶线下方(尚未滚到)不吸顶', () => {
+    expect(shouldPinHeader(50, 300, 0, 40)).toBe(false)
+  })
+
+  it('表头高未知(0)时按表头顶缘贴线即吸顶(保守替身)', () => {
+    expect(shouldPinHeader(-1, 500, 0, 0)).toBe(true)
+    expect(shouldPinHeader(1, 500, 0, 0)).toBe(false)
+  })
+})
+
 describe('表格渲染(列宽与可编辑标注)', () => {
   const md = '| 列一 | 列二 |\n| --- | --- |\n| 1 | 2 |'
 
@@ -280,5 +311,10 @@ describe('表格渲染(列宽与可编辑标注)', () => {
     const html = render(md)
     expect(html).not.toContain('cursor:grab')
     expect(html).not.toContain('拖动平移表格')
+  })
+
+  it('静态渲染不产生吸顶浮动表头(吸顶仅在真实滚动几何下经 portal 挂载)', () => {
+    const html = render(md)
+    expect(html).not.toContain('position:fixed')
   })
 })

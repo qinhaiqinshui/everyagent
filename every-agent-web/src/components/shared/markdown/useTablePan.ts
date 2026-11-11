@@ -33,7 +33,7 @@ type PanState = {
 }
 
 /** 沿祖先链找垂直方向可滚动的元素(表格 wrap 自身 overflow-y hidden,垂直滚动在外层)。 */
-function findVerticalScrollTarget(element: HTMLElement): HTMLElement | null {
+export function findVerticalScrollTarget(element: HTMLElement): HTMLElement | null {
   let parent: HTMLElement | null = element.parentElement
   while (parent && parent !== document.body) {
     if (parent.scrollHeight > parent.clientHeight + 1) {

@@ -4,7 +4,21 @@ import type { Element, ElementContent } from 'hast'
 import CodeBlock from './CodeBlock'
 import { escapeTableCellText, resolveCellRange, isTouchDoubleTap, type MarkdownTableCellEditRequest, type TouchTap } from './markdownTableEdit'
 import { useTablePan } from './useTablePan'
+import { usePinnedTableHeader } from './usePinnedTableHeader'
+import { createPortal } from 'react-dom'
 import './markdown.css'
+
+/**
+ * 表头单元格编辑上报通道:表头有单元格进入编辑时通知所属 TableBlock,
+ * 吸顶浮动表头(克隆)与在流表头二者的编辑态不共享,编辑期间关闭吸顶,
+ * 避免克隆表头内容与正在编辑的单元格不一致。仅表头(th)需要;正文(td)
+ * 不被克隆,编辑与吸顶互不影响。
+ */
+type HeaderEditingTracker = {
+  onChange: (editing: boolean) => void
+}
+
+const HeaderEditingContext = React.createContext<HeaderEditingTracker | null>(null)
 
 export type MarkdownVariant = 'preview' | 'display'
 
@@ -322,6 +336,18 @@ function autoGrowTextArea(element: HTMLTextAreaElement | null): void {
   element.style.height = `${element.scrollHeight}px`
 }
 
+/** 吸顶浮动表头容器样式(position:fixed + 几何由吸顶快照注入)。 */
+const floatHeaderBoxStyle: React.CSSProperties = {
+  position: 'fixed',
+  zIndex: 20,
+  overflow: 'hidden',
+  boxSizing: 'border-box',
+  border: '1px solid var(--border-light)',
+  borderRadius: 'var(--radius-md)',
+  background: 'var(--bg-table)',
+  boxShadow: '0 4px 12px rgba(0, 0, 0, 0.18)',
+}
+
 /**
  * 表格单元格编辑态(th/td 共用):双击进入编辑,Enter/blur 提交,Esc 取消。
  * 编辑初值取源 markdown 原始片段(hast position offset 切片),用户改的就是源码,
@@ -529,29 +555,80 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
     const panCursor = pan.panning
       ? 'grabbing'
       : pan.pannable && !pan.altSelect ? 'grab' : undefined
+
+    // 表头吸顶:表头滚出视野且表格仍跨越阅读容器顶时,钉一个同列宽的表头克隆。
+    // 表头单元格编辑期间关闭(克隆与在流编辑态不共享,避免内容不一致)。
+    const headerEditingCountRef = React.useRef(0)
+    const [headerEditing, setHeaderEditing] = React.useState(false)
+    const headerEditingTracker = React.useMemo<HeaderEditingTracker>(() => ({
+      onChange: (editing: boolean) => {
+        headerEditingCountRef.current = Math.max(0, headerEditingCountRef.current + (editing ? 1 : -1))
+        setHeaderEditing(headerEditingCountRef.current > 0)
+      },
+    }), [])
+    const pin = usePinnedTableHeader(pan.wrapRef, variant === 'preview' && !headerEditing)
+
+    // 从 react-markdown 的 children 中取在流 thead 元素克隆渲染(同列宽同单元格组件)。
+    const theadElement = React.useMemo(() => (
+      React.Children.toArray(children).find(
+        (child): child is React.ReactElement => React.isValidElement(child) && child.type === 'thead',
+      ) ?? null
+    ), [children])
+
+    const colgroup = widths.length > 0 ? (
+      <colgroup>
+        {widths.map((width, index) => (
+          <col key={`col-${index}`} style={{ width }} />
+        ))}
+      </colgroup>
+    ) : null
+
     return (
-      <div
-        ref={pan.wrapRef}
-        {...sourceLineData(node)}
-        {...pan.handlers}
-        style={{
-          ...s.tableWrap,
-          ...(panCursor != null ? { cursor: panCursor } : null),
-          ...(pan.panning ? { userSelect: 'none' as const } : null),
-        }}
-        title={pan.pannable ? '拖动平移表格；按住 Alt 拖动可选择文本' : undefined}
-      >
-        <table style={s.table}>
-          {widths.length > 0 && (
-            <colgroup>
-              {widths.map((width, index) => (
-                <col key={`col-${index}`} style={{ width }} />
-              ))}
-            </colgroup>
-          )}
-          {children}
-        </table>
-      </div>
+      <HeaderEditingContext.Provider value={headerEditingTracker}>
+        <div
+          ref={pan.wrapRef}
+          {...sourceLineData(node)}
+          {...pan.handlers}
+          style={{
+            ...s.tableWrap,
+            ...(panCursor != null ? { cursor: panCursor } : null),
+            ...(pan.panning ? { userSelect: 'none' as const } : null),
+          }}
+          title={pan.pannable ? '拖动平移表格；按住 Alt 拖动可选择文本' : undefined}
+        >
+          <table style={s.table}>
+            {colgroup}
+            {children}
+          </table>
+        </div>
+        {pin.pinned && theadElement && typeof document !== 'undefined'
+          ? createPortal(
+            <div
+              aria-hidden="true"
+              style={{
+                ...floatHeaderBoxStyle,
+                top: pin.pinned.top,
+                left: pin.pinned.left,
+                width: pin.pinned.width,
+              }}
+            >
+              <div
+                ref={pin.innerRef}
+                style={{
+                  width: pin.pinned.tableWidth,
+                  transform: `translateX(${-pin.pinned.scrollLeft}px)`,
+                }}
+              >
+                <table style={{ ...s.table, width: pin.pinned.tableWidth }}>
+                  {colgroup}
+                  {theadElement}
+                </table>
+              </div>
+            </div>,
+            document.body,
+          )
+          : null}
+      </HeaderEditingContext.Provider>
     )
   }
 
@@ -560,6 +637,13 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
     const rest = stripNode(props)
     delete rest.align
     const cell = useTableCellEditor(node, sourceText, onTableCellEdit)
+    // 表头单元格编辑态上报:编辑期间所属表格关闭表头吸顶(克隆表头与在流编辑态不共享)。
+    const headerEditingTracker = React.useContext(HeaderEditingContext)
+    React.useEffect(() => {
+      if (!headerEditingTracker || !cell.editing) return
+      headerEditingTracker.onChange(true)
+      return () => headerEditingTracker.onChange(false)
+    }, [cell.editing, headerEditingTracker])
     return (
       <th
         {...rest}
