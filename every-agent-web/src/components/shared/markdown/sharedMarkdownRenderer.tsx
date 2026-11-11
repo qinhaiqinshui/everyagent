@@ -333,6 +333,104 @@ const cellInputStyle: React.CSSProperties = {
   maxHeight: '20vh',
 }
 
+/** 编辑框包裹层:承载右上角「展开」按钮的定位上下文。 */
+const cellEditorWrapStyle: React.CSSProperties = {
+  position: 'relative',
+  display: 'block',
+  width: '100%',
+}
+
+/**
+ * 「展开」按钮:仅在「编辑中 + 内容超过编辑框」的单元格出现(同时最多一个),
+ * 右上角小尺寸半透明,不逐格常驻。
+ */
+const cellExpandButtonStyle: React.CSSProperties = {
+  position: 'absolute',
+  top: 3,
+  right: 3,
+  padding: '1px 6px',
+  fontSize: '11px',
+  lineHeight: '1.5',
+  borderRadius: 'var(--radius-sm, 4px)',
+  border: '1px solid var(--border)',
+  background: 'var(--bg-tertiary)',
+  color: 'var(--text-secondary)',
+  cursor: 'pointer',
+  opacity: 0.7,
+}
+
+/** 浮层打开期间 in-cell 编辑框冻结态(只读降透明,编辑转到浮层)。 */
+const cellInputFrozenStyle: React.CSSProperties = {
+  opacity: 0.6,
+}
+
+/** 展开编辑浮层容器(定位几何由 computeExpandDialogGeometry 注入)。 */
+const cellDialogStyle: React.CSSProperties = {
+  position: 'fixed',
+  zIndex: 100,
+  boxSizing: 'border-box',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 8,
+  padding: 12,
+  borderRadius: 'var(--radius-md)',
+  border: '1px solid var(--border)',
+  background: 'var(--bg-secondary)',
+  boxShadow: '0 8px 24px rgba(0, 0, 0, 0.2)',
+}
+
+const cellDialogAreaStyle: React.CSSProperties = {
+  width: '100%',
+  boxSizing: 'border-box',
+  minHeight: 120,
+  maxHeight: '60vh',
+  padding: '8px 10px',
+  borderRadius: 'var(--radius-sm, 4px)',
+  border: '1px solid var(--border)',
+  background: 'var(--bg-primary, var(--bg-secondary))',
+  color: 'var(--text-primary)',
+  font: 'inherit',
+  fontSize: 'max(16px, 1em)',
+  lineHeight: 1.6,
+  resize: 'none',
+  overflowY: 'auto',
+  outline: 'none',
+}
+
+const cellDialogActionsStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  justifyContent: 'flex-end',
+}
+
+const cellDialogCountStyle: React.CSSProperties = {
+  marginRight: 'auto',
+  fontSize: 'var(--text-xs, 12px)',
+  color: 'var(--text-muted, var(--text-secondary))',
+}
+
+const cellDialogButtonBaseStyle: React.CSSProperties = {
+  padding: '5px 14px',
+  borderRadius: 'var(--radius-sm, 4px)',
+  border: '1px solid var(--border)',
+  cursor: 'pointer',
+  fontSize: 'var(--text-sm, 13px)',
+}
+
+const cellDialogCancelButtonStyle: React.CSSProperties = {
+  ...cellDialogButtonBaseStyle,
+  background: 'var(--bg-tertiary)',
+  color: 'var(--text-secondary)',
+}
+
+const cellDialogSaveButtonStyle: React.CSSProperties = {
+  ...cellDialogButtonBaseStyle,
+  border: '1px solid var(--accent-blue, var(--border))',
+  background: 'var(--accent-blue, var(--bg-tertiary))',
+  color: '#fff',
+}
+
 /** textarea 高度 = 单元格原高(进入编辑时测量);测量失败回退自动增高。 */
 function fitTextAreaHeight(element: HTMLTextAreaElement | null, height: number | null): void {
   if (!element) return
@@ -342,6 +440,44 @@ function fitTextAreaHeight(element: HTMLTextAreaElement | null, height: number |
   }
   element.style.height = 'auto'
   element.style.height = `${element.scrollHeight}px`
+}
+
+/** 浮层内 textarea 自由增高(无格高约束,封顶 60vh 由 CSS maxHeight 承担)。 */
+function autoGrowTextArea(element: HTMLTextAreaElement | null): void {
+  if (!element) return
+  element.style.height = 'auto'
+  element.style.height = `${element.scrollHeight}px`
+}
+
+/** 单元格展开编辑浮层(Excel 公式栏展开式)的定位几何。 */
+export type ExpandDialogGeometry = {
+  left: number
+  width: number
+  placement: 'below' | 'above'
+  /** placement=below 时的 fixed top(px)。 */
+  top?: number
+  /** placement=above 时的 fixed bottom(距视口底,px)。 */
+  bottom?: number
+}
+
+/**
+ * 计算展开浮层几何:宽 = max(列宽, 420px) 上限 80vw;水平钳制在视口内;
+ * 优先锚在单元格下方,下方空间不足(<300px)且上方充足时翻上方,
+ * 两侧都不足时兜底下方(fixed 层可超出视口,编辑短暂可接受)。
+ */
+export function computeExpandDialogGeometry(
+  host: { left: number; top: number; bottom: number; width: number },
+  viewport: { width: number; height: number },
+  minWidth = 420,
+): ExpandDialogGeometry {
+  const margin = 8
+  const width = Math.round(Math.min(Math.max(host.width, minWidth), viewport.width * 0.8))
+  const left = Math.min(Math.max(host.left, margin), Math.max(margin, viewport.width - width - margin))
+  const spaceBelow = viewport.height - host.bottom
+  const placement: 'below' | 'above' = spaceBelow >= 300 || host.top < 300 ? 'below' : 'above'
+  return placement === 'below'
+    ? { left, width, placement, top: Math.round(host.bottom + margin) }
+    : { left, width, placement, bottom: Math.round(viewport.height - host.top + margin) }
 }
 
 /** 吸顶浮动表头容器样式(position:fixed + 几何由吸顶快照注入)。 */
@@ -374,10 +510,18 @@ function useTableCellEditor(
   const [draft, setDraft] = React.useState('')
   /** 编辑框高度(px):进入编辑瞬间的单元格原高;null = 未测量(回退自动增高)。 */
   const [editHeight, setEditHeight] = React.useState<number | null>(null)
+  /** 内容超过编辑框可见高(出现「展开」按钮的条件)。 */
+  const [overflow, setOverflow] = React.useState(false)
+  /** 展开浮层打开:完整内容编辑视图(Excel 公式栏展开式)。 */
+  const [expanded, setExpanded] = React.useState(false)
   const cancelledRef = React.useRef(false)
   const inputRef = React.useRef<HTMLTextAreaElement | null>(null)
   /** 宿主 td/th ref:进入编辑前测量原单元格高度(内容被替换后高度即失真)。 */
   const hostRef = React.useRef<HTMLTableCellElement | null>(null)
+  /** 浮层打开标记(ref 形态供 onBlur 同步读取,避免闭包陈旧)。 */
+  const expandedRef = React.useRef(false)
+  const dialogRef = React.useRef<HTMLDivElement | null>(null)
+  const dialogInputRef = React.useRef<HTMLTextAreaElement | null>(null)
   // 触屏/笔轻触轨迹:按下落点(抬起时判位移,滚动/长滑不算轻触)与上一次轻触时空坐标。
   const touchDownRef = React.useRef<{ x: number; y: number } | null>(null)
   const lastTapRef = React.useRef<TouchTap | null>(null)
@@ -398,6 +542,9 @@ function useTableCellEditor(
     if (original == null) return
     // 先测原单元格高度再切编辑态:内容一旦替换为输入框,单元格高度即失真。
     setEditHeight(hostRef.current?.offsetHeight ?? null)
+    setOverflow(false)
+    expandedRef.current = false
+    setExpanded(false)
     cancelledRef.current = false
     setDraft(original)
     setEditing(true)
@@ -405,10 +552,14 @@ function useTableCellEditor(
 
   const cancelEdit = React.useCallback(() => {
     cancelledRef.current = true
+    expandedRef.current = false
+    setExpanded(false)
     setEditing(false)
   }, [])
 
   const commitEdit = React.useCallback(() => {
+    // 浮层打开期间 in-cell 失焦不算提交(编辑转场到浮层);浮层的保存/收起自行收口。
+    if (expandedRef.current) return
     setEditing(false)
     if (cancelledRef.current) return
     if (range == null || onTableCellEdit == null) return
@@ -424,10 +575,81 @@ function useTableCellEditor(
     fitTextAreaHeight(element, editHeight)
     element.focus()
     element.select()
+    // 受控 value 渲染完成后再判溢出(scrollHeight > clientHeight → 出「展开」按钮)。
+    const raf = requestAnimationFrame(() => {
+      const el = inputRef.current
+      if (el) setOverflow(el.scrollHeight > el.clientHeight + 2)
+    })
+    return () => cancelAnimationFrame(raf)
   }, [editing, editHeight])
 
   const handleDraftChange = React.useCallback((event: React.ChangeEvent<HTMLTextAreaElement>) => {
     setDraft(event.target.value)
+    requestAnimationFrame(() => {
+      const el = inputRef.current
+      if (el) setOverflow(el.scrollHeight > el.clientHeight + 2)
+    })
+  }, [])
+
+  // ── 展开浮层(Excel 公式栏展开式):内容超过编辑框时的完整编辑视图。 ──
+  const openExpanded = React.useCallback(() => {
+    expandedRef.current = true
+    setExpanded(true)
+    requestAnimationFrame(() => {
+      const element = dialogInputRef.current
+      if (element) {
+        autoGrowTextArea(element)
+        element.focus()
+        element.select()
+      }
+    })
+  }, [])
+
+  /** 收起浮层:不提交不取消,编辑态回到 in-cell 框继续。 */
+  const collapseExpanded = React.useCallback(() => {
+    expandedRef.current = false
+    setExpanded(false)
+  }, [])
+
+  /** 浮层内提交/取消:先收浮层再走原提交/取消路径。 */
+  const submitFromDialog = React.useCallback(() => {
+    expandedRef.current = false
+    setExpanded(false)
+    commitEdit()
+  }, [commitEdit])
+
+  const cancelFromDialog = React.useCallback(() => {
+    expandedRef.current = false
+    setExpanded(false)
+    cancelEdit()
+  }, [cancelEdit])
+
+  // 浮层打开期间:点击浮层外任意处 = 收起浮层(保留草稿,编辑继续,不丢输入)。
+  React.useEffect(() => {
+    if (!expanded) return
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null
+      if (target && dialogRef.current?.contains(target)) return
+      collapseExpanded()
+    }
+    window.addEventListener('pointerdown', onPointerDown, true)
+    return () => window.removeEventListener('pointerdown', onPointerDown, true)
+  }, [collapseExpanded, expanded])
+
+  // 浮层几何在打开瞬间按宿主单元格矩形计算一次;编辑短暂,窗口缩放不重算。
+  const dialogGeometry = React.useMemo(() => {
+    if (!expanded) return null
+    const host = hostRef.current?.getBoundingClientRect()
+    if (!host) return null
+    return computeExpandDialogGeometry(
+      { left: host.left, top: host.top, bottom: host.bottom, width: host.width },
+      { width: window.innerWidth, height: window.innerHeight },
+    )
+  }, [expanded])
+
+  const handleDialogChange = React.useCallback((event: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setDraft(event.target.value)
+    autoGrowTextArea(event.target)
   }, [])
 
   /** 触屏/笔按下:记录落点(仅非 mouse 指针)。 */
@@ -463,23 +685,81 @@ function useTableCellEditor(
   }
 
   const editor = editing ? (
-    <textarea
-      ref={inputRef}
-      value={draft}
-      onChange={handleDraftChange}
-      onBlur={commitEdit}
-      onKeyDown={(event) => {
-        if (event.key === 'Enter' && !event.shiftKey) {
-          // Enter 提交;Shift+Enter 允许软换行(提交时折叠为空格,单元格内不容纳换行)。
-          event.preventDefault()
-          commitEdit()
-        } else if (event.key === 'Escape') {
-          event.preventDefault()
-          cancelEdit()
-        }
-      }}
-      style={cellInputStyle}
-    />
+    <div style={cellEditorWrapStyle}>
+      <textarea
+        ref={inputRef}
+        value={draft}
+        readOnly={expanded}
+        onChange={handleDraftChange}
+        onBlur={commitEdit}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' && !event.shiftKey) {
+            // Enter 提交;Shift+Enter 允许软换行(提交时折叠为空格,单元格内不容纳换行)。
+            event.preventDefault()
+            commitEdit()
+          } else if (event.key === 'Escape') {
+            event.preventDefault()
+            cancelEdit()
+          }
+        }}
+        style={{
+          ...cellInputStyle,
+          ...(expanded ? cellInputFrozenStyle : null),
+        }}
+      />
+      {/* 展开按钮:仅「编辑中 + 内容超高」时出现(同时最多一个单元格),不逐格常驻。 */}
+      {overflow && !expanded ? (
+        <button
+          type="button"
+          onClick={openExpanded}
+          title="展开编辑完整内容"
+          style={cellExpandButtonStyle}
+        >
+          展开
+        </button>
+      ) : null}
+      {expanded && dialogGeometry && typeof document !== 'undefined' ? (
+        createPortal(
+          <div
+            ref={dialogRef}
+            style={{
+              ...cellDialogStyle,
+              left: dialogGeometry.left,
+              width: dialogGeometry.width,
+              ...(dialogGeometry.placement === 'below'
+                ? { top: dialogGeometry.top }
+                : { bottom: dialogGeometry.bottom }),
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') {
+                event.preventDefault()
+                cancelFromDialog()
+              } else if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+                event.preventDefault()
+                submitFromDialog()
+              }
+            }}
+          >
+            <textarea
+              ref={dialogInputRef}
+              value={draft}
+              onChange={handleDialogChange}
+              style={cellDialogAreaStyle}
+            />
+            <div style={cellDialogActionsStyle}>
+              <span style={cellDialogCountStyle}>{draft.length} 字</span>
+              <button type="button" onClick={cancelFromDialog} style={cellDialogCancelButtonStyle}>
+                取消
+              </button>
+              <button type="button" onClick={submitFromDialog} style={cellDialogSaveButtonStyle}>
+                保存
+              </button>
+            </div>
+          </div>,
+          document.body,
+        )
+      ) : null}
+    </div>
   ) : null
 
   return { editable, editing, beginEdit, editor, hostRef, touchHandlers }
