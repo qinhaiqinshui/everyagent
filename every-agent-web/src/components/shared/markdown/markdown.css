@@ -32,3 +32,12 @@
 .md-table td:hover {
   box-shadow: inset 0 -4px 0 -1px var(--accent-blue, #3b82f6);
 }
+
+/* 单击单元格/把手:浏览器默认 :focus-visible outline 偏粗(移动端尤显),
+ * 收紧为 2px 细环;键盘导航(Tab)仍保留可见焦点。 */
+.md-table th:focus-visible,
+.md-table td:focus-visible,
+.md-table [role='separator']:focus-visible {
+  outline: 2px solid var(--accent-blue, #3b82f6);
+  outline-offset: -2px;
+}
