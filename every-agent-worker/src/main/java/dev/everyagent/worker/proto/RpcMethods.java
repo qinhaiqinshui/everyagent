@@ -42,6 +42,10 @@ public final class RpcMethods {
     public static final String SKILL_LIST = "skill.list";
     /** 覆盖式设置某 skill 的暴露配置(参数 skillId + blacklist:[root,...] + whitelist:[root,...])。 */
     public static final String SKILL_EXPOSURE_SET = "skill.exposure.set";
+    /** 导出整个 skill 目录为 zip(按 fs.readRaw 同款分批语义回传;设置页「Skill 列表」导出按钮)。 */
+    public static final String SKILL_EXPORT = "skill.export";
+    /** 导入 skill zip(参数 contentBase64;解压进 skillsDir 后失效 SkillCatalog 缓存并广播 config.changed{keys:["skills"]})。 */
+    public static final String SKILL_IMPORT = "skill.import";
     public static final String WORKSPACES_LIST = "workspaces.list";
     public static final String WORKSPACES_ADD = "workspaces.add";
     public static final String WORKSPACES_REMOVE = "workspaces.remove";
