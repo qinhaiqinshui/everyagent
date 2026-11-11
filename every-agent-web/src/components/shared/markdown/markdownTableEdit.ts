@@ -46,3 +46,27 @@ export function replaceMarkdownRange(
   if (next === original) return source
   return source.slice(0, start) + next + source.slice(end)
 }
+
+/** 一次触摸/笔轻触的时空坐标(用于双击检测)。 */
+export type TouchTap = {
+  time: number
+  x: number
+  y: number
+}
+
+/**
+ * 触屏双击(double-tap)检测:两次轻触间隔与位移都在阈值内才算双击。
+ * 移动端 dblclick 事件不可靠(iOS Safari 常不派发),单元格编辑进入需自行判定;
+ * 位移阈值放宽(40px)以容忍手指落点的自然抖动。
+ */
+export function isTouchDoubleTap(
+  previous: TouchTap | null,
+  next: TouchTap,
+  maxIntervalMs = 350,
+  maxDistancePx = 40,
+): boolean {
+  if (previous == null) return false
+  if (next.time - previous.time > maxIntervalMs) return false
+  const distance = Math.hypot(next.x - previous.x, next.y - previous.y)
+  return distance <= maxDistancePx
+}

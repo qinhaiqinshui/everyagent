@@ -2,7 +2,7 @@ import React from 'react'
 import type { Components, ExtraProps } from 'react-markdown'
 import type { Element, ElementContent } from 'hast'
 import CodeBlock from './CodeBlock'
-import { escapeTableCellText, type MarkdownTableCellEditRequest } from './markdownTableEdit'
+import { escapeTableCellText, isTouchDoubleTap, type MarkdownTableCellEditRequest, type TouchTap } from './markdownTableEdit'
 import { useTablePan } from './useTablePan'
 import './markdown.css'
 
@@ -156,6 +156,10 @@ const baseTableWrapStyle: React.CSSProperties = {
   // 列内容不多时撑满容器,列宽总和超出容器时表格更宽,由本层出横向滚动条。
   overflowX: 'auto',
   overflowY: 'hidden',
+  // 移动端:禁用双击缩放(与单元格双击编辑冲突),保留滑动滚动手势与捏合缩放;
+  // 横向滚动到边后惯性不再向祖先链传导(页面横向本就不可滚)。
+  touchAction: 'manipulation',
+  overscrollBehaviorX: 'contain',
 }
 
 const baseTableStyle: React.CSSProperties = {
@@ -301,6 +305,8 @@ const cellInputStyle: React.CSSProperties = {
   outline: 'none',
   // 表格 wrap 的 grab 光标会继承到单元格;编辑态显式恢复文本光标。
   cursor: 'text',
+  // iOS Safari:输入框字号 < 16px 时聚焦会强制放大视口;取「继承字号与 16px 的较大者」。
+  fontSize: 'max(16px, 1em)',
 }
 
 /**
@@ -308,6 +314,9 @@ const cellInputStyle: React.CSSProperties = {
  * 编辑初值取源 markdown 原始片段(hast position offset 切片),用户改的就是源码,
  * 内联语法(`**粗体**` 等)原样保留;提交经 escapeTableCellText 转义 `|` 与换行。
  * 源定位(offset)缺失(如部分 rehype-raw 产物)或未注入提交回调时只读。
+ * 进入编辑:桌面走原生 dblclick;触屏/笔双击(tap-tap)自行判定——移动端
+ * dblclick 派发不可靠(iOS Safari 常缺失),配合 wrap 的 touch-action:manipulation
+ * 抑制系统双击缩放。
  */
 function useTableCellEditor(
   node: Element | undefined,
@@ -318,6 +327,9 @@ function useTableCellEditor(
   const [draft, setDraft] = React.useState('')
   const cancelledRef = React.useRef(false)
   const inputRef = React.useRef<HTMLInputElement | null>(null)
+  // 触屏/笔轻触轨迹:按下落点(抬起时判位移,滚动/长滑不算轻触)与上一次轻触时空坐标。
+  const touchDownRef = React.useRef<{ x: number; y: number } | null>(null)
+  const lastTapRef = React.useRef<TouchTap | null>(null)
 
   const startOffset = node?.position?.start?.offset
   const endOffset = node?.position?.end?.offset
@@ -354,6 +366,38 @@ function useTableCellEditor(
     if (editing) inputRef.current?.select()
   }, [editing])
 
+  /** 触屏/笔按下:记录落点(仅非 mouse 指针)。 */
+  const handleCellPointerDown = React.useCallback((event: React.PointerEvent<HTMLElement>) => {
+    if (event.pointerType === 'mouse') return
+    touchDownRef.current = { x: event.clientX, y: event.clientY }
+  }, [])
+
+  /** 触屏/笔抬起:位移小(轻触而非滚动)且与上次轻触构成 tap-tap → 进入编辑。 */
+  const handleCellPointerUp = React.useCallback((event: React.PointerEvent<HTMLElement>) => {
+    if (event.pointerType === 'mouse') return // 桌面双击走原生 dblclick。
+    if (!event.isPrimary) return // 多指手势(捏合缩放等)不算轻触。
+    const down = touchDownRef.current
+    touchDownRef.current = null
+    if (down == null) return
+    if (!editable || editing) return
+    // 按下→抬起位移过大 = 滚动手势,不是轻触。
+    if (Math.hypot(event.clientX - down.x, event.clientY - down.y) > 8) return
+    // 链接/输入框等交互元素上的轻触保持原生行为。
+    if ((event.target as HTMLElement | null)?.closest('a, input, textarea, button, [contenteditable]')) return
+    const tap: TouchTap = { time: event.timeStamp, x: event.clientX, y: event.clientY }
+    if (isTouchDoubleTap(lastTapRef.current, tap)) {
+      lastTapRef.current = null
+      beginEdit()
+    } else {
+      lastTapRef.current = tap
+    }
+  }, [beginEdit, editable, editing])
+
+  const touchHandlers = {
+    onPointerDown: handleCellPointerDown,
+    onPointerUp: handleCellPointerUp,
+  }
+
   const editor = editing ? (
     <input
       ref={inputRef}
@@ -373,7 +417,7 @@ function useTableCellEditor(
     />
   ) : null
 
-  return { editable, editing, beginEdit, editor }
+  return { editable, editing, beginEdit, editor, touchHandlers }
 }
 
 function buildWrapStyle(wrapLines: boolean | undefined): React.CSSProperties {
@@ -492,6 +536,7 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
     return (
       <th
         {...rest}
+        {...cell.touchHandlers}
         onDoubleClick={cell.editable && !cell.editing ? cell.beginEdit : undefined}
         title={cell.editable ? '双击编辑单元格' : undefined}
         style={{
@@ -514,6 +559,7 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
     return (
       <td
         {...rest}
+        {...cell.touchHandlers}
         onDoubleClick={cell.editable && !cell.editing ? cell.beginEdit : undefined}
         title={cell.editable ? '双击编辑单元格' : undefined}
         style={{

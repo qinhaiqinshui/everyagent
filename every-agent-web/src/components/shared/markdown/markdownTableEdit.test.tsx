@@ -1,8 +1,8 @@
 /**
  * 表格单元格编辑与列宽算法测试。
- * - markdownTableEdit 纯函数:转义口径、offset 区间替换与并发修改防护;
+ * - markdownTableEdit 纯函数:转义口径、offset 区间替换与并发修改防护、触屏双击判定;
  * - computeTableColumnWidths:max 单元格口径 + CJK 视觉宽度 + min/max clamp;
- * - 渲染级:colgroup ch 列宽、横向滚动 wrap、可编辑单元格标注。
+ * - 渲染级:colgroup ch 列宽、横向滚动 wrap、可编辑单元格标注、移动端 touch-action。
  */
 import { describe, it, expect } from 'vitest'
 import React from 'react'
@@ -12,6 +12,7 @@ import remarkGfm from 'remark-gfm'
 import {
   escapeTableCellText,
   replaceMarkdownRange,
+  isTouchDoubleTap,
 } from './markdownTableEdit'
 import { buildMarkdownComponents, computeTableColumnWidths } from './sharedMarkdownRenderer'
 
@@ -98,6 +99,30 @@ describe('computeTableColumnWidths(max 单元格口径)', () => {
   })
 })
 
+describe('isTouchDoubleTap(触屏双击判定)', () => {
+  const tap = (time: number, x = 0, y = 0) => ({ time, x, y })
+
+  it('间隔与位移都在阈值内判定为双击', () => {
+    expect(isTouchDoubleTap(tap(1000), tap(1200, 10, 5))).toBe(true)
+  })
+
+  it('超过时间窗(350ms)不算双击', () => {
+    expect(isTouchDoubleTap(tap(1000), tap(1400))).toBe(false)
+  })
+
+  it('位移过大(两指落点相距 > 40px)不算双击', () => {
+    expect(isTouchDoubleTap(tap(1000), tap(1100, 50, 0))).toBe(false)
+  })
+
+  it('首次轻触(无前次记录)不算双击', () => {
+    expect(isTouchDoubleTap(null, tap(1000))).toBe(false)
+  })
+
+  it('支持自定义阈值', () => {
+    expect(isTouchDoubleTap(tap(1000), tap(1100, 25), 200, 20)).toBe(false)
+  })
+})
+
 describe('表格渲染(列宽与可编辑标注)', () => {
   const md = '| 列一 | 列二 |\n| --- | --- |\n| 1 | 2 |'
 
@@ -121,6 +146,12 @@ describe('表格渲染(列宽与可编辑标注)', () => {
   it('包裹层允许横向滚动(overflow-x auto)', () => {
     const html = render(md)
     expect(html).toMatch(/overflow-x:auto/)
+  })
+
+  it('移动端口径:wrap 禁用双击缩放(touch-action manipulation)并遏制横向滚动链', () => {
+    const html = render(md)
+    expect(html).toMatch(/touch-action:manipulation/)
+    expect(html).toMatch(/overscroll-behavior-x:contain/)
   })
 
   it('注入 sourceText + onTableCellEdit 时单元格标注可编辑提示', () => {
