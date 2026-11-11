@@ -385,6 +385,18 @@ server {{
     location / {{
         try_files $uri $uri/ /index.html;
     }}
+
+    # SPA 缓存策略:index.html 禁缓存(每次协商校验 ETag,部署后立即生效),
+    # 带 hash 的 vite assets 长缓存不变。缺省 nginx 不发 Cache-Control,
+    # 浏览器按启发式缓存长时间复用旧 index.html → 引用旧 hash 资源,
+    # 出现「已部署但页面仍是旧版」。
+    location = /index.html {{
+        add_header Cache-Control "no-cache";
+    }}
+
+    location /assets/ {{
+        add_header Cache-Control "public, max-age=31536000, immutable";
+    }}
 }}
 """
 
