@@ -486,8 +486,12 @@ const floatHeaderBoxStyle: React.CSSProperties = {
   boxShadow: '0 4px 12px rgba(0, 0, 0, 0.18)',
 }
 
+/** 单元格编辑弹窗互斥注册表:后开的弹窗让先开的提交收口(同一时刻至多一弹窗)。 */
+const cellDialogClosers = new Set<() => void>()
+
 /**
- * 表格单元格编辑态(th/td 共用):双击进入编辑,Enter/blur 提交,Esc 取消。
+ * 表格单元格编辑态(th/td 共用):双击进入弹窗编辑,Ctrl+Enter/「保存」提交,Esc/「取消」关闭。
+ * 弹窗不随失焦或点击外部自动收口(显式操作才生效);双击其他单元格时旧弹窗自动提交收口。
  * 编辑初值取源 markdown 原始片段(hast position offset 切片),用户改的就是源码,
  * 内联语法(`**粗体**` 等)原样保留;提交经 escapeTableCellText 转义 `|` 与换行。
  * 源定位(offset)缺失(如部分 rehype-raw 产物)或未注入提交回调时只读。
@@ -504,12 +508,8 @@ function useTableCellEditor(
   const [draft, setDraft] = React.useState('')
   /** 展开浮层打开:双击单元格直接弹层编辑(唯一编辑形态)。 */
   const [expanded, setExpanded] = React.useState(false)
-  const cancelledRef = React.useRef(false)
   /** 宿主 td/th ref:浮层定位基准(锚定单元格矩形)。 */
   const hostRef = React.useRef<HTMLTableCellElement | null>(null)
-  /** 浮层打开标记(ref 形态供 onBlur 同步读取,避免闭包陈旧)。 */
-  const expandedRef = React.useRef(false)
-  const dialogRef = React.useRef<HTMLDivElement | null>(null)
   const dialogInputRef = React.useRef<HTMLTextAreaElement | null>(null)
   /** 展示态限高容器 ref(自测溢出:scrollHeight > clientHeight 即超高)。 */
   const displayWrapRef = React.useRef<HTMLDivElement | null>(null)
@@ -531,6 +531,9 @@ function useTableCellEditor(
 
   const beginEdit = React.useCallback(() => {
     if (original == null) return
+    // 弹窗互斥:先让别处已开的编辑弹窗提交收口,避免叠层(本格的 closer
+    // 在 expanded 生效后才注册,此时尚未登记,不会自己关自己)。
+    cellDialogClosers.forEach((close) => close())
     // 双击 = 直接弹层编辑(不再原地内嵌编辑框):所有单元格统一弹窗交互,
     // 超高内容天然获得完整编辑区,格高/行高不再受编辑影响。
     // 几何在切换编辑态前同步测量(此时 DOM 仍是原单元格,矩形有效)。
@@ -541,24 +544,22 @@ function useTableCellEditor(
         { width: window.innerWidth, height: window.innerHeight },
       )
       : null)
-    cancelledRef.current = false
     setDraft(original)
     setEditing(true)
-    expandedRef.current = true
     setExpanded(true)
     requestAnimationFrame(() => {
       const element = dialogInputRef.current
       if (element) {
         autoGrowTextArea(element)
+        // 聚焦但不全选:全选态下随手一敲会整段覆盖原内容;光标置于末尾便于追加。
         element.focus()
-        element.select()
+        const end = element.value.length
+        element.setSelectionRange(end, end)
       }
     })
   }, [original])
 
   const cancelEdit = React.useCallback(() => {
-    cancelledRef.current = true
-    expandedRef.current = false
     setExpanded(false)
     setEditing(false)
     setDialogGeometry(null)
@@ -566,11 +567,9 @@ function useTableCellEditor(
 
   const commitEdit = React.useCallback(() => {
     // 编辑只有浮层一种形态:提交即整单收口(in-cell 已移除)。
-    expandedRef.current = false
     setExpanded(false)
     setEditing(false)
     setDialogGeometry(null)
-    if (cancelledRef.current) return
     if (range == null || onTableCellEdit == null) return
     const next = escapeTableCellText(draft)
     if (next === range.original) return
@@ -581,30 +580,15 @@ function useTableCellEditor(
     setDraft(event.target.value)
   }, [])
 
-  /** 浮层内提交/取消:先收浮层再走原提交/取消路径。 */
-  const submitFromDialog = React.useCallback(() => {
-    expandedRef.current = false
-    setExpanded(false)
-    commitEdit()
-  }, [commitEdit])
-
-  const cancelFromDialog = React.useCallback(() => {
-    expandedRef.current = false
-    setExpanded(false)
-    cancelEdit()
-  }, [cancelEdit])
-
-  // 浮层打开期间:点击浮层外任意处 = 提交当前草稿(与 Excel 点外部保存一致)。
-  // 重新点击同一单元格不会误触:该 pointerdown 先落在外面,浮层已收口。
+  // 弹窗互斥登记:本格弹窗打开期间向注册表挂一个"提交收口"闭包,供其他单元格
+  // beginEdit 时调用(保留"切到别的单元格 = 保存旧编辑"预期,也避免弹窗叠层)。
+  // 注意不因失焦/点击弹窗外收口——误触外部(点别处、切窗口)不应丢编辑现场,
+  // 只有 Esc/「取消」/Ctrl+Enter/「保存」显式操作才收口。
   React.useEffect(() => {
     if (!expanded) return
-    const onPointerDown = (event: PointerEvent) => {
-      const target = event.target as Node | null
-      if (target && dialogRef.current?.contains(target)) return
-      commitEdit()
-    }
-    window.addEventListener('pointerdown', onPointerDown, true)
-    return () => window.removeEventListener('pointerdown', onPointerDown, true)
+    const close = () => commitEdit()
+    cellDialogClosers.add(close)
+    return () => { cellDialogClosers.delete(close) }
   }, [commitEdit, expanded])
 
   // 浮层几何在打开瞬间按宿主单元格矩形计算一次;编辑短暂,窗口缩放不重算。
@@ -652,7 +636,6 @@ function useTableCellEditor(
   const editor = editing && expanded && dialogGeometry && typeof document !== 'undefined' ? (
     createPortal(
       <div
-        ref={dialogRef}
         style={{
           ...cellDialogStyle,
           left: dialogGeometry.left,
@@ -664,10 +647,10 @@ function useTableCellEditor(
         onKeyDown={(event) => {
           if (event.key === 'Escape') {
             event.preventDefault()
-            cancelFromDialog()
+            cancelEdit()
           } else if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
             event.preventDefault()
-            submitFromDialog()
+            commitEdit()
           }
         }}
       >
@@ -679,10 +662,10 @@ function useTableCellEditor(
         />
         <div style={cellDialogActionsStyle}>
           <span style={cellDialogCountStyle}>{draft.length} 字</span>
-          <button type="button" onClick={cancelFromDialog} style={cellDialogCancelButtonStyle}>
+          <button type="button" onClick={cancelEdit} style={cellDialogCancelButtonStyle}>
             取消
           </button>
-          <button type="button" onClick={submitFromDialog} style={cellDialogSaveButtonStyle}>
+          <button type="button" onClick={commitEdit} style={cellDialogSaveButtonStyle}>
             保存
           </button>
         </div>
@@ -935,6 +918,7 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
         title={cell.editable ? '点击显示列宽把手；双击编辑单元格' : '点击显示列宽把手'}
       >
         {children}
+        {cell.editor}
         {showHandle ? (
           <span
             role="separator"
