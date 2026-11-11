@@ -9,14 +9,59 @@
 
 /** 一次单元格编辑提交请求(源文本 offset 区间替换)。 */
 export type MarkdownTableCellEditRequest = {
-  /** 单元格源文本起始 offset(hast position.start.offset)。 */
+  /** 单元格源文本起始 offset(经 resolveCellRange 规范化,不含分隔符)。 */
   start: number
-  /** 单元格源文本结束 offset(hast position.end.offset,开区间)。 */
+  /** 单元格源文本结束 offset(开区间,经 resolveCellRange 规范化)。 */
   end: number
   /** 编辑初值(进入编辑时的源片段),提交前校验源未被并发修改。 */
   original: string
   /** 编辑后文本(需先经 escapeTableCellText 转义)。 */
   next: string
+}
+
+/** 规范化后的单元格源区间(仅内容,边界分隔符已剥除)。 */
+export type MarkdownTableCellRange = {
+  start: number
+  end: number
+  original: string
+}
+
+/**
+ * 规范化 hast td/th 的 position offset 区间为「纯单元格内容」区间。
+ *
+ * remark-gfm 产出的单元格节点区间包含边界分隔符:前导 `|` 与空白;行内
+ * 最后一个单元格还包含行尾 `|`。直接用原始区间做编辑/替换会把分隔符吃进
+ * 单元格(编辑初值开头出现 `|`,提交后与相邻单元格合并、行尾管道丢失)。
+ * 这里把边界上未转义的 `|` 与空白逐个剥除;`\|` 转义竖线是内容,不动。
+ * 全部剥空(空单元格)时返回零宽区间(original='')。
+ */
+export function resolveCellRange(
+  source: string,
+  rawStart: number,
+  rawEnd: number,
+): MarkdownTableCellRange | null {
+  if (!Number.isInteger(rawStart) || !Number.isInteger(rawEnd)) return null
+  if (rawStart < 0 || rawEnd > source.length || rawStart > rawEnd) return null
+
+  let start = rawStart
+  let end = rawEnd
+
+  // 前导:空白与未转义 `|`(行首分隔符、与左格之间的分隔符)。
+  while (start < end && /\s/.test(source[start])) start += 1
+  while (start < end && source[start] === '|' && source[start - 1] !== '\\') {
+    start += 1
+    while (start < end && /\s/.test(source[start])) start += 1
+  }
+
+  // 尾部:空白与未转义 `|`(行内末格的行尾分隔符)。
+  while (end > start && /\s/.test(source[end - 1])) end -= 1
+  while (end > start && source[end - 1] === '|' && source[end - 2] !== '\\') {
+    end -= 1
+    while (end > start && /\s/.test(source[end - 1])) end -= 1
+  }
+
+  if (start > end) return null
+  return { start, end, original: source.slice(start, end) }
 }
 
 /**

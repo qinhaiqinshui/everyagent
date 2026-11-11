@@ -12,9 +12,117 @@ import remarkGfm from 'remark-gfm'
 import {
   escapeTableCellText,
   replaceMarkdownRange,
+  resolveCellRange,
   isTouchDoubleTap,
 } from './markdownTableEdit'
 import { buildMarkdownComponents, computeTableColumnWidths } from './sharedMarkdownRenderer'
+import { unified } from 'unified'
+import remarkParse from 'remark-parse'
+import remarkRehype from 'remark-rehype'
+
+describe('resolveCellRange(单元格区间规范化)', () => {
+  const source = '| a | b |\n| --- | --- |\n| c | d |'
+
+  it('剥除前导分隔符与空白(hast 区间含 `| 内容 `)', () => {
+    // mdast/hast 的 td 区间从前导 `|` 开始:source.slice(0,4) === '| a '。
+    expect(resolveCellRange(source, 0, 4)).toEqual({ start: 2, end: 3, original: 'a' })
+  })
+
+  it('剥除行尾单元格的行尾分隔符', () => {
+    // 末格区间含 `| d |`:前导管道 + 内容 + 空格 + 行尾管道。
+    const tail = source.lastIndexOf('| d |')
+    expect(resolveCellRange(source, tail, tail + 5)).toEqual({
+      start: tail + 2,
+      end: tail + 3,
+      original: 'd',
+    })
+  })
+
+  it('保留边界内的转义竖线 \\| (它是内容)', () => {
+    const md = '| a \\| b |'
+    // 区间整体 '| a \\| b |':边界管道剥除,内部 \\| 保留。
+    const range = resolveCellRange(md, 0, md.length)
+    expect(range?.original).toBe('a \\| b')
+  })
+
+  it('空单元格返回零宽区间', () => {
+    const md = '| a |  |'
+    // 末格区间 '|  |' 全是分隔符与空白。
+    const range = resolveCellRange(md, 5, md.length)
+    expect(range?.original).toBe('')
+    expect(range?.start).toBe(range?.end)
+  })
+
+  it('非法区间返回 null', () => {
+    expect(resolveCellRange(source, -1, 3)).toBeNull()
+    expect(resolveCellRange(source, 0, source.length + 1)).toBeNull()
+    expect(resolveCellRange(source, 5, 2)).toBeNull()
+    expect(resolveCellRange(source, Number.NaN, 3)).toBeNull()
+  })
+})
+
+describe('resolveCellRange 对真实 remark-gfm 管线(锁定分隔符口径)', () => {
+  const md = [
+    '| 名称 | 说明 |',
+    '| --- | --- |',
+    '| alpha | 带转义竖线 a \\| b |',
+    '| beta | 普通 |',
+  ].join('\n')
+
+  /** 走与 react-markdown 相同的 parse→gfm→rehype 管线,收集 hast td/th 的 position。 */
+  function collectCellOffsets(markdown: string): { tag: string; start: number; end: number }[] {
+    const proc = unified().use(remarkParse).use(remarkGfm).use(remarkRehype)
+    const hast = proc.runSync(proc.parse(markdown))
+    const cells: { tag: string; start: number; end: number }[] = []
+    const walk = (node: unknown): void => {
+      if (!node || typeof node !== 'object') return
+      const element = node as {
+        tagName?: string
+        position?: { start: { offset: number }; end: { offset: number } }
+        children?: unknown[]
+      }
+      if (element.tagName === 'td' || element.tagName === 'th') {
+        cells.push({ tag: element.tagName, start: element.position!.start.offset, end: element.position!.end.offset })
+      }
+      element.children?.forEach(walk)
+    }
+    walk(hast)
+    return cells
+  }
+
+  it('原始区间确实包含边界分隔符(口径前提)', () => {
+    const cells = collectCellOffsets(md)
+    // 首格区间以 `|` 开头、末格区间以 `|` 结尾——这是 resolveCellRange 存在的原因。
+    expect(md.slice(cells[0].start, cells[0].start + 1)).toBe('|')
+    expect(md.slice(cells[1].end - 1, cells[1].end)).toBe('|')
+  })
+
+  it('规范化后每个单元格 original 精确等于单元格文本', () => {
+    const expected = [
+      '名称', '说明',
+      'alpha', '带转义竖线 a \\| b',
+      'beta', '普通',
+    ]
+    const cells = collectCellOffsets(md)
+    const originals = cells.map((cell) => resolveCellRange(md, cell.start, cell.end)?.original)
+    expect(originals).toEqual(expected)
+  })
+
+  it('用规范化区间做替换:只改本格,不吞相邻分隔符', () => {
+    const cells = collectCellOffsets(md)
+    const target = cells.find((cell) => md.slice(cell.start, cell.end).includes('beta'))!
+    const range = resolveCellRange(md, target.start, target.end)!
+    const next = replaceMarkdownRange(md, {
+      start: range.start,
+      end: range.end,
+      original: range.original,
+      next: 'BETA',
+    })!
+    expect(next).toContain('| BETA |')
+    expect(next).toContain('| alpha |')
+    expect(next.split('\n')[3].split('|').filter(Boolean).length).toBe(2)
+  })
+})
 
 describe('escapeTableCellText', () => {
   it('未转义的竖线补转义', () => {

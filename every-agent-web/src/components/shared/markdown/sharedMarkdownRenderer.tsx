@@ -2,7 +2,7 @@ import React from 'react'
 import type { Components, ExtraProps } from 'react-markdown'
 import type { Element, ElementContent } from 'hast'
 import CodeBlock from './CodeBlock'
-import { escapeTableCellText, isTouchDoubleTap, type MarkdownTableCellEditRequest, type TouchTap } from './markdownTableEdit'
+import { escapeTableCellText, resolveCellRange, isTouchDoubleTap, type MarkdownTableCellEditRequest, type TouchTap } from './markdownTableEdit'
 import { useTablePan } from './useTablePan'
 import './markdown.css'
 
@@ -293,6 +293,7 @@ function stripNode<T extends object>(props: T): Omit<T, 'node'> {
 
 /** 表格单元格编辑输入框样式(编辑态下嵌入 td/th,宽度吃满单元格)。 */
 const cellInputStyle: React.CSSProperties = {
+  display: 'block',
   width: '100%',
   minWidth: 0,
   boxSizing: 'border-box',
@@ -302,11 +303,23 @@ const cellInputStyle: React.CSSProperties = {
   background: 'var(--bg-secondary)',
   color: 'var(--text-primary)',
   font: 'inherit',
+  lineHeight: 1.6,
   outline: 'none',
   // 表格 wrap 的 grab 光标会继承到单元格;编辑态显式恢复文本光标。
   cursor: 'text',
   // iOS Safari:输入框字号 < 16px 时聚焦会强制放大视口;取「继承字号与 16px 的较大者」。
   fontSize: 'max(16px, 1em)',
+  // 随内容自动增高(overflow hidden),超长内容封顶后内部滚动,不撑爆表格。
+  resize: 'none',
+  overflow: 'hidden',
+  maxHeight: '40vh',
+}
+
+/** textarea 高度自适应内容(单行起步,随换行/软换行增长)。 */
+function autoGrowTextArea(element: HTMLTextAreaElement | null): void {
+  if (!element) return
+  element.style.height = 'auto'
+  element.style.height = `${element.scrollHeight}px`
 }
 
 /**
@@ -326,18 +339,20 @@ function useTableCellEditor(
   const [editing, setEditing] = React.useState(false)
   const [draft, setDraft] = React.useState('')
   const cancelledRef = React.useRef(false)
-  const inputRef = React.useRef<HTMLInputElement | null>(null)
+  const inputRef = React.useRef<HTMLTextAreaElement | null>(null)
   // 触屏/笔轻触轨迹:按下落点(抬起时判位移,滚动/长滑不算轻触)与上一次轻触时空坐标。
   const touchDownRef = React.useRef<{ x: number; y: number } | null>(null)
   const lastTapRef = React.useRef<TouchTap | null>(null)
 
-  const startOffset = node?.position?.start?.offset
-  const endOffset = node?.position?.end?.offset
-  const original = React.useMemo(() => {
+  // hast 单元格区间含边界分隔符(前导 `|`、行尾 `|` 与空白),先规范化为纯内容区间,
+  // 否则编辑初值开头出现 `|`,提交替换会吞掉分隔符导致相邻单元格合并。
+  const range = React.useMemo(() => {
+    const startOffset = node?.position?.start?.offset
+    const endOffset = node?.position?.end?.offset
     if (sourceText == null || startOffset == null || endOffset == null) return null
-    if (startOffset < 0 || endOffset > sourceText.length || startOffset > endOffset) return null
-    return sourceText.slice(startOffset, endOffset)
-  }, [sourceText, startOffset, endOffset])
+    return resolveCellRange(sourceText, startOffset, endOffset)
+  }, [node, sourceText])
+  const original = range?.original ?? null
 
   const editable = original != null && onTableCellEdit != null
 
@@ -356,15 +371,25 @@ function useTableCellEditor(
   const commitEdit = React.useCallback(() => {
     setEditing(false)
     if (cancelledRef.current) return
-    if (original == null || onTableCellEdit == null || startOffset == null || endOffset == null) return
+    if (range == null || onTableCellEdit == null) return
     const next = escapeTableCellText(draft)
-    if (next === original) return
-    onTableCellEdit({ start: startOffset, end: endOffset, original, next })
-  }, [draft, endOffset, onTableCellEdit, original, startOffset])
+    if (next === range.original) return
+    onTableCellEdit({ start: range.start, end: range.end, original: range.original, next })
+  }, [draft, onTableCellEdit, range])
 
   React.useEffect(() => {
-    if (editing) inputRef.current?.select()
+    if (!editing) return
+    const element = inputRef.current
+    if (!element) return
+    autoGrowTextArea(element)
+    element.focus()
+    element.select()
   }, [editing])
+
+  const handleDraftChange = React.useCallback((event: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setDraft(event.target.value)
+    autoGrowTextArea(event.target)
+  }, [])
 
   /** 触屏/笔按下:记录落点(仅非 mouse 指针)。 */
   const handleCellPointerDown = React.useCallback((event: React.PointerEvent<HTMLElement>) => {
@@ -399,13 +424,15 @@ function useTableCellEditor(
   }
 
   const editor = editing ? (
-    <input
+    <textarea
       ref={inputRef}
+      rows={1}
       value={draft}
-      onChange={(event) => setDraft(event.target.value)}
+      onChange={handleDraftChange}
       onBlur={commitEdit}
       onKeyDown={(event) => {
-        if (event.key === 'Enter') {
+        if (event.key === 'Enter' && !event.shiftKey) {
+          // Enter 提交;Shift+Enter 允许软换行(提交时折叠为空格,单元格内不容纳换行)。
           event.preventDefault()
           commitEdit()
         } else if (event.key === 'Escape') {
