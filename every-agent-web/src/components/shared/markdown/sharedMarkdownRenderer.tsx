@@ -325,16 +325,21 @@ const cellInputStyle: React.CSSProperties = {
   cursor: 'text',
   // iOS Safari:输入框字号 < 16px 时聚焦会强制放大视口;取「继承字号与 16px 的较大者」。
   fontSize: 'max(16px, 1em)',
-  // 随内容自动增高(宽度吃满列宽);封顶 40vh 后出竖向滚动条,长内容编辑不撑爆表格。
+  // 铺满单元格:宽度吃满列宽;高度在进入编辑时按单元格原高测量注入(见 editHeight)。
+  // 内容超出固定高度时内部竖向滚动;40vh 封顶防超屏。
   resize: 'none',
   overflowX: 'hidden',
   overflowY: 'auto',
   maxHeight: '40vh',
 }
 
-/** textarea 高度自适应内容(单行起步,随换行/软换行增长)。 */
-function autoGrowTextArea(element: HTMLTextAreaElement | null): void {
+/** textarea 高度 = 单元格原高(进入编辑时测量);测量失败回退自动增高。 */
+function fitTextAreaHeight(element: HTMLTextAreaElement | null, height: number | null): void {
   if (!element) return
+  if (height != null) {
+    element.style.height = `${height}px`
+    return
+  }
   element.style.height = 'auto'
   element.style.height = `${element.scrollHeight}px`
 }
@@ -367,8 +372,12 @@ function useTableCellEditor(
 ) {
   const [editing, setEditing] = React.useState(false)
   const [draft, setDraft] = React.useState('')
+  /** 编辑框高度(px):进入编辑瞬间的单元格原高;null = 未测量(回退自动增高)。 */
+  const [editHeight, setEditHeight] = React.useState<number | null>(null)
   const cancelledRef = React.useRef(false)
   const inputRef = React.useRef<HTMLTextAreaElement | null>(null)
+  /** 宿主 td/th ref:进入编辑前测量原单元格高度(内容被替换后高度即失真)。 */
+  const hostRef = React.useRef<HTMLTableCellElement | null>(null)
   // 触屏/笔轻触轨迹:按下落点(抬起时判位移,滚动/长滑不算轻触)与上一次轻触时空坐标。
   const touchDownRef = React.useRef<{ x: number; y: number } | null>(null)
   const lastTapRef = React.useRef<TouchTap | null>(null)
@@ -387,6 +396,8 @@ function useTableCellEditor(
 
   const beginEdit = React.useCallback(() => {
     if (original == null) return
+    // 先测原单元格高度再切编辑态:内容一旦替换为输入框,单元格高度即失真。
+    setEditHeight(hostRef.current?.offsetHeight ?? null)
     cancelledRef.current = false
     setDraft(original)
     setEditing(true)
@@ -410,14 +421,13 @@ function useTableCellEditor(
     if (!editing) return
     const element = inputRef.current
     if (!element) return
-    autoGrowTextArea(element)
+    fitTextAreaHeight(element, editHeight)
     element.focus()
     element.select()
-  }, [editing])
+  }, [editing, editHeight])
 
   const handleDraftChange = React.useCallback((event: React.ChangeEvent<HTMLTextAreaElement>) => {
     setDraft(event.target.value)
-    autoGrowTextArea(event.target)
   }, [])
 
   /** 触屏/笔按下:记录落点(仅非 mouse 指针)。 */
@@ -455,7 +465,6 @@ function useTableCellEditor(
   const editor = editing ? (
     <textarea
       ref={inputRef}
-      rows={1}
       value={draft}
       onChange={handleDraftChange}
       onBlur={commitEdit}
@@ -473,7 +482,7 @@ function useTableCellEditor(
     />
   ) : null
 
-  return { editable, editing, beginEdit, editor, touchHandlers }
+  return { editable, editing, beginEdit, editor, hostRef, touchHandlers }
 }
 
 function buildWrapStyle(wrapLines: boolean | undefined): React.CSSProperties {
@@ -651,6 +660,7 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
     }, [cell.editing, headerEditingTracker])
     return (
       <th
+        ref={cell.hostRef}
         {...rest}
         {...cell.touchHandlers}
         onDoubleClick={cell.editable && !cell.editing ? cell.beginEdit : undefined}
@@ -674,6 +684,7 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
     const cell = useTableCellEditor(node, sourceText, onTableCellEdit)
     return (
       <td
+        ref={cell.hostRef}
         {...rest}
         {...cell.touchHandlers}
         onDoubleClick={cell.editable && !cell.editing ? cell.beginEdit : undefined}
