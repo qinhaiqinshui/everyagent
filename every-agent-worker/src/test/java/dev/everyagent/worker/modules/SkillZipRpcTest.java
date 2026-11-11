@@ -227,6 +227,55 @@ class SkillZipRpcTest {
         assertEquals(400 * 1024, entries.get("plan/blob.bin").length);
     }
 
+    // ---- skill.export:选择清单(skillIds) ----
+
+    @Test
+    void exportSelectedSkillIdsPacksOnlyThoseDirectoriesWithAuxFiles() throws Exception {
+        // plan 带 scripts/ 附属文件;extra 为第三个 skill(不应入包)
+        Files.createDirectories(skillsDir.resolve("plan").resolve("scripts"));
+        Files.writeString(skillsDir.resolve("plan").resolve("scripts").resolve("run.sh"), "echo 1\n");
+        Files.writeString(Files.createDirectories(skillsDir.resolve("extra")).resolve("skill.md"),
+                "# Extra\n\n不该入包。\n");
+
+        JsonNode result = rpcOk("skill.export",
+                Json.obj().set("skillIds", Json.arr().add("legacy-tool").add("plan")));
+
+        assertEquals(2, result.path("skillCount").asInt(), "打包的 skill 目录数 = 勾选数");
+        assertEquals(3, result.path("fileCount").asInt(),
+                "plan/skill.md + plan/scripts/run.sh + legacy-tool/skill.md");
+
+        Map<String, byte[]> entries = unzipOf(Base64.getDecoder().decode(result.path("base64").asString()));
+        assertEquals(3, entries.size(), "仅勾选目录入包: " + entries.keySet());
+        assertTrue(entries.containsKey("plan/skill.md"), "附属文件随目录入包");
+        assertTrue(entries.containsKey("plan/scripts/run.sh"), "scripts/ 附属文件入包");
+        assertTrue(entries.containsKey("legacy-tool/skill.md"));
+        assertFalse(entries.containsKey("extra/skill.md"), "未勾选的 extra 不入包");
+    }
+
+    @Test
+    void exportSkillIdsDeduplicated() throws Exception {
+        JsonNode result = rpcOk("skill.export",
+                Json.obj().set("skillIds", Json.arr().add("plan").add("plan")));
+        assertEquals(1, result.path("skillCount").asInt(), "重复 id 去重: " + result);
+    }
+
+    @Test
+    void exportUnknownSkillIdIsNotFound() {
+        JsonNode err = rpcErr("skill.export",
+                Json.obj().set("skillIds", Json.arr().add("plan").add("no-such")));
+        assertEquals("NOT_FOUND", err.path("code").asString(), "未知 skillId → NOT_FOUND: " + err);
+    }
+
+    @Test
+    void exportEmptySkillIdsArrayIsBadParams() {
+        assertEquals("BAD_PARAMS",
+                rpcErr("skill.export", Json.obj().set("skillIds", Json.arr())).path("code").asString(),
+                "空数组 → BAD_PARAMS(要全选就省略参数)");
+        assertEquals("BAD_PARAMS",
+                rpcErr("skill.export", Json.obj().put("skillIds", "plan")).path("code").asString(),
+                "非数组 → BAD_PARAMS");
+    }
+
     // ---- skill.import:成功路径 ----
 
     @Test

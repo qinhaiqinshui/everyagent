@@ -382,32 +382,36 @@ public class ConfigRpcHandler {
     private static final long MAX_IMPORT_UNCOMPRESSED = 256L * 1024 * 1024;
 
     /**
-     * skill.export:把该 worker 的整个 skill 目录({@code skillsDir} 全树)打包为临时 zip
-     * 回传给前端下载(§5.5)。应答分批语义与 {@code fs.readRaw} 逐字节一致:
-     * ≤{@code INLINE_MAX}(256KB)单帧 ok 内联 {@code base64};超限按 {@code CHUNK}(192KB)
-     * 分批 {@code rpc.data}({@code {offset,size,base64}})+ 末帧 ok 汇总。应答字段:
-     * {@code {skillCount, fileCount, size[, base64]}}。
+     * skill.export:把该 worker 的 skill 目录打包为临时 zip 回传给前端下载(§5.5)。
+     * 可选参数 {@code skillIds:[id,...]} = 导出清单(设置页弹选择框勾选,仅打包勾选的
+     * skill 目录,含附属 scripts/ 等文件):**缺省 = 全部**(全部一级 skill 子目录);
+     * 数组须非空(空数组/非数组 → BAD_PARAMS),每项须在目录扫描结果内且目录仍存在
+     * (否则 {@link NotFoundException},与 skill.exposure.set 同口径),重复项去重。
+     * 应答分批语义与 {@code fs.readRaw} 逐字节一致:≤{@code INLINE_MAX}(256KB)单帧 ok
+     * 内联 {@code base64};超限按 {@code CHUNK}(192KB)分批 {@code rpc.data}
+     * ({@code {offset,size,base64}})+ 末帧 ok 汇总。应答字段:
+     * {@code {skillCount(打包的 skill 目录数), fileCount, size[, base64]}}。
      *
      * <p>不含 {@code skill-exposure.json}(暴露配置的身份键是本机工作区根路径,跨机无意义);
-     * 临时 zip 流式回传完毕即删。目录不存在(全新安装未物化,理论不可达)降级为空 zip。
+     * 临时 zip 流式回传完毕即删。skillsDir 不存在(全新安装未物化,理论不可达)降级为空 zip。
      */
     void rpcSkillExport(RpcContext ctx) throws IOException {
         Path dir = skillCatalog.skillsDir();
-        int skillCount = skillCatalog.scan().size();
+        List<Path> roots = exportRoots(ctx, dir);
         Path zip = Files.createTempFile("everyagent-skills-", ".zip");
         try {
             int fileCount = 0;
             try (java.util.zip.ZipOutputStream zos =
                          new java.util.zip.ZipOutputStream(Files.newOutputStream(zip))) {
-                if (Files.isDirectory(dir)) {
+                for (Path root : roots) {
                     List<Path> paths;
-                    try (Stream<Path> walk = Files.walk(dir)) {
+                    try (Stream<Path> walk = Files.walk(root)) {
                         paths = walk.sorted(Comparator.naturalOrder()).toList();
                     }
                     for (Path p : paths) {
                         String rel = dir.relativize(p).toString().replace('\\', '/');
                         if (rel.isEmpty()) {
-                            continue; // 根自身
+                            continue; // 根自身(理论上不命中:rel 至少含 skill id 段)
                         }
                         java.util.zip.ZipEntry entry = new java.util.zip.ZipEntry(
                                 Files.isDirectory(p) ? rel + "/" : rel);
@@ -428,7 +432,7 @@ public class ConfigRpcHandler {
             long size = Files.size(zip);
             if (size <= FsService.INLINE_MAX) {
                 ctx.ok(Json.obj()
-                        .put("skillCount", skillCount)
+                        .put("skillCount", roots.size())
                         .put("fileCount", fileCount)
                         .put("size", size)
                         .put("base64", Base64.getEncoder().encodeToString(Files.readAllBytes(zip))));
@@ -451,11 +455,11 @@ public class ConfigRpcHandler {
                 }
             }
             ctx.ok(Json.obj()
-                    .put("skillCount", skillCount)
+                    .put("skillCount", roots.size())
                     .put("fileCount", fileCount)
                     .put("size", size));
-            log.info("skill.export 完成: {} 个 skill / {} 个文件 / {} 字节(zip 分批回传)",
-                    skillCount, fileCount, size);
+            log.info("skill.export 完成: {} 个 skill 目录 / {} 个文件 / {} 字节(zip 分批回传)",
+                    roots.size(), fileCount, size);
         } finally {
             try {
                 Files.deleteIfExists(zip);
@@ -463,6 +467,46 @@ public class ConfigRpcHandler {
                 // 临时文件删除失败无害(系统 temp 目录)
             }
         }
+    }
+
+    /**
+     * 解析导出清单为待打包的 skill 目录根列表(排序去重,zip 条目序确定)。
+     * 参数缺省/null = 全部(skillsDir 下全部一级子目录);数组须非空、每项须为
+     * catalog 内合法 skill id 且目录仍存在。
+     */
+    private List<Path> exportRoots(RpcContext ctx, Path dir) throws IOException {
+        JsonNode node = ctx.params().path("skillIds");
+        if (node.isMissingNode() || node.isNull()) {
+            if (!Files.isDirectory(dir)) {
+                return List.of(); // 全新安装未物化:降级为空 zip
+            }
+            try (Stream<Path> s = Files.list(dir)) {
+                return s.filter(Files::isDirectory).sorted().toList();
+            }
+        }
+        if (!node.isArray() || node.isEmpty()) {
+            throw new BadParamsException("参数 skillIds 须为非空的 skill id 数组(缺省 = 全部)");
+        }
+        Set<String> known = new HashSet<>();
+        for (Skill s : skillCatalog.scan()) {
+            known.add(s.id());
+        }
+        List<Path> roots = new ArrayList<>();
+        for (JsonNode n : node) {
+            if (!n.isTextual() || n.asString().isBlank()) {
+                throw new BadParamsException("skillIds 每项须为非空 skill id 字符串: " + n);
+            }
+            String id = n.asString().trim();
+            if (!known.contains(id)) {
+                throw new NotFoundException("skill 不存在: " + id);
+            }
+            Path sub = dir.resolve(id);
+            if (!Files.isDirectory(sub)) {
+                throw new NotFoundException("skill 目录不存在: " + id);
+            }
+            roots.add(sub);
+        }
+        return roots.stream().distinct().sorted().toList();
     }
 
     /**

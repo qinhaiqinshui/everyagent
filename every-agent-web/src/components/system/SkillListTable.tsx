@@ -15,12 +15,13 @@
  *   注意:内置/插件包是物化产物,worker 重启/插件 activate 时按内容逐字节比对会**覆盖**掉人工
  *   修改(用户自制 skill 目录不受影响);表格的 name/描述列来自 `SkillCatalog` 首次扫描的内存
  *   快照,改 frontmatter 后要重启 worker 才会在表格/`/` 菜单上体现(正文改动立即生效,AI 按需读盘);
- * - 导入/导出(每个 worker 分组头各一对,§5.5):「导出」→ 该 worker 的 `skill.export`(skillsDir
- *   全树 zip;小包单帧内联、大包 rpc.data 分批,onData 增量拼装)→ `downloadBlob` 存为
- *   `skills-<worker>.zip`;「导入」→ 文件选择器选 zip → 确认框(提示同名 skill 覆盖)→ 读字节
- *   base64 单帧 `skill.import`(前端预检 16MB,与 worker 上限对齐)→ 成功后 toast + 定向重载
- *   (worker 侧导入后失效 catalog 缓存重扫并广播 config.changed{keys:["skills"]},导入的 skill
- *   无需重启 worker 即出现在本表格);
+ * - 导入/导出(每个 worker 分组头各一对,§5.5):「导出」→ **弹选择框勾选 skill 清单**(默认全不选,
+ *   附「全选/清空」快捷与已选计数)→ 确认后该 worker 的 `skill.export{skillIds:[...]}`(仅打包勾选
+ *   的 skill 目录,含 scripts/ 等附属文件;小包单帧内联、大包 rpc.data 分批,onData 增量拼装)→
+ *   `downloadBlob` 存为 `skills-<worker>.zip`;「导入」→ 文件选择器选 zip → 确认框(提示同名 skill
+ *   覆盖)→ 读字节 base64 单帧 `skill.import`(前端预检 16MB,与 worker 上限对齐)→ 成功后 toast
+ *   + 定向重载(worker 侧导入后失效 catalog 缓存重扫并广播 config.changed{keys:["skills"]},导入的
+ *   skill 无需重启 worker 即出现在本表格);
  * - 刷新:`config.changed{keys:["skills"]}` 广播定向刷新来源 worker(机制同 modelConfigs),
  *   worker 连接集合变化时全量重载;组件卸载时清理全部订阅。
  */
@@ -182,6 +183,11 @@ export default function SkillListTable() {
 
   /** workerId → 进行中的 zip 操作('export'=导出中 / 'import'=导入中);undefined=空闲。 */
   const [zipBusy, setZipBusy] = React.useState<Record<string, 'export' | 'import' | undefined>>({})
+  /** 打开中的导出选择框(勾选 skill 清单后确认导出)。 */
+  const [exportDialog, setExportDialog] = React.useState<{ workerId: string } | null>(null)
+  /** 导出选择框勾选态(已勾选的 skill id 集合;默认全不选,须显式选择)。 */
+  const [checkedExport, setCheckedExport] = React.useState<Set<string>>(new Set())
+  const [exporting, setExporting] = React.useState(false)
   /** 待确认的导入(workerId + 已选 zip 文件)。 */
   const [importDialog, setImportDialog] = React.useState<{ workerId: string; file: File } | null>(null)
   const [importing, setImporting] = React.useState(false)
@@ -404,13 +410,33 @@ export default function SkillListTable() {
 
   // ---- 导入/导出 ----
 
-  /** 导出:skillsDir 全树 zip → 拼装分批 → 浏览器下载 skills-<worker>.zip。 */
-  const handleExport = async (workerId: string) => {
+  /** 打开导出选择框(勾选态清零,默认全不选——须显式选择要导出的 skill)。 */
+  const handleExportClick = (workerId: string) => {
     if (zipBusy[workerId]) return
+    setCheckedExport(new Set())
+    setExportDialog({ workerId })
+  }
+
+  const toggleExportSkill = (id: string, checked: boolean) => {
+    setCheckedExport((prev) => {
+      const next = new Set(prev)
+      if (checked) next.add(id)
+      else next.delete(id)
+      return next
+    })
+  }
+
+  /** 确认导出:skill.export{skillIds} → 拼装分批 → 浏览器下载 skills-<worker>.zip。 */
+  const handleExportConfirm = async () => {
+    if (!exportDialog || exporting || checkedExport.size === 0) return
+    const workerId = exportDialog.workerId
+    setExporting(true)
     setZipBusy((prev) => ({ ...prev, [workerId]: 'export' }))
     try {
       const parts: { offset: number; data: Uint8Array }[] = []
-      const result = await hubSession.rpcTo(workerId, 'skill.export', {}, {
+      const result = await hubSession.rpcTo(workerId, 'skill.export', {
+        skillIds: [...checkedExport],
+      }, {
         timeoutMs: ZIP_RPC_TIMEOUT_MS,
         onData: (batch) => {
           for (const item of batch as SkillExportPart[]) {
@@ -440,13 +466,59 @@ export default function SkillListTable() {
         new Blob([toArrayBuffer(bytes)], { type: 'application/zip' }),
         downloadFileName(workerId, displayName),
       )
-      const count = typeof result?.skillCount === 'number' ? result.skillCount : '未知数量'
-      showToast('已导出 ' + displayName + ' 的 skill 目录(' + count + ' 个 skill)', 'success')
+      const count = typeof result?.skillCount === 'number' ? result.skillCount : checkedExport.size
+      showToast('已导出 ' + displayName + ' 的 ' + count + ' 个 skill', 'success')
+      setExportDialog(null)
     } catch (error) {
       showToast('导出失败:' + errorMessage(error), 'error')
     } finally {
+      setExporting(false)
       setZipBusy((prev) => ({ ...prev, [workerId]: undefined }))
     }
+  }
+
+  /** 导出选择框主体:该 worker 的 skill 勾选清单(全选/清空快捷 + 已选计数)。 */
+  const renderExportDialogBody = (): React.ReactNode => {
+    if (!exportDialog) return null
+    const skills = groups[exportDialog.workerId]?.skills ?? []
+    return (
+      <div style={dialogBodyStyle}>
+        <div style={exportToolbarStyle}>
+          <Button
+            type="button"
+            variant="text"
+            size="sm"
+            disabled={exporting || skills.length === 0}
+            onClick={() => setCheckedExport(new Set(skills.map((s) => s.id)))}
+          >
+            全选
+          </Button>
+          <Button
+            type="button"
+            variant="text"
+            size="sm"
+            disabled={exporting || checkedExport.size === 0}
+            onClick={() => setCheckedExport(new Set())}
+          >
+            清空
+          </Button>
+          <span style={sectionHintStyle}>已选 {checkedExport.size} / {skills.length}</span>
+        </div>
+        <div style={wsListStyle}>
+          {skills.map((skill) => (
+            <label key={skill.id} style={wsRowStyle(false)} title={skill.knowledgePath}>
+              <Checkbox
+                checked={checkedExport.has(skill.id)}
+                disabled={exporting}
+                onChange={(event) => toggleExportSkill(skill.id, event.target.checked)}
+              />
+              <span style={exportIdStyle}>{skill.id}</span>
+              <span style={exportNameStyle}>{skillLabel(skill)}</span>
+            </label>
+          ))}
+        </div>
+      </div>
+    )
   }
 
   /** 选 zip → 确认框(覆盖提示)→ 确认后才发 RPC。 */
@@ -596,6 +668,7 @@ export default function SkillListTable() {
       {connectedWorkerIds.map((workerId) => {
         const group = groups[workerId] ?? emptyGroup('loading')
         const busy = zipBusy[workerId]
+        const exportable = group.status === 'loaded' && group.skills.length > 0
         return (
           <div key={workerId} style={groupStyle}>
             <div style={groupHeaderStyle}>
@@ -614,9 +687,9 @@ export default function SkillListTable() {
                   variant="secondary"
                   size="sm"
                   loading={busy === 'export'}
-                  disabled={Boolean(busy) && busy !== 'export'}
-                  title={'把该 worker 的整个 skill 目录打包为 zip 下载(不含按工作区的暴露配置)'}
-                  onClick={() => void handleExport(workerId)}
+                  disabled={!exportable || (Boolean(busy) && busy !== 'export')}
+                  title={'选择要导出的 skill,仅勾选目录打包为 zip 下载(不含按工作区的暴露配置)'}
+                  onClick={() => handleExportClick(workerId)}
                 >
                   导出
                 </Button>
@@ -637,6 +710,18 @@ export default function SkillListTable() {
           </div>
         )
       })}
+      <ConfirmDialog
+        open={Boolean(exportDialog)}
+        title={'导出 skill:' + (exportDialog ? workerNameOf(exportDialog.workerId) : '')}
+        subtitle="勾选要导出的 skill(仅勾选的目录打包为 zip,含 scripts/ 等附属文件;同名 skill 在导入时会被覆盖)。不含按工作区的暴露配置。"
+        confirmLabel={exporting ? '导出中…' : checkedExport.size > 0 ? '导出(' + checkedExport.size + ')' : '导出'}
+        hideDefaultMessageBlock
+        body={renderExportDialogBody()}
+        onConfirm={() => void handleExportConfirm()}
+        onCancel={() => {
+          if (!exporting) setExportDialog(null)
+        }}
+      />
       <ConfirmDialog
         open={Boolean(dialog)}
         title={'配置自动暴露:' + (dialog ? skillLabel(dialog.skill) : '')}
@@ -721,6 +806,30 @@ const groupActionsStyle: React.CSSProperties = {
   alignItems: 'center',
   gap: 6,
   flexShrink: 0,
+}
+
+const exportToolbarStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 4,
+}
+
+const exportIdStyle: React.CSSProperties = {
+  fontFamily: 'var(--font-mono, monospace)',
+  fontSize: 'var(--text-xs)',
+  color: 'var(--text-primary)',
+  whiteSpace: 'nowrap',
+  minWidth: 0,
+}
+
+const exportNameStyle: React.CSSProperties = {
+  fontSize: 'var(--text-xs)',
+  color: 'var(--text-muted)',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+  minWidth: 0,
+  marginLeft: 'auto',
 }
 
 const groupErrorStyle: React.CSSProperties = {
