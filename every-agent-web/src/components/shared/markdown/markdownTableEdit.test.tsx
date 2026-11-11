@@ -15,7 +15,7 @@ import {
   resolveCellRange,
   isTouchDoubleTap,
 } from './markdownTableEdit'
-import { buildMarkdownComponents, computeExpandDialogGeometry } from './sharedMarkdownRenderer'
+import { buildMarkdownComponents } from './sharedMarkdownRenderer'
 import { allocateColumnWidths, applyColumnOverrides, computeFallbackColumnWidths } from './useTableLayout'
 import { shouldPinHeader } from './usePinnedTableHeader'
 import { unified } from 'unified'
@@ -278,39 +278,6 @@ describe('shouldPinHeader(表头吸顶判定)', () => {
   it('表头高未知(0)时按表头顶缘贴线即吸顶(保守替身)', () => {
     expect(shouldPinHeader(-1, 500, 0, 0)).toBe(true)
     expect(shouldPinHeader(1, 500, 0, 0)).toBe(false)
-  })
-})
-
-describe('computeExpandDialogGeometry(展开浮层定位)', () => {
-  const viewport = { width: 1920, height: 1080 }
-
-  it('下方空间充足:锚在单元格下方(top = bottom + 8)', () => {
-    const g = computeExpandDialogGeometry({ left: 100, top: 200, bottom: 240, width: 300 }, viewport)
-    expect(g.placement).toBe('below')
-    expect(g.top).toBe(248)
-    expect(g.width).toBe(420) // 列宽 300 → 提升到下限 420
-  })
-
-  it('下方不足且上方充足:翻到单元格上方(bottom = 视口高 - top + 8)', () => {
-    const g = computeExpandDialogGeometry({ left: 100, top: 800, bottom: 900, width: 500 }, { width: 1280, height: 1000 })
-    expect(g.placement).toBe('above')
-    expect(g.bottom).toBe(1000 - 800 + 8)
-  })
-
-  it('上下都不足:兜底下方(fixed 层可溢出视口)', () => {
-    // 视口高 760:上方剩 250(<300)且下方剩 280(<300)。
-    const g = computeExpandDialogGeometry({ left: 50, top: 250, bottom: 480, width: 200 }, { width: 800, height: 760 })
-    expect(g.placement).toBe('below')
-  })
-
-  it('宽度钳制:列宽超大时上限 80vw', () => {
-    const g = computeExpandDialogGeometry({ left: 0, top: 100, bottom: 150, width: 1800 }, viewport)
-    expect(g.width).toBe(1536) // 1920 * 0.8
-  })
-
-  it('水平钳制:不让浮层超出视口右缘', () => {
-    const g = computeExpandDialogGeometry({ left: 1800, top: 100, bottom: 150, width: 200 }, { width: 1920, height: 1080 })
-    expect(g.left + g.width).toBeLessThanOrEqual(1920 - 8 + 1)
   })
 })
 

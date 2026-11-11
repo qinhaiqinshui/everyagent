@@ -328,9 +328,14 @@ function stripNode<T extends object>(props: T): Omit<T, 'node'> {
 }
 
 
-/** 展开编辑浮层容器(定位几何由 computeExpandDialogGeometry 注入)。 */
+/** 单元格编辑弹窗容器:视口居中(水平+垂直),整框封顶 100vh-24px,
+ * 内容超高时 textarea 内部滚动,底部按钮永不出屏。宽度按列宽自适应注入。 */
 const cellDialogStyle: React.CSSProperties = {
   position: 'fixed',
+  left: '50%',
+  top: '50%',
+  transform: 'translate(-50%, -50%)',
+  maxHeight: 'calc(100vh - 24px)',
   zIndex: 100,
   boxSizing: 'border-box',
   display: 'flex',
@@ -347,7 +352,7 @@ const cellDialogAreaStyle: React.CSSProperties = {
   width: '100%',
   boxSizing: 'border-box',
   minHeight: 120,
-  maxHeight: '60vh',
+  maxHeight: 'min(60vh, calc(100vh - 220px))',
   padding: '8px 10px',
   borderRadius: 'var(--radius-sm, 4px)',
   border: '1px solid var(--border)',
@@ -395,12 +400,15 @@ const cellDialogSaveButtonStyle: React.CSSProperties = {
   color: '#fff',
 }
 
-/** 浮层查看态内容预览区(富内联渲染,长内容内部滚动)。 */
-const cellDialogPreviewStyle: React.CSSProperties = {
-  ...cellDialogAreaStyle,
-  lineHeight: 1.8,
-  whiteSpace: 'normal',
+/** 浮层内 textarea 自由增高(无格高约束,封顶由 CSS maxHeight 钳制)。 */
+function autoGrowTextArea(element: HTMLTextAreaElement | null): void {
+  if (!element) return
+  element.style.height = 'auto'
+  element.style.height = `${element.scrollHeight}px`
 }
+
+/** 弹窗宽度下限/占位(px):窄列时编辑区仍保有舒展宽度。 */
+const CELL_DIALOG_MIN_WIDTH = 420
 
 /** 行高上限内容容器:td 是 table-cell,max-height 对其无效(CSS 规范),
  * 行高限制须作用于 td 内的块级内容层。超出以 -webkit-line-clamp 按行截断,
@@ -412,44 +420,6 @@ const rowClampStyle = (maxPx: number, lineHeightPx: number): React.CSSProperties
   overflow: 'hidden',
 })
 
-
-/** 浮层内 textarea 自由增高(无格高约束,封顶 60vh 由 CSS maxHeight 承担)。 */
-function autoGrowTextArea(element: HTMLTextAreaElement | null): void {
-  if (!element) return
-  element.style.height = 'auto'
-  element.style.height = `${element.scrollHeight}px`
-}
-
-/** 单元格展开编辑浮层(Excel 公式栏展开式)的定位几何。 */
-export type ExpandDialogGeometry = {
-  left: number
-  width: number
-  placement: 'below' | 'above'
-  /** placement=below 时的 fixed top(px)。 */
-  top?: number
-  /** placement=above 时的 fixed bottom(距视口底,px)。 */
-  bottom?: number
-}
-
-/**
- * 计算展开浮层几何:宽 = max(列宽, 420px) 上限 80vw;水平钳制在视口内;
- * 优先锚在单元格下方,下方空间不足(<300px)且上方充足时翻上方,
- * 两侧都不足时兜底下方(fixed 层可超出视口,编辑短暂可接受)。
- */
-export function computeExpandDialogGeometry(
-  host: { left: number; top: number; bottom: number; width: number },
-  viewport: { width: number; height: number },
-  minWidth = 420,
-): ExpandDialogGeometry {
-  const margin = 8
-  const width = Math.round(Math.min(Math.max(host.width, minWidth), viewport.width * 0.8))
-  const left = Math.min(Math.max(host.left, margin), Math.max(margin, viewport.width - width - margin))
-  const spaceBelow = viewport.height - host.bottom
-  const placement: 'below' | 'above' = spaceBelow >= 300 || host.top < 300 ? 'below' : 'above'
-  return placement === 'below'
-    ? { left, width, placement, top: Math.round(host.bottom + margin) }
-    : { left, width, placement, bottom: Math.round(viewport.height - host.top + margin) }
-}
 
 /** 吸顶浮动表头容器样式(position:fixed + 几何由吸顶快照注入)。 */
 const floatHeaderBoxStyle: React.CSSProperties = {
@@ -533,11 +503,11 @@ function useTableCellEditor(
   const [draft, setDraft] = React.useState('')
   /** 展开浮层打开:双击单元格直接弹层编辑(唯一编辑形态)。 */
   const [expanded, setExpanded] = React.useState(false)
-  /** 宿主 td/th ref:浮层定位基准(锚定单元格矩形)。 */
+  /** 弹窗宽度(px):按列宽自适应,打开瞬间测量一次;位置由 CSS 视口居中。 */
+  const [dialogWidth, setDialogWidth] = React.useState(0)
+  /** 宿主 td/th ref:弹窗宽度测量基准。 */
   const hostRef = React.useRef<HTMLTableCellElement | null>(null)
   const dialogInputRef = React.useRef<HTMLTextAreaElement | null>(null)
-  /** 展示态限高容器 ref(自测溢出:scrollHeight > clientHeight 即超高)。 */
-  const displayWrapRef = React.useRef<HTMLDivElement | null>(null)
   // 触屏/笔轻触轨迹:按下落点(抬起时判位移,滚动/长滑不算轻触)与上一次轻触时空坐标。
   const touchDownRef = React.useRef<{ x: number; y: number } | null>(null)
   const lastTapRef = React.useRef<TouchTap | null>(null)
@@ -559,16 +529,14 @@ function useTableCellEditor(
     // 弹窗互斥:先让别处已开的编辑弹窗提交收口,避免叠层(本格的 closer
     // 在 expanded 生效后才注册,此时尚未登记,不会自己关自己)。
     cellDialogClosers.forEach((close) => close())
-    // 双击 = 直接弹层编辑(不再原地内嵌编辑框):所有单元格统一弹窗交互,
-    // 超高内容天然获得完整编辑区,格高/行高不再受编辑影响。
-    // 几何在切换编辑态前同步测量(此时 DOM 仍是原单元格,矩形有效)。
+    // 双击 = 直接弹层编辑:所有单元格统一弹窗交互,超高内容天然获得完整编辑区。
+    // 宽度按列宽自适应(下限 420px,上限 80vw);测量在切换编辑态前同步执行
+    // (此时 DOM 仍是原单元格,矩形有效)。位置由 CSS 视口居中,无需几何计算。
     const host = hostRef.current?.getBoundingClientRect() ?? null
-    setDialogGeometry(host
-      ? computeExpandDialogGeometry(
-        { left: host.left, top: host.top, bottom: host.bottom, width: host.width },
-        { width: window.innerWidth, height: window.innerHeight },
-      )
-      : null)
+    setDialogWidth(Math.round(Math.min(
+      Math.max(host?.width ?? 0, CELL_DIALOG_MIN_WIDTH),
+      window.innerWidth * 0.8,
+    )))
     setDraft(original)
     setEditing(true)
     setExpanded(true)
@@ -587,14 +555,14 @@ function useTableCellEditor(
   const cancelEdit = React.useCallback(() => {
     setExpanded(false)
     setEditing(false)
-    setDialogGeometry(null)
+    setDialogWidth(0)
   }, [])
 
   const commitEdit = React.useCallback(() => {
     // 编辑只有浮层一种形态:提交即整单收口(in-cell 已移除)。
     setExpanded(false)
     setEditing(false)
-    setDialogGeometry(null)
+    setDialogWidth(0)
     if (range == null || onTableCellEdit == null) return
     const next = escapeTableCellText(draft)
     if (next === range.original) return
@@ -615,10 +583,6 @@ function useTableCellEditor(
     cellDialogClosers.add(close)
     return () => { cellDialogClosers.delete(close) }
   }, [commitEdit, expanded])
-
-  // 浮层几何在打开瞬间按宿主单元格矩形计算一次;编辑短暂,窗口缩放不重算。
-  // beginEdit 中同步测量(state 批处理 flush 前 DOM 仍是原单元格,矩形有效)。
-  const [dialogGeometry, setDialogGeometry] = React.useState<ExpandDialogGeometry | null>(null)
 
   const handleDialogChange = React.useCallback((event: React.ChangeEvent<HTMLTextAreaElement>) => {
     setDraft(event.target.value)
@@ -658,17 +622,11 @@ function useTableCellEditor(
   }
 
   // 编辑即浮层:双击单元格直接弹层编辑(portal 到 body),不再原地内嵌输入框。
-  const editor = editing && expanded && dialogGeometry && typeof document !== 'undefined' ? (
+  // 视口居中由 cellDialogStyle(left/top 50% + translate)承担;宽度按列宽注入。
+  const editor = editing && expanded && dialogWidth > 0 && typeof document !== 'undefined' ? (
     createPortal(
       <div
-        style={{
-          ...cellDialogStyle,
-          left: dialogGeometry.left,
-          width: dialogGeometry.width,
-          ...(dialogGeometry.placement === 'below'
-            ? { top: dialogGeometry.top }
-            : { bottom: dialogGeometry.bottom }),
-        }}
+        style={{ ...cellDialogStyle, width: dialogWidth }}
         onKeyDown={(event) => {
           if (event.key === 'Escape') {
             event.preventDefault()

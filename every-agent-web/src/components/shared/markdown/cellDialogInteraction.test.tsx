@@ -86,6 +86,9 @@ async function renderTable(
 const dialogTextareas = (): HTMLTextAreaElement[] =>
   Array.from(document.querySelectorAll<HTMLTextAreaElement>('textarea'))
 
+/** 弹窗容器(textarea 的父 div,经 portal 挂 body)。 */
+const dialogBox = (): HTMLElement | null => dialogTextareas()[0]?.parentElement ?? null
+
 describe('单元格编辑弹窗交互', () => {
   it('双击正文单元格弹出编辑窗:聚焦但不全选,光标落在内容末尾', async () => {
     const container = await renderTable()
@@ -101,6 +104,45 @@ describe('单元格编辑弹窗交互', () => {
     // 不全选(旧版 select():start=0、end=5);光标折叠在末尾。
     expect(textarea.selectionStart).toBe('alpha'.length)
     expect(textarea.selectionEnd).toBe('alpha'.length)
+  })
+
+  it('弹窗视口居中:left/top 50% + translate 反向偏移,不再锚定单元格旁', async () => {
+    const container = await renderTable()
+    const td = container.querySelector('td')!
+    await React.act(async () => {
+      fire(td, 'dblclick')
+    })
+    await nextFrame()
+    const box = dialogBox()
+    expect(box).not.toBeNull()
+    const style = box!.style
+    expect(style.position).toBe('fixed')
+    expect(style.left).toBe('50%')
+    expect(style.top).toBe('50%')
+    expect(style.transform).toContain('translate(-50%, -50%)')
+    // 旧版锚定定位注入的是像素坐标(left: "123px"),不应再出现。
+    expect(style.left).not.toMatch(/px/)
+  })
+
+  it('内容很多时按钮不被顶出屏幕:弹窗与编辑区均有 maxHeight 封顶', async () => {
+    const container = await renderTable()
+    const td = container.querySelector('td')!
+    await React.act(async () => {
+      fire(td, 'dblclick')
+    })
+    await nextFrame()
+    const box = dialogBox()!
+    const textarea = dialogTextareas()[0]
+    // 整框封顶:100vh - 24px(上下各留 12px 边距;jsdom 会重排 calc 项序,按包含断言)。
+    expect(box.style.maxHeight).toContain('100vh')
+    expect(box.style.maxHeight).toContain('24px')
+    // 编辑区封顶:60vh 且预留按钮区(100vh - 220px),长内容内部滚动。
+    expect(textarea.style.maxHeight).toContain('60vh')
+    expect(textarea.style.maxHeight).toContain('100vh')
+    // 底部操作行仍在弹窗内(保存按钮是 textarea 的后置兄弟)。
+    const saveButton = Array.from(box.querySelectorAll('button')).find((b) => b.textContent === '保存')
+    expect(saveButton).toBeDefined()
+    expect(box.contains(saveButton!)).toBe(true)
   })
 
   it('点击弹窗外部(失焦)不自动收口:弹窗保持打开', async () => {
