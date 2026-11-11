@@ -375,6 +375,12 @@ describe('表格渲染(列宽与可编辑标注)', () => {
     expect(html).not.toContain('Ctrl 拖动平移')
   })
 
+  it('单元格内容层按行截断并显示省略号(-webkit-line-clamp)', () => {
+    const html = render(md)
+    expect(html).toMatch(/-webkit-line-clamp:\d+/)
+    expect(html).toMatch(/display:-webkit-box/)
+  })
+
   it('静态渲染不产生吸顶浮动表头(吸顶仅在真实滚动几何下经 portal 挂载)', () => {
     const html = render(md)
     expect(html).not.toContain('position:fixed')

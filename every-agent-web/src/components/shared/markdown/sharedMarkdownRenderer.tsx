@@ -418,9 +418,12 @@ const columnHandleStyle: React.CSSProperties = {
 }
 
 /** 行高上限内容容器:td 是 table-cell,max-height 对其无效(CSS 规范),
- * 行高限制须作用于 td 内的块级内容层。 */
-const rowClampStyle = (maxPx: number): React.CSSProperties => ({
-  maxHeight: maxPx,
+ * 行高限制须作用于 td 内的块级内容层。超出以 -webkit-line-clamp 按行截断,
+ * 末行尾显示省略号;行数 = 上限px ÷ 实测行高(见 Td)。 */
+const rowClampStyle = (maxPx: number, lineHeightPx: number): React.CSSProperties => ({
+  display: '-webkit-box',
+  WebkitBoxOrient: 'vertical',
+  WebkitLineClamp: Math.max(1, Math.floor(maxPx / lineHeightPx)),
   overflow: 'hidden',
 })
 
@@ -999,6 +1002,21 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
       : MAX_ROW_PX
     const plainText = React.useMemo(() => collectHastText(node), [node])
 
+    // 实测行高(px):行数 = 行高上限 ÷ 行高。line-clamp 按行截断,省略号才生效;
+    // computedStyle 读到 "normal"(极少数)时回退 fontSize × 1.7(baseTdStyle 行高)。
+    const [lineHeightPx, setLineHeightPx] = React.useState(24)
+    React.useEffect(() => {
+      const host = cell.hostRef.current
+      if (!host) return
+      const style = window.getComputedStyle(host)
+      const lh = Number.parseFloat(style.lineHeight)
+      const fs = Number.parseFloat(style.fontSize)
+      const next = Number.isFinite(lh) && lh > 0
+        ? lh
+        : (Number.isFinite(fs) && fs > 0 ? fs * 1.7 : 24)
+      setLineHeightPx((prev) => (Math.abs(prev - next) > 0.5 ? next : prev))
+    }, [cell.hostRef])
+
     /** 命中底缘热区(行高拖动)。 */
     const hitRowEdge = (event: React.PointerEvent<HTMLElement>) => {
       const rect = event.currentTarget.getBoundingClientRect()
@@ -1076,9 +1094,9 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
               ⇕
             </span>
           )}
-        {cell.editing
-          ? <div style={rowClampStyle(rowMaxHeight)}>{cell.editor}</div>
-          : <div style={rowClampStyle(rowMaxHeight)}>{children}</div>}
+        <div style={rowClampStyle(rowMaxHeight, lineHeightPx)}>{children}</div>
+        {/* 编辑浮层(portal 到 body,不占位);编辑期间单元格保持原内容显示。 */}
+        {cell.editor}
       </td>
     )
   }
