@@ -292,6 +292,11 @@ describe('表格渲染(列宽与可编辑标注)', () => {
     expect(html).toMatch(/overflow-x:auto/)
   })
 
+  it('表格携带 md-table 类(列竖线由 markdown.css 按 :not(:last-child) 绘制)', () => {
+    const html = render(md)
+    expect(html).toContain('<table class="md-table"')
+  })
+
   it('移动端口径:wrap 禁用双击缩放(touch-action manipulation)并遏制横向滚动链', () => {
     const html = render(md)
     expect(html).toMatch(/touch-action:manipulation/)

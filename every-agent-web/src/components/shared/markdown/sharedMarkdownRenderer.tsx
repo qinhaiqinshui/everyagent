@@ -601,7 +601,7 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
           }}
           title={pan.pannable ? '按住 Ctrl 拖动平移表格；直接拖动可选择复制文本' : undefined}
         >
-          <table style={s.table}>
+          <table className="md-table" style={s.table}>
             {colgroup}
             {children}
           </table>
@@ -624,7 +624,7 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
                   transform: `translateX(${-pin.pinned.scrollLeft}px)`,
                 }}
               >
-                <table style={{ ...s.table, width: pin.pinned.tableWidth }}>
+                <table className="md-table" style={{ ...s.table, width: pin.pinned.tableWidth }}>
                   {colgroup}
                   {theadElement}
                 </table>

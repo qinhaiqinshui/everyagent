@@ -1,6 +1,6 @@
 /* Markdown 渲染（react-markdown）的结构性修正。
  * 基础样式走 buildMarkdownComponents 内联；此处仅处理内联样式难以表达的
- * 后代选择器场景。根容器需带 .md-root 类名。 */
+ * 后代/伪类选择器场景。根容器需带 .md-root 类名。 */
 
 /* 嵌套列表：li 内的 ul/ol 收紧上下间距 */
 .md-root li > ul,
@@ -12,4 +12,13 @@
  * 去掉段落 margin，避免与 li 自身间距叠加。 */
 .md-root li > p {
   margin: 0;
+}
+
+/* 表格列分隔线：除末列外单元格画右竖线（末列右缘紧贴 wrap 边框，重复画会双线）。
+ * 带边框的表头/吸顶克隆表共用 .md-table 类——克隆经 portal 挂在 body 下
+ * （不在 .md-root 内），故选择器直接锚定 .md-table。border-collapse:collapse
+ * 下相邻单元格共享同一条竖线，不会加倍。 */
+.md-table th:not(:last-child),
+.md-table td:not(:last-child) {
+  border-right: 1px solid var(--border-light);
 }
