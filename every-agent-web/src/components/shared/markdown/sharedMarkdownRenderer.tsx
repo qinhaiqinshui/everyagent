@@ -3,6 +3,7 @@ import type { Components, ExtraProps } from 'react-markdown'
 import type { Element, ElementContent } from 'hast'
 import CodeBlock from './CodeBlock'
 import { escapeTableCellText, type MarkdownTableCellEditRequest } from './markdownTableEdit'
+import { useTablePan } from './useTablePan'
 import './markdown.css'
 
 export type MarkdownVariant = 'preview' | 'display'
@@ -298,6 +299,8 @@ const cellInputStyle: React.CSSProperties = {
   color: 'var(--text-primary)',
   font: 'inherit',
   outline: 'none',
+  // 表格 wrap 的 grab 光标会继承到单元格;编辑态显式恢复文本光标。
+  cursor: 'text',
 }
 
 /**
@@ -450,8 +453,23 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
   const TableBlock = ({ node, children }: IntrinsicProps<'table'>) => {
     const { headers, rows } = extractTableMatrix(node)
     const widths = computeTableColumnWidths(headers, rows)
+    // 手型平移:仅横向溢出的大表格启用;Alt+拖动临时切回文本选择。
+    const pan = useTablePan()
+    const panCursor = pan.panning
+      ? 'grabbing'
+      : pan.pannable && !pan.altSelect ? 'grab' : undefined
     return (
-      <div style={s.tableWrap} {...sourceLineData(node)}>
+      <div
+        ref={pan.wrapRef}
+        {...sourceLineData(node)}
+        {...pan.handlers}
+        style={{
+          ...s.tableWrap,
+          ...(panCursor != null ? { cursor: panCursor } : null),
+          ...(pan.panning ? { userSelect: 'none' as const } : null),
+        }}
+        title={pan.pannable ? '拖动平移表格；按住 Alt 拖动可选择文本' : undefined}
+      >
         <table style={s.table}>
           {widths.length > 0 && (
             <colgroup>

@@ -136,4 +136,10 @@ describe('表格渲染(列宽与可编辑标注)', () => {
     const html = render(md)
     expect(html).not.toContain('双击编辑单元格')
   })
+
+  it('静态渲染(无溢出判定)不携带手型光标与拖动提示——普通表格选择不受打扰', () => {
+    const html = render(md)
+    expect(html).not.toContain('cursor:grab')
+    expect(html).not.toContain('拖动平移表格')
+  })
 })
