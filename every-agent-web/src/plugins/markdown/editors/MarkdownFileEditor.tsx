@@ -39,6 +39,9 @@ function MarkdownFileEditor({
   const previewRootRef = React.useRef<HTMLDivElement | null>(null)
   const previewComponentRef = React.useRef<React.ElementRef<typeof MarkdownPreview> | null>(null)
   const splitEditorRef = React.useRef<React.ElementRef<typeof MarkdownSplitEditor> | null>(null)
+  // 单元格编辑触发的 readonly→readwrite 升级标记:升级后保持在预览视图继续编辑,
+  // 而不像显式「编辑」按钮那样切入源码视图(渲染期同步处消费并清除)。
+  const cellEditUpgradeRef = React.useRef(false)
   const headings = React.useMemo<MarkdownHeading[]>(() => (
     parseMarkdownHeadings(mode === 'readonly' ? content : draftContent)
   ), [content, draftContent, mode])
@@ -52,7 +55,12 @@ function MarkdownFileEditor({
   if (mode !== prevMode) {
     setPrevMode(mode)
     if (mode === 'readwrite' && prevMode === 'readonly' && viewMode === 'preview') {
-      setViewMode('editor')
+      // 预览内单元格编辑触发的升级:保持预览视图继续编辑/查看;显式「编辑」按钮才切源码视图。
+      if (cellEditUpgradeRef.current) {
+        cellEditUpgradeRef.current = false
+      } else {
+        setViewMode('editor')
+      }
     } else if (mode === 'readonly') {
       setViewMode('preview')
     }
@@ -79,6 +87,21 @@ function MarkdownFileEditor({
       // ignore
     }
   }, [sourceContent])
+
+  /**
+   * 只读预览内的表格单元格编辑提交:先把编辑写入草稿(宿主 mode 切换不重读文件,
+   * 草稿无缝继承),再请求把文件标签升级为可编辑(用户随后经标题栏保存按钮落盘),
+   * 并记录当前阅读行号供升级后定位。升级后停留预览视图(cellEditUpgradeRef)。
+   */
+  const handleReadonlyCellEdit = React.useCallback((next: string) => {
+    const topLine = getPreviewTopSourceLine(previewRootRef.current)
+    if (topLine != null) {
+      setInitialEditLine(Math.max(1, Math.round(topLine)))
+    }
+    onDraftChange(next)
+    cellEditUpgradeRef.current = true
+    onRequestEditMode?.()
+  }, [onDraftChange, onRequestEditMode])
 
   const headerActions = React.useMemo<FileContentHeaderAction[]>(() => {
     const actions: FileContentHeaderAction[] = [
@@ -238,6 +261,7 @@ function MarkdownFileEditor({
                 wrapLines={wrapLines}
                 workspaceRoot={markdownPreviewContext.workspaceRoot}
                 baseDir={markdownPreviewContext.baseDir}
+                onContentChange={onRequestEditMode ? handleReadonlyCellEdit : undefined}
               />
             </div>
           </div>

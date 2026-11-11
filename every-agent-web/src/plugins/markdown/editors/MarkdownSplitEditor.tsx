@@ -322,6 +322,24 @@ const MarkdownSplitEditor = React.forwardRef<MarkdownSplitEditorHandle, Markdown
     }
   }, [initialEditorLine, viewMode, value])
 
+  // 首次挂载即在 preview 视图时(如只读预览内表格单元格编辑触发的模式升级,
+  // 组件树由 readonly 预览分支切换为 SplitEditor 但停留预览视图),用同一初始
+  // 行号定位预览,保持阅读位置;编辑器侧定位标记同步清除,避免后续切视图回跳。
+  React.useEffect(() => {
+    if (viewMode !== 'preview') return
+    const pending = pendingInitialPreviewLineRef.current
+    if (pending == null) return
+    pendingInitialPreviewLineRef.current = null
+    const element = previewScrollRef.current
+    if (!element) return
+    const raf = requestAnimationFrame(() => {
+      scrollPreviewToLine(previewScrollRef.current, pending)
+    })
+    return () => cancelAnimationFrame(raf)
+    // 仅挂载时消费一次;deps 留空,后续视图切换由上方 layout effect 接管。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   // 统一渲染 CodeMirror 编辑器（editor 模式和 split 模式共用;常挂载不随视图切换重建）。
   const editorPane = (
     <CodeMirrorEditor
@@ -351,7 +369,7 @@ const MarkdownSplitEditor = React.forwardRef<MarkdownSplitEditorHandle, Markdown
     >
       <div style={previewContentStyle}>
         {viewMode !== 'editor' ? (
-          <MarkdownPreview ref={previewRef} content={value} wrapLines={wrapLines} workspaceRoot={workspaceRoot} baseDir={baseDir} />
+          <MarkdownPreview ref={previewRef} content={value} wrapLines={wrapLines} workspaceRoot={workspaceRoot} baseDir={baseDir} onContentChange={onChange} />
         ) : null}
       </div>
     </div>

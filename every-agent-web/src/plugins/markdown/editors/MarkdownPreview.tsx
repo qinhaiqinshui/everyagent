@@ -11,6 +11,7 @@ import { isExternalLinkUrl, openExternalLink } from '@/platform/externalLink'
 import { parseMarkdownHeadings, resolveMarkdownHeadingAnchor, type MarkdownHeading } from './markdownOutline'
 import MarkdownImage from './MarkdownImage'
 import { rawHtmlRehypePlugins } from './rawHtmlPipeline'
+import { replaceMarkdownRange, type MarkdownTableCellEditRequest } from '@/components/shared/markdown/markdownTableEdit'
 
 export type MarkdownPreviewHandle = {
   /** 大纲选中标题时调用；返回该 id 是否存在于当前文档（用于决定是否滚动）。不再有折叠展开逻辑。 */
@@ -19,6 +20,8 @@ export type MarkdownPreviewHandle = {
 
 type MarkdownPreviewProps = {
   content: string
+  /** 内容回写通道(表格单元格编辑等预览内编辑);缺省时预览完全只读。 */
+  onContentChange?: (next: string) => void
   wrapLines?: boolean
   /** 所属工作区根(用于解析内嵌相对路径图片/文件链接);缺省时内嵌图片仅外部 URL 可渲染。 */
   workspaceRoot?: string
@@ -40,7 +43,7 @@ type MarkdownPreviewProps = {
  * - 外部链接(http(s)/mailto/tel) → web 新开浏览器标签页，desktop 交系统默认浏览器。
  */
 const MarkdownPreview = React.forwardRef<MarkdownPreviewHandle, MarkdownPreviewProps>(function MarkdownPreview(
-  { content, wrapLines = true, workspaceRoot, baseDir },
+  { content, onContentChange, wrapLines = true, workspaceRoot, baseDir },
   ref,
 ) {
   const { openGlobalFileTab } = useWorkspaceShell()
@@ -130,6 +133,12 @@ const MarkdownPreview = React.forwardRef<MarkdownPreviewHandle, MarkdownPreviewP
     return true
   }, [openWorkspaceFileLink, revealAnchor, showToast])
 
+  /** 表格单元格编辑提交:按 offset 区间替换源文本;源已被并发修改时放弃本次提交。 */
+  const handleTableCellEdit = React.useCallback((request: MarkdownTableCellEditRequest) => {
+    const next = replaceMarkdownRange(normalized, request)
+    if (next != null && next !== normalized) onContentChange?.(next)
+  }, [normalized, onContentChange])
+
   const components = React.useMemo(
     () => buildMarkdownComponents({
       variant: 'preview',
@@ -139,8 +148,10 @@ const MarkdownPreview = React.forwardRef<MarkdownPreviewHandle, MarkdownPreviewP
         ? (src, alt) => <MarkdownImage src={src} alt={alt} workspaceRoot={workspaceRoot} baseDir={baseDir} />
         : undefined,
       onLinkClick: handleLinkClick,
+      sourceText: onContentChange ? normalized : undefined,
+      onTableCellEdit: onContentChange ? handleTableCellEdit : undefined,
     }),
-    [wrapLines, headingIds, baseDir, workspaceRoot, handleLinkClick],
+    [wrapLines, headingIds, baseDir, workspaceRoot, handleLinkClick, onContentChange, handleTableCellEdit],
   )
 
   React.useImperativeHandle(ref, () => ({

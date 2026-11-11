@@ -2,6 +2,7 @@ import React from 'react'
 import type { Components, ExtraProps } from 'react-markdown'
 import type { Element, ElementContent } from 'hast'
 import CodeBlock from './CodeBlock'
+import { escapeTableCellText, type MarkdownTableCellEditRequest } from './markdownTableEdit'
 import './markdown.css'
 
 export type MarkdownVariant = 'preview' | 'display'
@@ -20,6 +21,10 @@ export type MarkdownComponentOptions = {
    * 缺省时保持默认行为：页内锚点禁用跳转，其余链接按外部链接新窗口打开。
    */
   onLinkClick?: (href: string) => boolean
+  /** 源 markdown 文本:表格单元格编辑的 offset 定位基准。缺省时表格单元格只读。 */
+  sourceText?: string
+  /** 表格单元格编辑提交(offset 区间替换源文本)。缺省时表格单元格只读。 */
+  onTableCellEdit?: (request: MarkdownTableCellEditRequest) => void
 }
 
 /** 统计列宽前剥离内联 markdown 语法（图片取 alt），避免语法符号干扰字符数占比。 */
@@ -30,52 +35,52 @@ function stripMarkdownInlineSyntax(text: string): string {
     .replace(/`([^`]+)`/g, '$1')
 }
 
+/** CJK/全角类字符集:这些字符渲染宽度约为拉丁字符 2 倍,列宽估算按 2 计。 */
+const WIDE_CHAR = /[\u1100-\u115f\u2e80-\u303f\u3041-\u33ff\u3400-\u4dbf\u4e00-\u9fff\ua000-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe4f\uff00-\uff60\uffe0-\uffe6]/
+
+/** 单元格视觉长度:CJK/全角计 2,其余计 1(与 ch 单位的宽度比例近似)。 */
+function visualCellLength(text: string): number {
+  let length = 0
+  for (const char of text) {
+    length += WIDE_CHAR.test(char) ? 2 : 1
+  }
+  return length
+}
+
+/** 列宽下限(ch):短列(如二字表头)也能舒适容纳内容与内边距,不至于被压扁。 */
+const MIN_COLUMN_CH = 10
+/** 列宽上限(ch):单列过宽严重伤可读性,超出的内容换行。60ch ≈ 30 个中文字。 */
+const MAX_COLUMN_CH = 60
+/** 单元格左右内边距折算(10px 12px × 2 ≈ 24px ≈ 3ch,随字号等比缩放取近似值)。 */
+const COLUMN_PAD_CH = 3
+
 /**
- * 按内容字符数比例计算各列宽度百分比。
- * 算法：每列所有行（含表头）文本字符数之和 ÷ 所有列总字符数 = 该列宽度占比；
- * 设最小列宽下限，防止内容极少的列被压扁，结果归一化保证总和为 100%。
+ * 按列内容计算列宽(ch 单位):每列取内容最多的那个单元格的视觉长度。
+ *
+ * 与旧版「全列字符总量占比百分比」不同,max 口径保证内容最多的单元格
+ * 决定本列宽度——长内容列获得足够横向空间而不是被挤压换行。
+ * 搭配 tableLayout:fixed + width:100%:表格至少撑满容器,列宽总和超出
+ * 容器时表格更宽、由外层横向滚动。
+ * 每列 clamp 到 [MIN_COLUMN_CH, MAX_COLUMN_CH],防止列无限宽/被压扁;
+ * 列很多时总和仍可超容器(横向滚动承载),不再回退压缩下限。
  */
 export function computeTableColumnWidths(headers: string[], rows: string[][]): string[] {
   const columnCount = headers.length
   if (columnCount === 0) return []
 
-  const totals = new Array<number>(columnCount).fill(0)
-  headers.forEach((header, index) => {
-    totals[index] += stripMarkdownInlineSyntax(header).length
-  })
-  rows.forEach((row) => {
-    for (let index = 0; index < columnCount; index += 1) {
-      totals[index] += stripMarkdownInlineSyntax(row[index] ?? '').length
-    }
-  })
-
-  const grandTotal = totals.reduce((sum, value) => sum + value, 0)
-  if (grandTotal === 0) {
-    return headers.map(() => `${(100 / columnCount).toFixed(2)}%`)
+  const maxLens = new Array<number>(columnCount).fill(0)
+  const measure = (text: string, index: number) => {
+    if (index >= columnCount) return
+    const length = visualCellLength(stripMarkdownInlineSyntax(text))
+    if (length > maxLens[index]) maxLens[index] = length
   }
+  headers.forEach(measure)
+  rows.forEach((row) => row.forEach(measure))
 
-  // 列很多时缩小下限，保证下限本身不会超过可分配总宽。
-  const minPercent = Math.min(8, 100 / columnCount)
-  const widths = new Array<number>(columnCount).fill(0)
-  let remaining = 100
-  let remainingWeight = 0
-
-  totals.forEach((total, index) => {
-    const percent = (total / grandTotal) * 100
-    if (percent < minPercent) {
-      widths[index] = minPercent
-      remaining -= minPercent
-    } else {
-      remainingWeight += total
-    }
+  return maxLens.map((maxLen) => {
+    const width = Math.min(MAX_COLUMN_CH, Math.max(MIN_COLUMN_CH, maxLen + COLUMN_PAD_CH))
+    return `${width}ch`
   })
-  totals.forEach((total, index) => {
-    if (widths[index] === 0 && remainingWeight > 0) {
-      widths[index] = (total / remainingWeight) * remaining
-    }
-  })
-
-  return widths.map((width) => `${width.toFixed(2)}%`)
 }
 
 /** 递归收集 hast 节点的纯文本内容。 */
@@ -146,7 +151,10 @@ const baseTableWrapStyle: React.CSSProperties = {
   width: '100%',
   border: '1px solid var(--border-light)',
   borderRadius: 'var(--radius-md)',
-  overflow: 'hidden',
+  // 表格 width:100% + tableLayout:fixed 下,表格宽度取 max(容器宽, Σ列宽):
+  // 列内容不多时撑满容器,列宽总和超出容器时表格更宽,由本层出横向滚动条。
+  overflowX: 'auto',
+  overflowY: 'hidden',
 }
 
 const baseTableStyle: React.CSSProperties = {
@@ -278,6 +286,93 @@ function stripNode<T extends object>(props: T): Omit<T, 'node'> {
   return rest as Omit<T, 'node'>
 }
 
+/** 表格单元格编辑输入框样式(编辑态下嵌入 td/th,宽度吃满单元格)。 */
+const cellInputStyle: React.CSSProperties = {
+  width: '100%',
+  minWidth: 0,
+  boxSizing: 'border-box',
+  padding: '5px 8px',
+  borderRadius: 'var(--radius-sm, 4px)',
+  border: '1px solid var(--accent-blue, var(--border))',
+  background: 'var(--bg-secondary)',
+  color: 'var(--text-primary)',
+  font: 'inherit',
+  outline: 'none',
+}
+
+/**
+ * 表格单元格编辑态(th/td 共用):双击进入编辑,Enter/blur 提交,Esc 取消。
+ * 编辑初值取源 markdown 原始片段(hast position offset 切片),用户改的就是源码,
+ * 内联语法(`**粗体**` 等)原样保留;提交经 escapeTableCellText 转义 `|` 与换行。
+ * 源定位(offset)缺失(如部分 rehype-raw 产物)或未注入提交回调时只读。
+ */
+function useTableCellEditor(
+  node: Element | undefined,
+  sourceText: string | undefined,
+  onTableCellEdit: ((request: MarkdownTableCellEditRequest) => void) | undefined,
+) {
+  const [editing, setEditing] = React.useState(false)
+  const [draft, setDraft] = React.useState('')
+  const cancelledRef = React.useRef(false)
+  const inputRef = React.useRef<HTMLInputElement | null>(null)
+
+  const startOffset = node?.position?.start?.offset
+  const endOffset = node?.position?.end?.offset
+  const original = React.useMemo(() => {
+    if (sourceText == null || startOffset == null || endOffset == null) return null
+    if (startOffset < 0 || endOffset > sourceText.length || startOffset > endOffset) return null
+    return sourceText.slice(startOffset, endOffset)
+  }, [sourceText, startOffset, endOffset])
+
+  const editable = original != null && onTableCellEdit != null
+
+  const beginEdit = React.useCallback(() => {
+    if (original == null) return
+    cancelledRef.current = false
+    setDraft(original)
+    setEditing(true)
+  }, [original])
+
+  const cancelEdit = React.useCallback(() => {
+    cancelledRef.current = true
+    setEditing(false)
+  }, [])
+
+  const commitEdit = React.useCallback(() => {
+    setEditing(false)
+    if (cancelledRef.current) return
+    if (original == null || onTableCellEdit == null || startOffset == null || endOffset == null) return
+    const next = escapeTableCellText(draft)
+    if (next === original) return
+    onTableCellEdit({ start: startOffset, end: endOffset, original, next })
+  }, [draft, endOffset, onTableCellEdit, original, startOffset])
+
+  React.useEffect(() => {
+    if (editing) inputRef.current?.select()
+  }, [editing])
+
+  const editor = editing ? (
+    <input
+      ref={inputRef}
+      value={draft}
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={commitEdit}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault()
+          commitEdit()
+        } else if (event.key === 'Escape') {
+          event.preventDefault()
+          cancelEdit()
+        }
+      }}
+      style={cellInputStyle}
+    />
+  ) : null
+
+  return { editable, editing, beginEdit, editor }
+}
+
 function buildWrapStyle(wrapLines: boolean | undefined): React.CSSProperties {
   return wrapLines === false
     ? { whiteSpace: 'pre', wordBreak: 'normal', overflowWrap: 'normal' }
@@ -311,7 +406,7 @@ function sourceLineData(node: Element | undefined): {
 }
 
 export function buildMarkdownComponents(options: MarkdownComponentOptions): Components {
-  const { variant, wrapLines = true, resolveHeadingId, renderImage, onLinkClick } = options
+  const { variant, wrapLines = true, resolveHeadingId, renderImage, onLinkClick, sourceText, onTableCellEdit } = options
   const s = variantStyles[variant]
   const wrap = buildWrapStyle(wrapLines)
 
@@ -375,9 +470,20 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
     const { children, align, node } = props
     const rest = stripNode(props)
     delete rest.align
+    const cell = useTableCellEditor(node, sourceText, onTableCellEdit)
     return (
-      <th {...rest} style={{ ...s.th, textAlign: (align ?? node?.properties?.align ?? 'left') as React.CSSProperties['textAlign'] }}>
-        {children}
+      <th
+        {...rest}
+        onDoubleClick={cell.editable && !cell.editing ? cell.beginEdit : undefined}
+        title={cell.editable ? '双击编辑单元格' : undefined}
+        style={{
+          ...s.th,
+          textAlign: (align ?? node?.properties?.align ?? 'left') as React.CSSProperties['textAlign'],
+          ...(cell.editable && !cell.editing ? { cursor: 'text' } : null),
+          ...(cell.editing ? { padding: 3 } : null),
+        }}
+      >
+        {cell.editing ? cell.editor : children}
       </th>
     )
   }
@@ -386,9 +492,20 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
     const { children, align, node } = props
     const rest = stripNode(props)
     delete rest.align
+    const cell = useTableCellEditor(node, sourceText, onTableCellEdit)
     return (
-      <td {...rest} style={{ ...s.td, textAlign: (align ?? node?.properties?.align) as React.CSSProperties['textAlign'] }}>
-        {children}
+      <td
+        {...rest}
+        onDoubleClick={cell.editable && !cell.editing ? cell.beginEdit : undefined}
+        title={cell.editable ? '双击编辑单元格' : undefined}
+        style={{
+          ...s.td,
+          textAlign: (align ?? node?.properties?.align) as React.CSSProperties['textAlign'],
+          ...(cell.editable && !cell.editing ? { cursor: 'text' } : null),
+          ...(cell.editing ? { padding: 3 } : null),
+        }}
+      >
+        {cell.editing ? cell.editor : children}
       </td>
     )
   }
