@@ -153,6 +153,9 @@ export type TableLayoutController = TableResizeController & {
   columnOverrides: Map<number, number>
   /** 手调行高(行 idx → max-height px)。 */
   rowOverrides: Map<number, number>
+  /** 当前显示调宽把手的列索引(null=无);单击表头切换/转移,点表外收起。 */
+  activeColumnHandle: number | null
+  setActiveColumnHandle: (index: number | null) => void
 }
 
 /** 列宽热区宽(px):th 右缘命中即列拖动。 */
@@ -166,7 +169,24 @@ export function useTableLayout(): TableLayoutController {
   const [chPx, setChPx] = React.useState(0)
   const [columnOverrides, setColumnOverrides] = React.useState(() => new Map<number, number>())
   const [rowOverrides, setRowOverrides] = React.useState(() => new Map<number, number>())
+  const [activeColumnHandle, setActiveColumnHandle] = React.useState<number | null>(null)
   const dragRef = React.useRef<DragState | null>(null)
+
+  // 把手收起规则:点击落在表头之外(其他单元格/表外)即清空——单击表头本身的
+  // 点击由 Th 的 onClick 设置(覆盖本规则,时序在后)。capture 阶段监听,
+  // 不与链接点击等原生行为冲突。
+  React.useEffect(() => {
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as HTMLElement | null
+      if (!target) return
+      const wrap = wrapRef.current
+      const th = target.closest('th')
+      if (wrap && th && wrap.contains(th)) return
+      setActiveColumnHandle((prev) => (prev == null ? prev : null))
+    }
+    window.addEventListener('pointerdown', onPointerDown, true)
+    return () => window.removeEventListener('pointerdown', onPointerDown, true)
+  }, [])
 
   // 容器宽度:ResizeObserver 持续跟踪(窗口缩放/布局变化)。
   React.useEffect(() => {
@@ -270,6 +290,8 @@ export function useTableLayout(): TableLayoutController {
     chPx,
     columnOverrides,
     rowOverrides,
+    activeColumnHandle,
+    setActiveColumnHandle,
     beginColumnResize,
     beginRowResize,
     resetColumn,

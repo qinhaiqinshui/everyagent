@@ -899,39 +899,13 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
       return () => headerEditingTracker.onChange(false)
     }, [cell.editing, headerEditingTracker])
 
-    // 长按表头 350ms → 显示本列调宽把手(↔ 出现在该列右缘);再单击表头任意处收起。
-    const [handleVisible, setHandleVisible] = React.useState(false)
-    const pressTimerRef = React.useRef<number | null>(null)
-    const clearPressTimer = React.useCallback(() => {
-      if (pressTimerRef.current != null) {
-        window.clearTimeout(pressTimerRef.current)
-        pressTimerRef.current = null
-      }
-    }, [])
-    React.useEffect(() => clearPressTimer, [clearPressTimer])
+    // 单击表头 = 切换本列调宽把手(再点同列收起,点其他列转移);双击仍编辑单元格。
+    const showHandle = resize != null && resize.activeColumnHandle === __columnIndex && __columnIndex != null && !cell.editing
 
-    const beginPress = React.useCallback((event: React.PointerEvent<HTMLElement>) => {
-      if (resize == null || __columnIndex == null || cell.editing) {
-        cell.touchHandlers.onPointerDown(event)
-        return
-      }
-      clearPressTimer()
-      pressTimerRef.current = window.setTimeout(() => {
-        pressTimerRef.current = null
-        setHandleVisible(true)
-        // 触觉反馈(支持的设备):长按成功出把手。
-        if (typeof navigator.vibrate === 'function') navigator.vibrate(10)
-      }, 350)
-      cell.touchHandlers.onPointerDown(event)
-    }, [__columnIndex, cell.editing, cell.touchHandlers, clearPressTimer, resize])
-
-    const handlePointerUp = (event: React.PointerEvent<HTMLElement>) => {
-      clearPressTimer()
-      resize?.dragHandlers.onPointerUp(event)
-      cell.touchHandlers.onPointerUp(event)
-    }
-
-    const showHandle = handleVisible && resize != null && __columnIndex != null && !cell.editing
+    const handleClick = React.useCallback(() => {
+      if (resize == null || __columnIndex == null || cell.editing) return
+      resize.setActiveColumnHandle(resize.activeColumnHandle === __columnIndex ? null : __columnIndex)
+    }, [__columnIndex, cell.editing, resize])
 
     return (
       <th
@@ -940,18 +914,15 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
         style={{
           ...s.th,
           position: 'relative',
-          ...(handleVisible ? { background: 'color-mix(in srgb, var(--accent-blue, #3b82f6) 12%, var(--bg-table))' } : null),
+          ...(showHandle ? { background: 'color-mix(in srgb, var(--accent-blue, #3b82f6) 12%, var(--bg-table))' } : null),
           textAlign: (align ?? node?.properties?.align ?? 'left') as React.CSSProperties['textAlign'],
         }}
-        onPointerDown={beginPress}
+        onClick={handleClick}
         onPointerMove={resize?.dragHandlers.onPointerMove}
-        onPointerUp={handlePointerUp}
-        onPointerCancel={(event) => {
-          clearPressTimer()
-          resize?.dragHandlers.onPointerCancel(event)
-        }}
+        onPointerUp={resize?.dragHandlers.onPointerUp}
+        onPointerCancel={resize?.dragHandlers.onPointerCancel}
         onDoubleClick={cell.editable && !cell.editing ? cell.beginEdit : undefined}
-        title={cell.editable ? '长按显示列宽把手；双击编辑单元格' : '长按显示列宽把手'}
+        title={cell.editable ? '点击显示列宽把手；双击编辑单元格' : '点击显示列宽把手'}
       >
         {children}
         {showHandle ? (
@@ -964,6 +935,7 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
               event.stopPropagation()
               resize!.beginColumnResize(__columnIndex!, event)
             }}
+            onClick={(event) => event.stopPropagation()}
             onDoubleClick={(event) => {
               event.stopPropagation()
               event.preventDefault()
@@ -972,17 +944,6 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
           >
             ↔
           </span>
-        ) : null}
-        {handleVisible ? (
-          // 把手可见时,点击表头其他区域收起把手(不冒泡到 th 的长按逻辑)。
-          <span
-            aria-hidden="true"
-            style={{ position: 'absolute', inset: 0, zIndex: 1, cursor: 'pointer' }}
-            onPointerDown={(event) => {
-              event.stopPropagation()
-              setHandleVisible(false)
-            }}
-          />
         ) : null}
       </th>
     )
