@@ -34,6 +34,7 @@ import { workspaceRegistry } from '@/hub/workspaceRegistry'
 import { useWorkspaceShell } from '@/components/app/WorkspaceShellContext'
 import { useAppUi } from '@/components/app/AppUiContext'
 import { onWorkerAliasesChanged, workerDisplayName } from '@/settings/workerAliases'
+import { machinePathToBusiness } from '@/platform/fs/pathUtils'
 import { downloadBlob } from '@/utils/downloadBlob'
 
 /** 导入 zip 的前端预检上限(与 worker 侧 skill.import 的 16MB 解码上限对齐)。 */
@@ -402,8 +403,12 @@ export default function SkillListTable() {
       return
     }
     // 以可编辑模式打开:详情页即编辑位(改正文/改 frontmatter 一处完成),不再要求先点标签页里的「编辑」。
+    // knowledgePath 是 worker 机器原始路径(Unix 绝路径 /home/... 单前导 /),必须走 machinePathToBusiness
+    // 转 `//` 业务外部标记后再交给文件标签页——直接透传会被 resolveMachinePath 当工作区相对路径拼接
+    // 工作区根,worker 报 NOT_FOUND(Linux worker 必现;Windows 盘符路径恰命中 isAbsoluteBusinessPath
+    // 而侥幸可用,同口径见 FileToolEntry.handleOpenFile)。
     openGlobalFileTab(
-      { workspaceRoot: anchor.root, filePath: skill.knowledgePath },
+      { workspaceRoot: anchor.root, filePath: machinePathToBusiness(skill.knowledgePath) },
       { mode: 'readwrite' },
     )
   }
