@@ -113,6 +113,11 @@ async function renderTable(): Promise<HTMLElement> {
 }
 
 const toolbar = (): Element | null => document.querySelector('.md-table-toolbar')
+/** 工具栏可见性(常驻 DOM,仅切 visibility——不再用节点存在性判定)。 */
+const toolbarShown = (): boolean => {
+  const el = toolbar()
+  return el != null && (el as HTMLElement).style.visibility !== 'hidden'
+}
 const colHandles = (): NodeListOf<Element> => document.querySelectorAll('[aria-label="调整列宽"]')
 const rowHandles = (): NodeListOf<Element> => document.querySelectorAll('[aria-label="调整行高"]')
 
@@ -144,17 +149,36 @@ async function hover(el: Element, over: boolean): Promise<void> {
 }
 
 describe('表格外浮动工具栏(单击表头切换)', () => {
-  it('默认隐藏:工具栏与把手栏均不渲染', async () => {
+  it('默认隐藏:工具栏常驻 DOM 但不可见,把手栏不渲染', async () => {
     await renderTable()
-    expect(toolbar()).toBeNull()
+    expect(toolbar()).not.toBeNull()
+    expect(toolbarShown()).toBe(false)
     expect(colHandles().length).toBe(0)
     expect(rowHandles().length).toBe(0)
+  })
+
+  it('悬停进出只切 visibility,不增删 DOM 节点(聊天流 MutationObserver 贴底回归)', async () => {
+    const restore = stubHoverMedia()
+    try {
+      const container = await renderTable()
+      const th = container.querySelector('th')!
+      await hover(th, true)
+      const shownEl = toolbar()!
+      expect(toolbarShown()).toBe(true)
+      await hover(th, false)
+      // 同一节点仍在文档中(未卸载重挂),仅 visibility 翻转——悬停类交互
+      // 对 DOM 结构零变更,不触发聊天页 MutationObserver 的自动贴底。
+      expect(toolbar()).toBe(shownEl)
+      expect((shownEl as HTMLElement).style.visibility).toBe('hidden')
+    } finally {
+      restore()
+    }
   })
 
   it('单击表头 → 工具栏显示(复制内容/调整表格),把手栏仍隐藏', async () => {
     const container = await renderTable()
     await clickHeader(container)
-    expect(toolbar()).not.toBeNull()
+    expect(toolbarShown()).toBe(true)
     expect(toolbar()!.textContent).toContain('复制内容')
     expect(toolbar()!.textContent).toContain('调整表格')
     expect(colHandles().length).toBe(0)
@@ -164,9 +188,9 @@ describe('表格外浮动工具栏(单击表头切换)', () => {
   it('再次单击表头 → 工具栏隐藏(切换)', async () => {
     const container = await renderTable()
     await clickHeader(container)
-    expect(toolbar()).not.toBeNull()
+    expect(toolbarShown()).toBe(true)
     await clickHeader(container)
-    expect(toolbar()).toBeNull()
+    expect(toolbarShown()).toBe(false)
   })
 
   it('「复制内容」→ 剪贴板收到整表 markdown 源码(offset 切片,保留原文)', async () => {
@@ -240,7 +264,7 @@ describe('表格外把手栏(工具栏「调整表格」切换)', () => {
     await clickToolbarButton('调整表格')
     expect(colHandles().length).toBe(0)
     expect(rowHandles().length).toBe(0)
-    expect(toolbar()).not.toBeNull()
+    expect(toolbarShown()).toBe(true)
   })
 
   it('工具栏隐藏时把手栏保持驻留(解耦:悬停离开/表头切换不收起调整模式)', async () => {
@@ -249,7 +273,7 @@ describe('表格外把手栏(工具栏「调整表格」切换)', () => {
     expect(colHandles().length).toBe(2)
     // 表头再次单击只是隐藏工具栏,把手栏驻留(= 旧版表头切换行为)。
     await clickHeader(container)
-    expect(toolbar()).toBeNull()
+    expect(toolbarShown()).toBe(false)
     expect(colHandles().length).toBe(2)
     expect(rowHandles().length).toBe(2)
   })
@@ -264,12 +288,12 @@ describe('表格外把手栏(工具栏「调整表格」切换)', () => {
       expect(colHandles().length).toBe(2)
       // 移开鼠标:工具栏(悬停态)隐藏,但调整模式驻留——不能跟着消失。
       await hover(th, false)
-      expect(toolbar()).toBeNull()
+      expect(toolbarShown()).toBe(false)
       expect(colHandles().length).toBe(2)
       expect(rowHandles().length).toBe(2)
       // 移回鼠标:工具栏重现,「调整表格」按钮保持激活态,可再点关闭。
       await hover(th, true)
-      expect(toolbar()).not.toBeNull()
+      expect(toolbarShown()).toBe(true)
       const adjustButton = Array.from(document.querySelectorAll<HTMLButtonElement>('.md-table-toolbar button'))
         .find((el) => el.textContent?.includes('调整表格'))
       expect(adjustButton?.getAttribute('aria-pressed')).toBe('true')
@@ -285,7 +309,7 @@ describe('表格外把手栏(工具栏「调整表格」切换)', () => {
     await enterAdjustMode(container)
     expect(colHandles().length).toBe(2)
     await clickCell(container)
-    expect(toolbar()).toBeNull()
+    expect(toolbarShown()).toBe(false)
     expect(colHandles().length).toBe(0)
     expect(rowHandles().length).toBe(0)
   })
@@ -343,9 +367,9 @@ describe('浮动工具栏(桌面悬停显示)', () => {
       const container = await renderTable()
       const th = container.querySelector('th')!
       await hover(th, true)
-      expect(toolbar()).not.toBeNull()
+      expect(toolbarShown()).toBe(true)
       await hover(th, false)
-      expect(toolbar()).toBeNull()
+      expect(toolbarShown()).toBe(false)
     } finally {
       restore()
     }
@@ -359,13 +383,13 @@ describe('浮动工具栏(桌面悬停显示)', () => {
       await hover(th, true)
       await clickHeader(container)
       await hover(th, false)
-      expect(toolbar()).not.toBeNull()
+      expect(toolbarShown()).toBe(true)
       await hover(th, true)
       await clickHeader(container)
       // 取消固定后指针仍在表格内(悬停中)→ 工具栏保持可见。
-      expect(toolbar()).not.toBeNull()
+      expect(toolbarShown()).toBe(true)
       await hover(th, false)
-      expect(toolbar()).toBeNull()
+      expect(toolbarShown()).toBe(false)
     } finally {
       restore()
     }
@@ -375,6 +399,6 @@ describe('浮动工具栏(桌面悬停显示)', () => {
     const container = await renderTable()
     const th = container.querySelector('th')!
     await hover(th, true)
-    expect(toolbar()).toBeNull()
+    expect(toolbarShown()).toBe(false)
   })
 })

@@ -1,7 +1,7 @@
 import React from 'react'
 import Markdown from "react-markdown"
 import remarkGfm from 'remark-gfm'
-import { buildMarkdownComponents } from './markdown/sharedMarkdownRenderer'
+import { buildMarkdownComponents, MarkdownSourceContext } from './markdown/sharedMarkdownRenderer'
 import { remarkFourTildeStrikethrough } from './markdown/remarkFourTildeStrikethrough'
 
 /**
@@ -16,24 +16,27 @@ import { remarkFourTildeStrikethrough } from './markdown/remarkFourTildeStriketh
  */
 const MarkdownDisplay = React.memo(function MarkdownDisplay({ content }: { content: string }) {
   const normalized = React.useMemo(() => normalizeMarkdownContent(content), [content])
-  // sourceText 供表格工具栏「复制内容」按 offset 切出整表 markdown 源码
-  // (offset 基准即传给 react-markdown 的 normalized 文本);不传 onTableCellEdit,
-  // 聊天场景单元格编辑保持关闭,与此前一致。
-  const components = React.useMemo(
-    () => buildMarkdownComponents({ variant: 'display', sourceText: normalized }),
-    [normalized],
-  )
+  // 源文本经 context 按消息注入(表格工具栏「复制内容」按 offset 切整表源码,
+  // offset 基准即传给 react-markdown 的 normalized 文本)。components 保持模块级
+  // 单例:若随内容重建,流式输出每个 token 都会让整棵 markdown 树卸载重挂
+  // (元素类型变了),还会在聊天流 MutationObserver 里制造大量 childList 变更。
+  const source = React.useMemo(() => ({ sourceText: normalized }), [normalized])
   if (!normalized.trim()) return null
   return (
     <div className="md-root" style={rootStyle}>
-      <Markdown remarkPlugins={[remarkGfm, remarkFourTildeStrikethrough]} components={components}>
-        {normalized}
-      </Markdown>
+      <MarkdownSourceContext.Provider value={source}>
+        <Markdown remarkPlugins={[remarkGfm, remarkFourTildeStrikethrough]} components={displayComponents}>
+          {normalized}
+        </Markdown>
+      </MarkdownSourceContext.Provider>
     </div>
   )
 })
 
 export default MarkdownDisplay
+
+/** 聊天场景组件映射（无工作区上下文、无大纲），模块级单例避免每次渲染重建。 */
+const displayComponents = buildMarkdownComponents({ variant: 'display' })
 
 /** 根容器：flex column gap:0，与旧自研 MarkdownDisplay 布局一致。 */
 const rootStyle: React.CSSProperties = {

@@ -35,6 +35,18 @@ const HeaderEditingContext = React.createContext<HeaderEditingTracker | null>(nu
 /** 表格调整(列宽/行高拖动)通道:TableBlock 的布局引擎经 context 下发 Th/Td。 */
 const TableResizeContext = React.createContext<TableLayoutController | null>(null)
 
+/**
+ * 消息级源文本注入通道:组件映射必须保持稳定(聊天 MarkdownDisplay 用模块级
+ * 单例,流式输出期间 components 引用恒定,整棵 markdown 树原位协调不重挂);
+ * 而表格复制/单元格编辑又需要随内容更新的源文本。经 context 解耦——
+ * Provider value 变化只重渲染消费者,不改变组件类型。缺省回落到
+ * buildMarkdownComponents 的 options 闭包值(preview 等单实例场景)。
+ */
+export const MarkdownSourceContext = React.createContext<{
+  sourceText?: string
+  onTableCellEdit?: (request: MarkdownTableCellEditRequest) => void
+}>({})
+
 export type MarkdownVariant = 'preview' | 'display'
 
 export type MarkdownComponentOptions = {
@@ -569,7 +581,10 @@ function resolveTableSourceMarkdown(
  * 表格外浮动工具栏(绝对定位于表格框右上,不占布局):
  * - 复制内容:整表 markdown 源码写入剪贴板,按钮短暂切换「已复制/复制失败」反馈;
  * - 调整表格:切换表外把手栏(列宽 ↔ / 行高 ⇕),即旧版「单击表头」的调整入口。
- * 可见性由 TableBlock 驱动(表头单击固定 + 桌面端悬停),此处只承载操作。
+ * 显隐由 TableBlock 驱动(表头单击固定 + 桌面端悬停)。**常驻 DOM、仅切
+ * visibility,不条件挂载**:悬停进出若增删节点,聊天流的 MutationObserver
+ * 贴底(TaskChat 对 childList 变更零甄别)会把整页滚到底部——悬停类交互
+ * 必须做到 DOM 结构零变更。visibility:hidden 同时把按钮移出 Tab 焦点序。
  */
 function TableToolbar(props: {
   node: Element | undefined
@@ -579,9 +594,11 @@ function TableToolbar(props: {
   layout: TableLayoutController
   /** 把手栏当前实际可见(按钮高亮;把手栏在表格上方时工具栏整体让位上移)。 */
   handlesActive: boolean
+  /** 工具栏是否可见(常驻 DOM,仅切 visibility;见组件注释)。 */
+  visible: boolean
   style?: React.CSSProperties
 }) {
-  const { node, sourceText, headers, rows, layout, handlesActive, style } = props
+  const { node, sourceText, headers, rows, layout, handlesActive, visible, style } = props
   const [feedback, setFeedback] = React.useState<'idle' | 'copied' | 'failed'>('idle')
   const feedbackTimer = React.useRef<number>(0)
   React.useEffect(() => () => window.clearTimeout(feedbackTimer.current), [])
@@ -600,7 +617,12 @@ function TableToolbar(props: {
   }, [handlesActive, layout])
 
   return (
-    <div className="md-table-toolbar" role="toolbar" aria-label="表格工具栏" style={{ ...tableToolbarStyle, ...style }}>
+    <div
+      className="md-table-toolbar"
+      role="toolbar"
+      aria-label="表格工具栏"
+      style={{ ...tableToolbarStyle, ...style, visibility: visible ? 'visible' : 'hidden' }}
+    >
       <button
         type="button"
         className="md-table-toolbar-button"
@@ -877,6 +899,9 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
 
   const TableBlock = ({ node, children }: IntrinsicProps<'table'>) => {
     const { headers, rows } = extractTableMatrix(node)
+    // 消息级源文本(context 优先,聊天单例场景;缺省回落 options 闭包值)。
+    const source = React.useContext(MarkdownSourceContext)
+    const tableSourceText = source.sourceText ?? sourceText
     // Ctrl 手型平移:默认原生选择复制;按住 Ctrl 变抓手,拖动平移(仅大表格)。
     const pan = useTablePan()
     const panCursor = pan.panning
@@ -1006,22 +1031,23 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
             } : null)}
           >
             {/* 浮动工具栏(绝对定位表格框右上,不占布局):复制内容 + 调整表格。
-                把手栏可见时整体让位上移,避开顶栏右缘的列宽把手。 */}
-            {layout.toolbarVisible ? (
-              <TableToolbar
-                node={node}
-                sourceText={sourceText}
-                headers={headers}
-                rows={rows}
-                layout={layout}
-                handlesActive={guttersReady}
-                style={{
-                  top: guttersReady
-                    ? -(COL_GUTTER_PX + TABLE_TOOLBAR_H / 2 + 2)
-                    : -(TABLE_TOOLBAR_H / 2 - 1),
-                }}
-              />
-            ) : null}
+                把手栏可见时整体让位上移,避开顶栏右缘的列宽把手。
+                常驻挂载、仅切 visibility:悬停进出不得增删 DOM 节点,否则聊天流
+                的 MutationObserver 贴底(childList 零甄别)会把页面滚到底部。 */}
+            <TableToolbar
+              node={node}
+              sourceText={tableSourceText}
+              headers={headers}
+              rows={rows}
+              layout={layout}
+              handlesActive={guttersReady}
+              visible={layout.toolbarVisible}
+              style={{
+                top: guttersReady
+                  ? -(COL_GUTTER_PX + TABLE_TOOLBAR_H / 2 + 2)
+                  : -(TABLE_TOOLBAR_H / 2 - 1),
+              }}
+            />
             {/* 行高把手栏(表外左栏):每行底缘一个 ⇕,槽高与表格行实测高对齐。 */}
             {guttersReady ? (
               <div className="md-table-gutter" style={rowGutterStyle}>
@@ -1149,7 +1175,8 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
     delete rest.align
     delete rest.__columnIndex
     delete rest.__rowIndex
-    const cell = useTableCellEditor(node, sourceText, onTableCellEdit)
+    const source = React.useContext(MarkdownSourceContext)
+    const cell = useTableCellEditor(node, source.sourceText ?? sourceText, source.onTableCellEdit ?? onTableCellEdit)
     const resize = React.useContext(TableResizeContext)
     // 表头单元格编辑态上报:编辑期间所属表格关闭表头吸顶(克隆表头与在流编辑态不共享)。
     const headerEditingTracker = React.useContext(HeaderEditingContext)
@@ -1189,7 +1216,8 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
     delete rest.align
     delete rest.__columnIndex
     delete rest.__rowIndex
-    const cell = useTableCellEditor(node, sourceText, onTableCellEdit)
+    const source = React.useContext(MarkdownSourceContext)
+    const cell = useTableCellEditor(node, source.sourceText ?? sourceText, source.onTableCellEdit ?? onTableCellEdit)
     const resize = React.useContext(TableResizeContext)
     /** 行高上限:用户手调(表外左栏 ⇕ 把手)优先,默认 MAX_ROW_PX;编辑态同样生效。 */
     const rowMaxHeight = resize && __rowIndex != null
