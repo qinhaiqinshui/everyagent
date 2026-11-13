@@ -50,3 +50,12 @@ export function useAppUi() {
   }
   return context
 }
+
+/**
+ * 可选读取 UI 级上下文；未提供 Provider 时返回 null。
+ * 供可选消费场景（如 markdown 链接导航）降级：缺失时提示走 noop，
+ * 避免 shared 组件在无 UI 壳层环境（测试等）渲染即抛错。
+ */
+export function useAppUiOptional(): AppUiContextValue | null {
+  return React.useContext(AppUiContext)
+}

@@ -47,6 +47,17 @@ export const MarkdownSourceContext = React.createContext<{
   onTableCellEdit?: (request: MarkdownTableCellEditRequest) => void
 }>({})
 
+/**
+ * 消息级链接导航注入通道：与 MarkdownSourceContext 同理——组件映射必须保持稳定
+ * （聊天 MarkdownDisplay 用模块级单例，流式输出期间 components 引用恒定，整棵
+ * markdown 树原位协调不重挂），而 onLinkClick 依赖随消息/工作区变化的回调。
+ * 经 context 解耦——Provider value 变化只重渲染消费者(a 组件)，不改变组件类型。
+ * 缺省回落到 buildMarkdownComponents 的 options 闭包值（preview 等单实例场景）。
+ */
+export const MarkdownLinkContext = React.createContext<{
+  onLinkClick?: (href: string) => boolean
+}>({})
+
 export type MarkdownVariant = 'preview' | 'display'
 
 export type MarkdownComponentOptions = {
@@ -1347,18 +1358,21 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
     a: (props: IntrinsicProps<'a'>) => {
       const { children, href } = props
       const rest = stripNode(props)
+      // 消息级注入(display 场景经 MarkdownLinkContext)优先，缺省回落 options 闭包(preview)。
+      const { onLinkClick: contextLinkClick } = React.useContext(MarkdownLinkContext)
+      const linkClick = contextLinkClick ?? onLinkClick
       // 页内锚点链接(如目录 #xxx)：一律拦截浏览器默认跳转(改 hash 会扰动 SPA 路由)，
-      // 是否真正导航由 onLinkClick 决定(未提供时点击无动作，与旧行为一致——导航由大纲面板承担)。
+      // 是否真正导航由 linkClick 决定(未提供时点击无动作，与旧行为一致——导航由大纲面板承担)。
       if (typeof href === 'string' && href.startsWith('#')) {
         return (
           <a
             {...rest}
             href={href}
-            style={{ ...baseLinkStyle, cursor: onLinkClick ? 'pointer' : 'text' }}
+            style={{ ...baseLinkStyle, cursor: linkClick ? 'pointer' : 'text' }}
             onClick={(event) => {
               event.preventDefault()
-              if (!onLinkClick || !isPlainLeftClick(event)) return
-              onLinkClick(href)
+              if (!linkClick || !isPlainLeftClick(event)) return
+              linkClick(href)
             }}
           >
             {children}
@@ -1373,10 +1387,10 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
           rel="noopener noreferrer nofollow"
           style={baseLinkStyle}
           onClick={(event) => {
-            if (!onLinkClick) return
+            if (!linkClick) return
             if (typeof href !== 'string' || !href || !isPlainLeftClick(event)) return
             // 接管方(如工作区文件链接)已处理时拦截默认新开标签页；未处理(返回 false)走浏览器默认。
-            if (onLinkClick(href)) event.preventDefault()
+            if (linkClick(href)) event.preventDefault()
           }}
         >
           {children}

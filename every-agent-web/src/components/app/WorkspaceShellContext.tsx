@@ -138,3 +138,12 @@ export function useWorkspaceShell(): WorkspaceShellContextValue {
   }
   return context
 }
+
+/**
+ * 可选读取工作区壳层上下文；未提供 Provider 时返回 null。
+ * 供可选消费场景（如 markdown 链接导航）降级：缺失时不接管、保留默认行为，
+ * 避免 shared 组件在无壳层环境（测试等）渲染即抛错。
+ */
+export function useWorkspaceShellOptional(): WorkspaceShellContextValue | null {
+  return React.useContext(WorkspaceShellContext)
+}

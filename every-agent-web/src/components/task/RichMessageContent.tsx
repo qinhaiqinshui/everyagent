@@ -1,6 +1,7 @@
 import React from 'react'
 import { outputBlockRegistry } from '@/plugin/outputBlockRegistry'
 import MarkdownDisplay from '@/components/shared/MarkdownDisplay'
+import { useTaskWorkspaceRoot } from './TaskWorkspaceContext'
 
 /**
  * 富文本消息内容属性。
@@ -26,8 +27,8 @@ interface ContentSegment {
   truncated?: boolean
 }
 
-function renderPlainText(value: string): React.ReactNode {
-  return <MarkdownDisplay content={value} />
+function renderPlainText(value: string, workspaceRoot?: string): React.ReactNode {
+  return <MarkdownDisplay content={value} workspaceRoot={workspaceRoot} />
 }
 
 /**
@@ -92,18 +93,20 @@ function splitByOutputTags(content: string, messageStreaming?: boolean): Content
  * 纯文本消息原样渲染（保留换行）。
  */
 export default function RichMessageContent({ content, taskId, messageId, messageStreaming }: RichMessageContentProps): React.ReactNode {
+  // 消息内相对路径链接点击打开文件标签页,需要任务挂靠的工作区根(深层组件直达,免多层透传)。
+  const workspaceRoot = useTaskWorkspaceRoot()
   if (!content?.trim()) {
     return null
   }
   const segments = splitByOutputTags(content, messageStreaming)
   if (segments.length === 1 && segments[0].type === 'text') {
-    return renderPlainText(content)
+    return renderPlainText(content, workspaceRoot)
   }
   return (
     <div className="nagent-rich-content">
       {segments.map((segment, index) => {
         if (segment.type === 'text') {
-          return <React.Fragment key={index}>{renderPlainText(segment.value)}</React.Fragment>
+          return <React.Fragment key={index}>{renderPlainText(segment.value, workspaceRoot)}</React.Fragment>
         }
         const handler = segment.tag ? outputBlockRegistry.get(segment.tag) : undefined
         const node = handler
