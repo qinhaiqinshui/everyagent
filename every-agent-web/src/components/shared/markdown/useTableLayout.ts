@@ -2,8 +2,9 @@ import React from 'react'
 
 /**
  * 表格布局引擎(Excel/AG Grid 式):
- * - 列宽:内容理想宽(每列最宽单元格)钳制 [64px, 容器宽 20%] → 总宽不足容器时
- *   同比放大撑满,超出则横向滚动;用户手调列 px 覆盖(其余列不动,Excel 式);
+ * - 列宽:内容理想宽(每列最宽单元格)钳 (64px, 容器宽 20%] → 总宽不足容器时
+ *   富余优先补给被上限钳掉的列(按缺口比例),仍有富余再按内容占比分;
+ *   超出容器则横向滚动;用户手调列 px 覆盖(其余列不动,Excel 式);
  * - 行高:内容默认上限 96px(约 4 行)裁剪,用户拖行边界覆盖;
  * - 手调数据仅存 React state(内存态),刷新/卸载即失。
  *
@@ -35,8 +36,6 @@ function stripMarkdownInlineSyntax(text: string): string {
     .replace(/`([^`]+)`/g, '$1')
 }
 
-/** 列宽下限(ch):保证至少容纳 6 个中文字(全角 2ch × 6 = 12ch)再换行,加内边距 3ch。 */
-const MIN_COLUMN_CH = 15
 /** 列宽上限(ch):单列过宽严重伤可读性,超出的内容换行。60ch ≈ 30 个中文字。 */
 const MAX_COLUMN_CH = 60
 /** 单元格左右内边距折算(10px 12px × 2 ≈ 24px,按 ch 近似)。 */
@@ -45,10 +44,18 @@ const COLUMN_PAD_CH = 3
 /** 行高初始上限(px,约 4 行正文):超出裁剪,用户可拖行边界放大。 */
 export const MAX_ROW_PX = 96
 
-/** 列宽绝对下限(px):手调与分配共用;120px ≈ 6 个中文字(14px 字号),再窄不可读。 */
+/** 手调列宽下限(px):拖动把手能缩到的最小宽;120px ≈ 6 个中文字(14px 字号),再窄不可读。
+ *  只约束用户手调——自动分配的短内容列按内容收紧,不受此限(见 MIN_COMPACT_COL_PX)。 */
 export const MIN_COL_PX = 120
 
-/** 每列理想宽(ch 单位,内容口径):max 单元格视觉长 + 内边距,钳 [10ch, 60ch]。 */
+/** 自动分配的绝对下限(px):内容理想宽不足此值的列按内容收紧,只保 64px 兜底
+ *  (≈ 3 个中文字 + 内边距)。短内容列(如"默认值"列只有 true/30)若被通用
+ *  下限垫肥,会凭空挤占长内容列的宽度——换行可读性下限只对"内容会被换行的列"
+ *  有意义,内容本就一行放得下的列再垫底限纯属浪费。 */
+const MIN_COMPACT_COL_PX = 64
+
+/** 每列理想宽(ch 单位,内容口径):max 单元格视觉长 + 内边距,封顶 60ch。
+ *  不设 ch 下限:短内容列按内容收紧即可(15ch 下限会把 true/30 这类列凭空垫肥)。 */
 function idealColumnCh(headers: string[], rows: string[][]): number[] {
   const columnCount = headers.length
   if (columnCount === 0) return []
@@ -60,7 +67,7 @@ function idealColumnCh(headers: string[], rows: string[][]): number[] {
   }
   headers.forEach(measure)
   rows.forEach((row) => row.forEach(measure))
-  return maxLens.map((maxLen) => Math.min(MAX_COLUMN_CH, Math.max(MIN_COLUMN_CH, maxLen + COLUMN_PAD_CH)))
+  return maxLens.map((maxLen) => Math.min(MAX_COLUMN_CH, maxLen + COLUMN_PAD_CH))
 }
 
 /**
@@ -72,12 +79,14 @@ export function computeFallbackColumnWidths(headers: string[], rows: string[][])
 }
 
 /**
- * 初始列宽分配(px 数值,主路径):
- * 1. 每列理想宽 = idealCh × 1ch 实测 px,钳 [max(MIN_COL_PX, 15ch), 容器宽 20%]
- *    ——下限优先于 20% 上限:列至少容纳 6 个中文字再换行,可读性 > 初始美观;
- * 2. Σ理想宽 < 容器宽 → 同比放大撑满(比例不变;放大后单列可超 20%,
- *    否则永远填不满——20% 上限只约束内容估算法,不约束撑满);
- * 3. Σ理想宽 ≥ 容器宽 → 维持理想宽,表格横向滚动。
+ * 初始列宽分配(px 数值,主路径),两段式:
+ * 1. 每列内容理想宽 rawPx = idealCh × 1ch 实测 px,钳 (MIN_COMPACT_COL_PX, 容器宽 20%]
+ *    ——短内容列按内容收紧(不被 120px 通用下限垫肥);
+ * 2. Σ钳制宽 < 容器宽 → 富余宽度两段分配:
+ *    a. 优先按缺口(理想宽 − 钳制宽)补给被 20% 上限钳掉的列——它们的 content
+ *       还没放完,最需要宽度;缺口全补平后仍有富余,再按理想宽占比分给所有列
+ *       (内容多的列多吸收,短内容列保持紧凑);放大后单列可超 20%;
+ * 3. Σ钳制宽 ≥ 容器宽 → 维持钳制宽,表格横向滚动。
  * containerWidth / chPx 无效时返回 [](调用方走 ch 兜底)。
  */
 export function allocateColumnWidths(
@@ -92,15 +101,31 @@ export function allocateColumnWidths(
   if (!Number.isFinite(chPx) || chPx <= 0) return []
 
   const maxCol = Math.max(MIN_COL_PX, containerWidth * 0.2)
-  const ideal = idealColumnCh(headers, rows).map((ch) =>
-    Math.max(MIN_COL_PX, Math.min(maxCol, ch * chPx)))
+  const raw = idealColumnCh(headers, rows).map((ch) => ch * chPx)
+  const capped = raw.map((px) => Math.max(MIN_COMPACT_COL_PX, Math.min(maxCol, px)))
 
-  const sum = ideal.reduce((acc, value) => acc + value, 0)
-  if (sum < containerWidth) {
-    const scale = containerWidth / sum
-    return ideal.map((value) => Math.round(value * scale))
+  const sum = capped.reduce((acc, value) => acc + value, 0)
+  if (sum >= containerWidth) {
+    return capped.map((value) => Math.round(value))
   }
-  return ideal.map((value) => Math.round(value))
+
+  let slack = containerWidth - sum
+  // 第一段:按缺口补给被上限钳掉的列(理想宽没放完的列优先吃富余)。
+  const deficit = raw.map((px, index) => Math.max(0, px - capped[index]))
+  const totalDeficit = deficit.reduce((acc, value) => acc + value, 0)
+  let widths = capped
+  if (totalDeficit > 0) {
+    const fill = Math.min(1, slack / totalDeficit)
+    widths = capped.map((value, index) => value + deficit[index] * fill)
+    slack -= totalDeficit * fill
+  }
+  // 第二段:缺口补平后仍有富余(Σ理想宽 < 容器宽),按理想宽占比分配——
+  // 内容多的列多吸收,短内容列保持紧凑。raw 恒 ≥ 3ch > 0,无除零。
+  if (slack > 0) {
+    const totalRaw = raw.reduce((acc, value) => acc + value, 0)
+    widths = widths.map((value, index) => value + (slack * raw[index]) / totalRaw)
+  }
+  return widths.map((value) => Math.round(value))
 }
 
 /** 用户手调列宽合并(px):手调列用覆盖值,其余列维持初始分配不动(Excel 式)。 */

@@ -175,30 +175,52 @@ describe('replaceMarkdownRange', () => {
 })
 
 describe('allocateColumnWidths(初始列宽分配)', () => {
-  it('内容理想宽钳制 [64px, 容器宽 20%],不足容器再同比放大', () => {
-    // 24 字中文 → 48ch + 3 = 51ch × 8px = 408px,容器 1000 → 上限 200px;Σ200<1000 → 放大到 1000。
+  it('长内容列钳 20% 上限,富余分配后仍填满容器', () => {
+    // 24 字中文 → 48ch + 3 = 51ch × 8px = 408px,容器 1000 → 上限 200px;
+    // 缺口(208)补平后仍有富余,再按理想宽占比 → 单列吃满 1000。
     const widths = allocateColumnWidths(['二十个中文字'.repeat(4)], [], 1000, 8)
     expect(widths).toEqual([1000])
-    // 多列场景验证钳制:两列长内容各钳 200,总 400 < 1000 → 各 500。
+    // 两列等长内容:缺口补平后富余对半分 → 各 500。
     const two = allocateColumnWidths(
       ['很长很长很长很长很长很长很长', '很长很长很长很长很长很长很长'],
       [], 1000, 8)
     expect(two).toEqual([500, 500])
   })
 
-  it('总宽不足容器 → 同比放大撑满(单列可超 20% 上限)', () => {
-    // 两列各 100px,总 200 < 1000 → 各放大到 500。
-    const headers = ['ab', 'cd'] // 2+3=5ch → 40px,钳下限 64……换算:64×2=128<1000 → scale 1000/128≈7.8 → 500,500
-    const widths = allocateColumnWidths(headers, [], 1000, 8)
-    expect(widths.reduce((a, b) => a + b, 0)).toBe(1000)
+  it('短内容列按内容收紧(64px 下限),富余流向长内容列', () => {
+    // 'ab' → 5ch × 8 = 40px,不足 64px 下限 → 64px(旧算法会被 120px 下限垫肥);
+    // 长内容列 31ch → 248px 钳 200(缺口 48):补缺口后富余 688 按理想宽
+    // 占比(40/288 vs 248/288)分 → [160, 840],合计 1000。
+    const widths = allocateColumnWidths(['ab', '很长很长很长很长很长很长很长'], [], 1000, 8)
+    expect(widths).toEqual([160, 840])
   })
 
-  it('总宽超出容器 → 维持理想宽(横向滚动)', () => {
-    // 容器 300,两列各钳到 60(=300×20%) → 总 120? 不:钳 min(60, ideal)。窄内容两列 64×2=128<300 会放大。
-    // 用超长内容:两列 ideal 都 300×0.2=60? ideal=43ch×8=344→钳 60。总 120 < 300 放大…换 5 列长内容。
+  it('缺口未被补平时,富余只分给被钳掉的长内容列', () => {
+    // 容器 600:上限 = max(120, 600×20%) = 120px。钳制后 [64, 120, 80, 120] = 384,
+    // 富余 216 < 缺口(176+360=536)→ 按缺口比例补给列1/列3:
+    // 列1 = 120+176×(216/536) ≈ 191,列3 = 120+360×(216/536) ≈ 265;
+    // 短内容列(0/2)分文不动,合计恰为 600。
+    const headers = ['name', 'key', 'default', 'desc']
+    const rows = [['开关', 'a'.repeat(34), 'true', '说明'.repeat(20)]]
+    const widths = allocateColumnWidths(headers, rows, 600, 8)
+    expect(widths).toEqual([64, 191, 80, 265])
+  })
+
+  it('缺口补平后仍有富余 → 按理想宽占比分配(短内容列保持紧凑)', () => {
+    // 容器 1000、chPx 8 → 上限 200px:列0 7ch→56→64;列1 37ch→296→钳 200(缺口 96);
+    // 列2 10ch→80;列3 60ch 封顶→480→钳 200(缺口 280)。缺口 376 全补平 →
+    // [64, 296, 80, 480],余 80 按占比(56/296/80/480)分 → [69, 322, 87, 522]。
+    const headers = ['name', 'key', 'default', 'desc']
+    const rows = [['开关', 'a'.repeat(34), 'true', '说明'.repeat(20)]]
+    const widths = allocateColumnWidths(headers, rows, 1000, 8)
+    expect(widths).toEqual([69, 322, 87, 522])
+  })
+
+  it('总宽超出容器 → 维持钳制宽(横向滚动)', () => {
+    // 容器 300:长内容列钳 max(120, 60)=120,短内容列按 64px 下限,Σ376>300 滚动。
     const headers = ['很长很长很长很长很长很长很长', 'x', 'y', 'z', 'w']
     const widths = allocateColumnWidths(headers, [], 300, 8)
-    expect(widths.reduce((a, b) => a + b, 0)).toBeGreaterThanOrEqual(300)
+    expect(widths).toEqual([120, 64, 64, 64, 64])
   })
 
   it('容器宽/1ch 未测得时返回空数组(走 ch 兜底)', () => {
@@ -222,8 +244,9 @@ describe('applyColumnOverrides(手调合并,Excel 式)', () => {
 })
 
 describe('computeFallbackColumnWidths(ch 兜底)', () => {
-  it('输出 min(Nch, 100vw) 声明式宽度(短内容钳下限 15ch = 6 个中文字)', () => {
-    expect(computeFallbackColumnWidths(['ab'], [])).toEqual(['min(15ch, 100vw)'])
+  it('输出 min(Nch, 100vw) 声明式宽度(短内容按内容收紧,不设下限)', () => {
+    expect(computeFallbackColumnWidths(['ab', '很长'.repeat(30)], []))
+      .toEqual(['min(5ch, 100vw)', 'min(60ch, 100vw)'])
   })
 })
 
