@@ -233,6 +233,30 @@ describe('allocateColumnWidths(初始列宽分配)', () => {
   })
 })
 
+describe('allocateColumnWidths(实测理想宽优先)', () => {
+  it('实测宽替代启发式:钳制/缺口/占比逻辑不变', () => {
+    // 实测 [80, 500]:500 钳 60ch 上限(480)→ raw [80,480];钳 20%(200)后 [80,200],
+    // 缺口 280 由富余补平 → [80,480];余 440 按理想宽占比(80/580)分 → [143, 857]。
+    const widths = allocateColumnWidths(['a', 'b'], [], 1000, 8, [80, 500])
+    expect(widths).toEqual([143, 857])
+  })
+
+  it('实测宽超 60ch 上限仍封顶(超长单行内容换行)', () => {
+    // 实测 [600, 100] → raw [480, 100] → 分配后 [828, 172]。
+    expect(allocateColumnWidths(['a', 'b'], [], 1000, 8, [600, 100])).toEqual([828, 172])
+  })
+
+  it('空列(实测 0)落 64px 下限,富余全给有内容的列', () => {
+    expect(allocateColumnWidths(['a', 'b'], [['', 'x']], 1000, 8, [0, 100])).toEqual([64, 936])
+  })
+
+  it('实测数组长度不匹配或含非法值 → 回落启发式', () => {
+    const heuristic = allocateColumnWidths(['a', 'b'], [], 1000, 8)
+    expect(allocateColumnWidths(['a', 'b'], [], 1000, 8, [100])).toEqual(heuristic)
+    expect(allocateColumnWidths(['a', 'b'], [], 1000, 8, [100, Number.NaN])).toEqual(heuristic)
+  })
+})
+
 describe('applyColumnOverrides(手调合并,Excel 式)', () => {
   it('手调列用覆盖值,其余列维持初始分配不动', () => {
     expect(applyColumnOverrides([100, 200, 300], new Map([[1, 500]]))).toEqual([100, 500, 300])

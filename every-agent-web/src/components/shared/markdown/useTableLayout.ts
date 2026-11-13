@@ -2,9 +2,11 @@ import React from 'react'
 
 /**
  * 表格布局引擎(Excel/AG Grid 式):
- * - 列宽:内容理想宽(每列最宽单元格)钳 (64px, 容器宽 20%] → 总宽不足容器时
- *   富余优先补给被上限钳掉的列(按缺口比例),仍有富余再按内容占比分;
- *   超出容器则横向滚动;用户手调列 px 覆盖(其余列不动,Excel 式);
+ * - 列宽:内容理想宽——挂载后**克隆真实单元格实测**(真实字体/内边距/内联
+ *   元素,自适应阅读字体与字号),启发式估算(CJK=2ch)仅作首帧与 SSR 兜底;
+ *   钳 (64px, 容器宽 20%] → 总宽不足容器时富余优先补给被上限钳掉的列
+ *   (按缺口比例),仍有富余再按内容占比分;超出容器则横向滚动;
+ *   用户手调列 px 覆盖(其余列不动,Excel 式);
  * - 行高:内容默认上限 96px(约 4 行)裁剪,用户拖行边界覆盖;
  * - 手调数据仅存 React state(内存态),刷新/卸载即失。
  *
@@ -81,7 +83,9 @@ export function computeFallbackColumnWidths(headers: string[], rows: string[][])
 
 /**
  * 初始列宽分配(px 数值,主路径),两段式:
- * 1. 每列内容理想宽 rawPx = idealCh × 1ch 实测 px,钳 (MIN_COMPACT_COL_PX, 容器宽 20%]
+ * 1. 每列内容理想宽:优先用 measureColumnIdealWidths 实测值(真实字体口径,
+ *    含内边距),未测得时回落启发式估算(idealCh × 1ch 实测 px);
+ *    钳 (MIN_COMPACT_COL_PX, 容器宽 20%] 且单列封顶 60ch(超长单行换行)
  *    ——短内容列按内容收紧(不被 120px 通用下限垫肥);
  * 2. Σ钳制宽 < 容器宽 → 富余宽度两段分配:
  *    a. 优先按缺口(理想宽 − 钳制宽)补给被 20% 上限钳掉的列——它们的 content
@@ -95,6 +99,9 @@ export function allocateColumnWidths(
   rows: string[][],
   containerWidth: number,
   chPx: number,
+  /** 实测列理想宽(px,含内边距;measureColumnIdealWidths 口径)。
+   *  长度与列数匹配且值非负时优先于启发式;首帧/SSR 未测得时不传。 */
+  measuredIdealPx?: number[],
 ): number[] {
   const columnCount = headers.length
   if (columnCount === 0) return []
@@ -102,7 +109,12 @@ export function allocateColumnWidths(
   if (!Number.isFinite(chPx) || chPx <= 0) return []
 
   const maxCol = Math.max(MIN_COL_PX, containerWidth * 0.2)
-  const raw = idealColumnCh(headers, rows).map((ch) => ch * chPx)
+  const measuredUsable = measuredIdealPx != null
+    && measuredIdealPx.length === columnCount
+    && measuredIdealPx.every((px) => Number.isFinite(px) && px >= 0)
+  const raw = measuredUsable
+    ? measuredIdealPx.map((px) => Math.min(px, MAX_COLUMN_CH * chPx))
+    : idealColumnCh(headers, rows).map((ch) => ch * chPx)
   const capped = raw.map((px) => Math.max(MIN_COMPACT_COL_PX, Math.min(maxCol, px)))
 
   const sum = capped.reduce((acc, value) => acc + value, 0)
@@ -121,10 +133,13 @@ export function allocateColumnWidths(
     slack -= totalDeficit * fill
   }
   // 第二段:缺口补平后仍有富余(Σ理想宽 < 容器宽),按理想宽占比分配——
-  // 内容多的列多吸收,短内容列保持紧凑。raw 恒 ≥ 3ch > 0,无除零。
+  // 内容多的列多吸收,短内容列保持紧凑。实测口径下列可能全空(Σ=0),
+  // 此时均分兜底,避免除零。
   if (slack > 0) {
     const totalRaw = raw.reduce((acc, value) => acc + value, 0)
-    widths = widths.map((value, index) => value + (slack * raw[index]) / totalRaw)
+    widths = totalRaw > 0
+      ? widths.map((value, index) => value + (slack * raw[index]) / totalRaw)
+      : widths.map((value) => value + slack / widths.length)
   }
   return widths.map((value) => Math.round(value))
 }
@@ -144,6 +159,71 @@ function measureChPx(host: HTMLElement): number {
   if (px > 0) return px
   const fontSize = Number.parseFloat(window.getComputedStyle(host).fontSize || '14')
   return fontSize / 2
+}
+
+/** 实测保险余量系数:克隆量宽已含内边距,余量仅覆盖边框竖线(1px)与亚像素取整。 */
+const MEASURE_BUFFER = 1.04
+/** 每列参与实测的候选单元格数:按启发式长度取前 N(估算排序可能有系统性
+ *  偏差,实测前 3 名基本覆盖真实最宽行,同时控制克隆探针数量)。 */
+const MEASURE_CANDIDATES = 3
+
+/**
+ * 列内容理想宽**实测**(px,含单元格内边距):每列克隆真实 th/td(携带真实
+ * 字体、粗体/行内码等内联元素与 10px 12px 内边距)到隐藏层,nowrap 不换行
+ * 量整行内容宽,列内取最大值。自适应任意阅读字体/字号/缩放——启发式
+ * (CJK=2ch、空格=1ch)在比例字体上系统性偏宽(空格实际 ~0.3ch、CJK ≈
+ * 1.8ch),这是"内容没撑满单元格"的根因;实测为主口径,启发式退居首帧兜底。
+ *
+ * 无 table/无列/宽度全为 0(无布局环境)时返回 [],调用方走启发式估算。
+ * 探针批量挂载(一次写入)后统一读宽(一次布局),避免逐条读写反复强制回流。
+ */
+export function measureColumnIdealWidths(host: HTMLElement): number[] {
+  if (typeof document === 'undefined') return []
+  const table = host.querySelector('table')
+  if (!table) return []
+  const headerRow = table.tHead?.rows[0]
+  const bodyRows = Array.from(table.tBodies[0]?.rows ?? [])
+  const columnCount = headerRow?.cells.length ?? bodyRows[0]?.cells.length ?? 0
+  if (columnCount === 0) return []
+
+  // 候选:每列 th + 全部 td,按启发式文本长度取前 MEASURE_CANDIDATES 个。
+  type Candidate = { cell: HTMLTableCellElement; score: number }
+  const top: Candidate[][] = Array.from({ length: columnCount }, () => [])
+  const consider = (cell: HTMLTableCellElement, column: number) => {
+    if (column >= columnCount) return
+    const list = top[column]
+    list.push({ cell, score: visualCellLength(cell.textContent ?? '') })
+    list.sort((a, b) => b.score - a.score)
+    if (list.length > MEASURE_CANDIDATES) list.length = MEASURE_CANDIDATES
+  }
+  Array.from(headerRow?.cells ?? []).forEach((cell, column) => consider(cell, column))
+  bodyRows.forEach((row) => Array.from(row.cells).forEach((cell, column) => consider(cell, column)))
+
+  // 克隆单元格为内联块探针:absolute + nowrap + width:auto → 收缩到内容宽。
+  // 克隆保留 React 内联样式(字体/内边距/行高)与内联元素子树(行内码用等宽
+  // 字体、粗体加粗,量出来的是真实渲染宽);事件监听不被 cloneNode 复制。
+  const layer = document.createElement('div')
+  layer.style.cssText = 'position:absolute;visibility:hidden;pointer-events:none;left:0;top:0'
+  const clones: { clone: HTMLTableCellElement; column: number }[] = []
+  top.forEach((list, column) => list.forEach(({ cell }) => {
+    const clone = cell.cloneNode(true) as HTMLTableCellElement
+    clone.style.position = 'absolute'
+    clone.style.display = 'inline-block'
+    clone.style.whiteSpace = 'nowrap'
+    clone.style.width = 'auto'
+    clone.style.maxWidth = 'none'
+    layer.appendChild(clone)
+    clones.push({ clone, column })
+  }))
+  host.appendChild(layer)
+  const maxima = new Array<number>(columnCount).fill(0)
+  clones.forEach(({ clone, column }) => {
+    const width = clone.getBoundingClientRect().width
+    if (width > maxima[column]) maxima[column] = width
+  })
+  layer.remove()
+  if (maxima.every((width) => width === 0)) return []
+  return maxima.map((width) => (width > 0 ? Math.ceil(width * MEASURE_BUFFER) : 0))
 }
 
 type DragState = {

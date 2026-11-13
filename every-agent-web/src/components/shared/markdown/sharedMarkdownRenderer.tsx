@@ -11,6 +11,7 @@ import {
   allocateColumnWidths,
   applyColumnOverrides,
   computeFallbackColumnWidths,
+  measureColumnIdealWidths,
   MAX_ROW_PX,
   MIN_COL_PX,
   canHoverPointer,
@@ -898,9 +899,32 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
     const pin = usePinnedTableHeader(pan.wrapRef, variant === 'preview' && !headerEditing)
 
     // 初始分配(容器宽/字体度量就绪后走 px 数值口径;未测得时 colgroup 用 ch 兜底)。
+    // 列理想宽以**实测**为主口径(克隆真实单元格量宽,自适应阅读字体/字号/
+    // 缩放):挂载与字体就绪后测得并替换启发式估算(估算在比例字体上系统性
+    // 偏宽——空格实际 ~0.3ch、CJK ≈ 1.8ch,而非估算的 1ch/2ch,这正是
+    // "内容没撑满单元格"的根因)。node 引用在同一 parse 内稳定,作重测依赖。
+    const [measuredIdealPx, setMeasuredIdealPx] = React.useState<number[]>([])
+    React.useLayoutEffect(() => {
+      const wrap = layout.wrapRef.current
+      if (!wrap) return
+      const apply = () => {
+        const next = measureColumnIdealWidths(wrap)
+        setMeasuredIdealPx((prev) => (
+          next.length === prev.length && next.every((px, index) => px === prev[index]) ? prev : next
+        ))
+      }
+      apply()
+      if (document.fonts?.ready == null) return
+      let cancelled = false
+      void document.fonts.ready.then(() => {
+        if (!cancelled) apply()
+      })
+      return () => { cancelled = true }
+    }, [layout.wrapRef, node])
+
     const baseWidths = React.useMemo(
-      () => allocateColumnWidths(headers, rows, layout.containerWidth, layout.chPx),
-      [headers, layout.chPx, layout.containerWidth, rows],
+      () => allocateColumnWidths(headers, rows, layout.containerWidth, layout.chPx, measuredIdealPx),
+      [headers, layout.chPx, layout.containerWidth, measuredIdealPx, rows],
     )
     const fallbackWidths = React.useMemo(
       () => (baseWidths.length === 0 ? computeFallbackColumnWidths(headers, rows) : []),
