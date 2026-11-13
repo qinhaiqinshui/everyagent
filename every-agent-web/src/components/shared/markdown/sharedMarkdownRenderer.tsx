@@ -13,6 +13,7 @@ import {
   computeFallbackColumnWidths,
   MAX_ROW_PX,
   MIN_COL_PX,
+  canHoverPointer,
   type TableLayoutController,
 } from './useTableLayout'
 import { createPortal } from 'react-dom'
@@ -481,6 +482,145 @@ const colHandleStyle: React.CSSProperties = {
   height: 16,
 }
 
+// ───────────────────── 表格外浮动工具栏 ─────────────────────
+
+/** 工具栏高度(px):无把手栏时跨坐表格上缘(一半在上、一半盖住表头内边距区)。 */
+const TABLE_TOOLBAR_H = 24
+/** 复制结果反馈驻留时长(ms)。 */
+const TOOLBAR_FEEDBACK_MS = 1600
+
+/** 工具栏容器:绝对定位于表格框右上,不占布局(悬停/点击表头时由 TableBlock 渲染)。 */
+const tableToolbarStyle: React.CSSProperties = {
+  position: 'absolute',
+  right: 0,
+  display: 'flex',
+  alignItems: 'center',
+  gap: 2,
+  height: TABLE_TOOLBAR_H,
+  padding: '0 2px',
+  borderRadius: 'var(--radius-md)',
+  border: '1px solid var(--border-light)',
+  background: 'var(--bg-secondary)',
+  boxShadow: '0 4px 12px rgba(0, 0, 0, 0.18)',
+  zIndex: 22,
+}
+
+/** hast 表格矩阵 → GFM 源码兜底重建(源 offset 缺失时使用;内联语法已退化为纯文本)。 */
+function buildGfmTableSource(headers: string[], rows: string[][]): string {
+  const escapeCell = (text: string) => text.replace(/\|/g, '\\|').replace(/\r?\n/g, ' ')
+  const columnCount = Math.max(1, headers.length, ...rows.map((row) => row.length))
+  const padRow = (cells: string[]) => Array.from(
+    { length: columnCount },
+    (_, index) => escapeCell(cells[index] ?? ''),
+  )
+  return [
+    `| ${padRow(headers).join(' | ')} |`,
+    `| ${Array.from({ length: columnCount }, () => '---').join(' | ')} |`,
+    ...rows.map((row) => `| ${padRow(row).join(' | ')} |`),
+  ].join('\n')
+}
+
+/** 剪贴板写入:优先异步 Clipboard API(需安全上下文),不可用/失败回退 execCommand 同步复制。 */
+async function writeClipboardText(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text)
+      return true
+    }
+  } catch {
+    // 落入 execCommand 兜底。
+  }
+  try {
+    const textarea = document.createElement('textarea')
+    textarea.value = text
+    textarea.setAttribute('readonly', '')
+    textarea.style.cssText = 'position:fixed;top:0;left:0;opacity:0;pointer-events:none'
+    document.body.appendChild(textarea)
+    textarea.select()
+    const copied = document.execCommand('copy')
+    textarea.remove()
+    return copied
+  } catch {
+    return false
+  }
+}
+
+/**
+ * 表格源 markdown:源文本 offset 切片优先(保留内联语法原文,聊天场景由
+ * MarkdownDisplay 注入 sourceText),切片条件不满足(position 缺失、未注入
+ * sourceText)时按矩阵重建纯文本 GFM。
+ */
+function resolveTableSourceMarkdown(
+  node: Element | undefined,
+  sourceText: string | undefined,
+  headers: string[],
+  rows: string[][],
+): string {
+  const start = node?.position?.start?.offset
+  const end = node?.position?.end?.offset
+  if (sourceText != null && start != null && end != null && start >= 0 && start < end && end <= sourceText.length) {
+    return sourceText.slice(start, end).replace(/\s+$/, '')
+  }
+  return buildGfmTableSource(headers, rows)
+}
+
+/**
+ * 表格外浮动工具栏(绝对定位于表格框右上,不占布局):
+ * - 复制内容:整表 markdown 源码写入剪贴板,按钮短暂切换「已复制/复制失败」反馈;
+ * - 调整表格:切换表外把手栏(列宽 ↔ / 行高 ⇕),即旧版「单击表头」的调整入口。
+ * 可见性由 TableBlock 驱动(表头单击固定 + 桌面端悬停),此处只承载操作。
+ */
+function TableToolbar(props: {
+  node: Element | undefined
+  sourceText: string | undefined
+  headers: string[]
+  rows: string[][]
+  layout: TableLayoutController
+  /** 把手栏当前实际可见(按钮高亮;把手栏在表格上方时工具栏整体让位上移)。 */
+  handlesActive: boolean
+  style?: React.CSSProperties
+}) {
+  const { node, sourceText, headers, rows, layout, handlesActive, style } = props
+  const [feedback, setFeedback] = React.useState<'idle' | 'copied' | 'failed'>('idle')
+  const feedbackTimer = React.useRef<number>(0)
+  React.useEffect(() => () => window.clearTimeout(feedbackTimer.current), [])
+
+  const handleCopy = React.useCallback(() => {
+    const text = resolveTableSourceMarkdown(node, sourceText, headers, rows)
+    void writeClipboardText(text).then((copied) => {
+      setFeedback(copied ? 'copied' : 'failed')
+      window.clearTimeout(feedbackTimer.current)
+      feedbackTimer.current = window.setTimeout(() => setFeedback('idle'), TOOLBAR_FEEDBACK_MS)
+    })
+  }, [headers, node, rows, sourceText])
+
+  const toggleHandles = React.useCallback(() => {
+    layout.setHandlesVisible(!handlesActive)
+  }, [handlesActive, layout])
+
+  return (
+    <div className="md-table-toolbar" role="toolbar" aria-label="表格工具栏" style={{ ...tableToolbarStyle, ...style }}>
+      <button
+        type="button"
+        className="md-table-toolbar-button"
+        onClick={handleCopy}
+        title="复制表格内容(Markdown 源码)"
+      >
+        {feedback === 'copied' ? '✓ 已复制' : feedback === 'failed' ? '✗ 复制失败' : '⧉ 复制内容'}
+      </button>
+      <button
+        type="button"
+        className={`md-table-toolbar-button${handlesActive ? ' md-table-toolbar-button--active' : ''}`}
+        onClick={toggleHandles}
+        aria-pressed={handlesActive}
+        title="调整表格(列宽/行高)"
+      >
+        ⇔ 调整表格
+      </button>
+    </div>
+  )
+}
+
 /** 单元格编辑弹窗互斥注册表:后开的弹窗让先开的提交收口(同一时刻至多一弹窗)。 */
 const cellDialogClosers = new Set<() => void>()
 
@@ -820,15 +960,44 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
       }
       return boundaries
     }, [geometry.colWidths])
-    // 把手栏渲染条件:几何已测得且用户已唤出(默认隐藏,单击表头切换;
-    // 无 RO 环境如 SSR 整栏不渲染,表格回到原生形态)。
+    // 把手栏渲染条件:几何已测得且用户已唤出(默认隐藏;无 RO 环境
+    // 如 SSR 整栏不渲染,表格回到原生形态)。
     const guttersReady = layout.handlesVisible
       && (geometry.rowHeights.length > 0 || geometry.colWidths.length > 0)
+
+    // 悬停显示工具栏:仅 hover 能力设备(桌面鼠标);触屏/笔只保留表头点击切换。
+    const [hoverCapable] = React.useState(canHoverPointer)
+    const handleFramePointerEnter = React.useCallback(() => layout.setToolbarHovering(true), [layout])
+    const handleFramePointerLeave = React.useCallback(() => layout.setToolbarHovering(false), [layout])
 
     return (
       <TableResizeContext.Provider value={layout}>
         <HeaderEditingContext.Provider value={headerEditingTracker}>
-          <div {...sourceLineData(node)} style={{ ...tableResizeFrameStyle, margin: s.tableWrap.margin }}>
+          <div
+            {...sourceLineData(node)}
+            style={{ ...tableResizeFrameStyle, position: 'relative', margin: s.tableWrap.margin }}
+            {...(hoverCapable ? {
+              onPointerEnter: handleFramePointerEnter,
+              onPointerLeave: handleFramePointerLeave,
+            } : null)}
+          >
+            {/* 浮动工具栏(绝对定位表格框右上,不占布局):复制内容 + 调整表格。
+                把手栏可见时整体让位上移,避开顶栏右缘的列宽把手。 */}
+            {layout.toolbarVisible ? (
+              <TableToolbar
+                node={node}
+                sourceText={sourceText}
+                headers={headers}
+                rows={rows}
+                layout={layout}
+                handlesActive={guttersReady}
+                style={{
+                  top: guttersReady
+                    ? -(COL_GUTTER_PX + TABLE_TOOLBAR_H / 2 + 2)
+                    : -(TABLE_TOOLBAR_H / 2 - 1),
+                }}
+              />
+            ) : null}
             {/* 行高把手栏(表外左栏):每行底缘一个 ⇕,槽高与表格行实测高对齐。 */}
             {guttersReady ? (
               <div className="md-table-gutter" style={rowGutterStyle}>
@@ -966,10 +1135,10 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
       return () => headerEditingTracker.onChange(false)
     }, [cell.editing, headerEditingTracker])
 
-    // 单击表头 = 切换表外把手栏(列宽 ↔ / 行高 ⇕)显示/隐藏;双击仍编辑单元格。
+    // 单击表头 = 切换表外浮动工具栏(复制内容/调整表格);双击仍编辑单元格。
     const handleClick = React.useCallback(() => {
       if (resize == null || cell.editing) return
-      resize.setHandlesVisible(!resize.handlesVisible)
+      resize.setToolbarPinned(!resize.toolbarPinned)
     }, [cell.editing, resize])
 
     return (
@@ -982,7 +1151,7 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
         }}
         onClick={handleClick}
         onDoubleClick={cell.editable && !cell.editing ? cell.beginEdit : undefined}
-        title={cell.editable ? '点击显示/隐藏调整把手；双击编辑单元格' : '点击显示/隐藏调整把手'}
+        title={cell.editable ? '点击显示/隐藏工具栏；双击编辑单元格' : '点击显示/隐藏工具栏'}
       >
         {children}
         {cell.editor}

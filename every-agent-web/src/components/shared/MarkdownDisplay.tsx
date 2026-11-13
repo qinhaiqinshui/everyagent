@@ -16,10 +16,17 @@ import { remarkFourTildeStrikethrough } from './markdown/remarkFourTildeStriketh
  */
 const MarkdownDisplay = React.memo(function MarkdownDisplay({ content }: { content: string }) {
   const normalized = React.useMemo(() => normalizeMarkdownContent(content), [content])
+  // sourceText 供表格工具栏「复制内容」按 offset 切出整表 markdown 源码
+  // (offset 基准即传给 react-markdown 的 normalized 文本);不传 onTableCellEdit,
+  // 聊天场景单元格编辑保持关闭,与此前一致。
+  const components = React.useMemo(
+    () => buildMarkdownComponents({ variant: 'display', sourceText: normalized }),
+    [normalized],
+  )
   if (!normalized.trim()) return null
   return (
     <div className="md-root" style={rootStyle}>
-      <Markdown remarkPlugins={[remarkGfm, remarkFourTildeStrikethrough]} components={displayComponents}>
+      <Markdown remarkPlugins={[remarkGfm, remarkFourTildeStrikethrough]} components={components}>
         {normalized}
       </Markdown>
     </div>
@@ -27,9 +34,6 @@ const MarkdownDisplay = React.memo(function MarkdownDisplay({ content }: { conte
 })
 
 export default MarkdownDisplay
-
-/** 聊天场景组件映射（无工作区上下文、无大纲），模块级单例避免每次渲染重建。 */
-const displayComponents = buildMarkdownComponents({ variant: 'display' })
 
 /** 根容器：flex column gap:0，与旧自研 MarkdownDisplay 布局一致。 */
 const rootStyle: React.CSSProperties = {

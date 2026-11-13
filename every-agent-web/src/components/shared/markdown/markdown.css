@@ -52,6 +52,37 @@
   cursor: row-resize;
 }
 
+/* 表格外浮动工具栏(TableBlock 绝对定位于表格框右上,不占布局):
+ * 「复制内容」写剪贴板,「调整表格」切换把手栏;显隐由布局引擎驱动
+ * (表头单击固定 + 桌面端悬停)。容器视觉走内联样式,此处仅悬停/激活态。 */
+.md-table-toolbar-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+
+.md-table-toolbar-button:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+/* 「调整表格」激活态(把手栏可见):按钮高亮,aria-pressed 同步。 */
+.md-table-toolbar-button--active,
+.md-table-toolbar-button--active:hover {
+  background: color-mix(in srgb, var(--accent-blue, #3b82f6) 16%, transparent);
+  color: var(--accent-blue, #3b82f6);
+}
+
 /* 单击单元格/把手:浏览器默认 :focus-visible outline 偏粗(移动端尤显),
  * 收紧为 2px 细环;键盘导航(Tab)仍保留可见焦点。 */
 .md-table th:focus-visible,
