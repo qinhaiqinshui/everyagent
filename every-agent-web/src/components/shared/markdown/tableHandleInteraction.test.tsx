@@ -116,6 +116,33 @@ const toolbar = (): Element | null => document.querySelector('.md-table-toolbar'
 const colHandles = (): NodeListOf<Element> => document.querySelectorAll('[aria-label="调整列宽"]')
 const rowHandles = (): NodeListOf<Element> => document.querySelectorAll('[aria-label="调整行高"]')
 
+/** 桩 matchMedia 为 hover 能力设备;返回恢复函数。 */
+function stubHoverMedia(): () => void {
+  const original = window.matchMedia
+  window.matchMedia = (() => ({
+    matches: true,
+    media: '',
+    onchange: null,
+    addListener: () => {},
+    removeListener: () => {},
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    dispatchEvent: () => false,
+  })) as unknown as typeof window.matchMedia
+  return () => { window.matchMedia = original }
+}
+
+/** 模拟指针移入/移出表格(React 以 pointerover/pointerout 派发 enter/leave)。 */
+async function hover(el: Element, over: boolean): Promise<void> {
+  await React.act(async () => {
+    el.dispatchEvent(new window.MouseEvent(over ? 'pointerover' : 'pointerout', {
+      bubbles: true,
+      cancelable: true,
+      relatedTarget: document.body,
+    }))
+  })
+}
+
 describe('表格外浮动工具栏(单击表头切换)', () => {
   it('默认隐藏:工具栏与把手栏均不渲染', async () => {
     await renderTable()
@@ -216,14 +243,41 @@ describe('表格外把手栏(工具栏「调整表格」切换)', () => {
     expect(toolbar()).not.toBeNull()
   })
 
-  it('工具栏隐藏时把手栏连带收起(把手栏是工具栏的子模式)', async () => {
+  it('工具栏隐藏时把手栏保持驻留(解耦:悬停离开/表头切换不收起调整模式)', async () => {
     const container = await renderTable()
     await enterAdjustMode(container)
     expect(colHandles().length).toBe(2)
+    // 表头再次单击只是隐藏工具栏,把手栏驻留(= 旧版表头切换行为)。
     await clickHeader(container)
     expect(toolbar()).toBeNull()
-    expect(colHandles().length).toBe(0)
-    expect(rowHandles().length).toBe(0)
+    expect(colHandles().length).toBe(2)
+    expect(rowHandles().length).toBe(2)
+  })
+
+  it('悬停场景(bug 回归):移开鼠标工具栏隐藏,把手栏驻留;移回工具栏重现且按钮高亮', async () => {
+    const restore = stubHoverMedia()
+    try {
+      const container = await renderTable()
+      const th = container.querySelector('th')!
+      await hover(th, true)
+      await clickToolbarButton('调整表格')
+      expect(colHandles().length).toBe(2)
+      // 移开鼠标:工具栏(悬停态)隐藏,但调整模式驻留——不能跟着消失。
+      await hover(th, false)
+      expect(toolbar()).toBeNull()
+      expect(colHandles().length).toBe(2)
+      expect(rowHandles().length).toBe(2)
+      // 移回鼠标:工具栏重现,「调整表格」按钮保持激活态,可再点关闭。
+      await hover(th, true)
+      expect(toolbar()).not.toBeNull()
+      const adjustButton = Array.from(document.querySelectorAll<HTMLButtonElement>('.md-table-toolbar button'))
+        .find((el) => el.textContent?.includes('调整表格'))
+      expect(adjustButton?.getAttribute('aria-pressed')).toBe('true')
+      await clickToolbarButton('调整表格')
+      expect(colHandles().length).toBe(0)
+    } finally {
+      restore()
+    }
   })
 
   it('点击单元格(表头之外) → 工具栏与把手栏全部收起', async () => {
@@ -283,33 +337,6 @@ describe('表格外把手栏(工具栏「调整表格」切换)', () => {
 })
 
 describe('浮动工具栏(桌面悬停显示)', () => {
-  /** 桩 matchMedia 为 hover 能力设备;返回恢复函数。 */
-  function stubHoverMedia(): () => void {
-    const original = window.matchMedia
-    window.matchMedia = (() => ({
-      matches: true,
-      media: '',
-      onchange: null,
-      addListener: () => {},
-      removeListener: () => {},
-      addEventListener: () => {},
-      removeEventListener: () => {},
-      dispatchEvent: () => false,
-    })) as unknown as typeof window.matchMedia
-    return () => { window.matchMedia = original }
-  }
-
-  /** 模拟指针移入/移出表格(React 以 pointerover/pointerout 派发 enter/leave)。 */
-  async function hover(el: Element, over: boolean): Promise<void> {
-    await React.act(async () => {
-      el.dispatchEvent(new window.MouseEvent(over ? 'pointerover' : 'pointerout', {
-        bubbles: true,
-        cancelable: true,
-        relatedTarget: document.body,
-      }))
-    })
-  }
-
   it('悬停表格 → 工具栏显示;移出 → 隐藏', async () => {
     const restore = stubHoverMedia()
     try {

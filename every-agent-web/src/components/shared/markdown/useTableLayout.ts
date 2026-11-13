@@ -12,10 +12,11 @@ import React from 'react'
  *
  * 交互(表格外把手栏,不侵入单元格):
  * - 表头单击切换的是**浮动工具栏**(复制内容/调整表格),桌面端悬停表格亦显示工具栏;
- * - 工具栏「调整表格」按钮切换把手栏(= 旧版表头单击行为);工具栏不可见时把手栏连带收起;
+ * - 工具栏「调整表格」按钮切换把手栏(= 旧版表头单击行为),开启后**驻留**——
+ *   工具栏因鼠标移开而隐藏时不连带收起,直至再点按钮或点击非表头区域;
  * - 把手栏:顶栏每列右缘一个 ↔ 把手(TableBlock 渲染),拖动调列宽,双击重置;
  *   左栏每行底缘一个 ⇕ 把手,拖动调行高,双击重置;
- * - 点击表格的非表头区域(单元格/表外)与表外区域自动收起工具栏与把手栏(capture 监听);
+ * - 点击表格的非表头区域(单元格/表外)自动收起工具栏与把手栏(capture 监听);
  * - 拖动期间 pointer capture 跟踪;把手几何由 useTableGeometry 实测对齐。
  */
 
@@ -267,7 +268,7 @@ export type TableLayoutController = TableResizeController & {
   setHandlesVisible: (visible: boolean) => void
   /** 表格外浮动工具栏可见性:点击表头固定(pinned)或桌面端悬停(hovering)。 */
   toolbarVisible: boolean
-  /** 工具栏固定态:表头单击切换;false 且无悬停时工具栏隐藏并连带收起把手栏。 */
+  /** 工具栏固定态:表头单击切换;false 且无悬停时工具栏隐藏(不影响把手栏驻留)。 */
   toolbarPinned: boolean
   setToolbarPinned: (pinned: boolean) => void
   /** 悬停态:仅 hover 能力设备由 TableBlock 挂载 pointerenter/leave 驱动。 */
@@ -314,11 +315,10 @@ export function useTableLayout(): TableLayoutController {
     setToolbarPinned(pinned)
   }, [])
 
-  // 工具栏不可见时把手栏连带收起(把手栏是工具栏「调整表格」的子模式,
-  // 入口只此一处;初始挂载时二者均为隐藏,无额外渲染)。
-  React.useEffect(() => {
-    if (!toolbarVisible) showHandles(false)
-  }, [toolbarVisible, showHandles])
+  // 把手栏与工具栏显隐**解耦**:「调整表格」开启的是驻留模式(= 旧版表头
+  // 单击行为),鼠标移开导致工具栏隐藏时不连带收起——否则悬停唤出的工具栏
+  // 一开调整模式、移开鼠标把手就跟着消失,调整模式形同虚设。收起途径只有:
+  // 再点「调整表格」按钮切换,或点击表格的非表头区域(见下方收起规则)。
 
   // 收起规则:点击落在表格的非表头区域(单元格/表外)即隐藏工具栏与把手栏。
   // 表头点击由 Th 的 onClick 切换工具栏(覆盖本规则,时序在后);把手栏自身
