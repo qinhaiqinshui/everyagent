@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>Every Agent 浏览器控制 · 设置</title>
+  <style>
+    body { font-family: system-ui, "Microsoft YaHei", sans-serif; max-width: 640px; margin: 32px auto; padding: 0 16px; color: #222; }
+    h1 { font-size: 20px; margin-bottom: 16px; }
+    fieldset { border: 1px solid #ddd; border-radius: 8px; padding: 16px 20px 20px; margin-bottom: 16px; }
+    legend { font-size: 14px; color: #555; padding: 0 6px; }
+    label { display: block; margin: 12px 0 4px; font-size: 14px; color: #555; }
+    input[type="text"] { width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid #ccc; border-radius: 6px; font-size: 14px; }
+    .hint { font-size: 12px; color: #999; margin-top: 4px; }
+    button { padding: 8px 18px; margin: 16px 12px 0 0; border: none; border-radius: 6px; font-size: 14px; cursor: pointer; }
+    #save { background: #2563eb; color: #fff; }
+    #test { background: #e5e7eb; color: #222; }
+    #status { margin-top: 16px; padding: 10px 12px; border-radius: 6px; font-size: 14px; display: none; word-break: break-all; }
+    #status.ok { display: block; background: #ecfdf5; color: #065f46; }
+    #status.err { display: block; background: #fef2f2; color: #991b1b; }
+    #status.pending { display: block; background: #f3f4f6; color: #374151; }
+    .note { font-size: 13px; color: #666; line-height: 1.8; }
+  </style>
+</head>
+<body>
+  <h1>Every Agent 浏览器控制 · 设置</h1>
+
+  <fieldset>
+    <legend>守护进程连接</legend>
+
+    <label for="serverUrl">服务地址</label>
+    <input type="text" id="serverUrl" placeholder="http://127.0.0.1:0">
+    <div class="hint">由 skill 侧提供（Every Agent browser 插件启动守护进程时给出实际地址）。</div>
+
+    <label for="token">Token</label>
+    <input type="text" id="token" placeholder="由 skill 侧提供">
+    <div class="hint">与守护进程运行时生成的一致。</div>
+
+    <button id="save">保存</button>
+    <button id="test">测试连接</button>
+    <div id="status"></div>
+  </fieldset>
+
+  <p class="note">
+    这是 Every Agent browser 插件的命令执行扩展（纯通用执行器，自身不含任何业务逻辑）。<br>
+    保存后扩展会自动连接守护进程并开始轮询命令，无需手动触发；服务地址与 token 见
+    Every Agent 侧 skill 面板 / 守护进程运行时信息。
+  </p>
+
+  <script src="options.js"></script>
+</body>
+</html>

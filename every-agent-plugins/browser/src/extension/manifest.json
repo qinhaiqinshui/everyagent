@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "Every Agent 浏览器控制",
+  "version": "0.1.0",
+  "description": "Every Agent 浏览器命令执行扩展：接收守护进程下发的命令并操控标签页与页面。",
+  "permissions": ["tabs", "scripting", "storage"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "sw.js"
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
+  "action": {},
+  "minimum_chrome_version": "116"
+}

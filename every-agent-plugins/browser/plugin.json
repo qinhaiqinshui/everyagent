@@ -1,0 +1,9 @@
+{
+  "id": "browser",
+  "name": "浏览器操控",
+  "version": "0.1.0",
+  "description": "浏览器操控插件：skill/CLI + MV3 扩展命令通道，AI 操控用户真实浏览器做网页自动化测试",
+  "author": "everyagent",
+  "skills": "skill",
+  "enabled": true
+}
