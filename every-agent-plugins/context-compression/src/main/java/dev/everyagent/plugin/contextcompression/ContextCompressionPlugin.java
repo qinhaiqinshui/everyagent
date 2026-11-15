@@ -18,6 +18,9 @@ public class ContextCompressionPlugin implements EveryAgentPlugin {
         WorkerConfig config = ctx.services().config();
         WorkerServices services = ctx.services(); // 供 provider 延迟解析 TokenEstimator
         ctx.registerAdvisorProvider(new ContextCompressionAdvisorProvider(config, services));
+        ctx.registerSlashProvider("compress-context", () ->
+                CompressContextSlashProvider.items(ctx.services()));
+        ctx.registerSlashTokenResolver(new CompressContextSlashResolver());
         log.info("[context-compression] 已注册 ContextCompressionAdvisorProvider");
     }
 }

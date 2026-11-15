@@ -58,6 +58,6 @@ public class ContextCompressionAdvisorProvider implements AdvisorProvider {
         ContextCompressor.TextTokens tokens = estimator == null
                 ? null
                 : text -> estimator.estimate(text, configId);
-        return new ContextCompressionAdvisor(a, limits, summarizer, tokens);
+        return new ContextCompressionAdvisor(a, limits, summarizer, tokens, services.slashTokens());
     }
 }

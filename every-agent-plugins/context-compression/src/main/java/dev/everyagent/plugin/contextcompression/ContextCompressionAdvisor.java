@@ -7,6 +7,7 @@ import dev.everyagent.plugin.api.agent.AgentContext;
 import dev.everyagent.plugin.api.agent.CompressionSeed;
 import dev.everyagent.plugin.api.event.Usage;
 import dev.everyagent.plugin.api.execution.ExecContext;
+import dev.everyagent.plugin.api.slash.SlashTokenService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClientRequest;
@@ -55,6 +56,8 @@ public class ContextCompressionAdvisor implements CallAdvisor, StreamAdvisor {
     private final ContextSummarizer summarizer;
     /** token 估算口径(全局 TokenEstimator 的输入口径;为空回退内置 bytes/3)。 */
     private final ContextCompressor.TextTokens tokens;
+    /** 任务级 slash token 只读查询(手动压缩请求判定与消费用;为空不支持手动压缩)。 */
+    private final SlashTokenService slashTokens;
 
     /** 上轮实际发给模型的指令视图(含注入的提示),供下一轮 offset 校准。 */
     private List<Message> lastSent;
@@ -65,10 +68,17 @@ public class ContextCompressionAdvisor implements CallAdvisor, StreamAdvisor {
 
     public ContextCompressionAdvisor(AgentContext a, WorkerConfig.Limits limits,
             ContextSummarizer summarizer, ContextCompressor.TextTokens tokens) {
+        this(a, limits, summarizer, tokens, null);
+    }
+
+    public ContextCompressionAdvisor(AgentContext a, WorkerConfig.Limits limits,
+            ContextSummarizer summarizer, ContextCompressor.TextTokens tokens,
+            SlashTokenService slashTokens) {
         this.a = a;
         this.limits = limits;
         this.summarizer = summarizer;
         this.tokens = tokens;
+        this.slashTokens = slashTokens;
     }
 
     @Override
@@ -98,11 +108,19 @@ public class ContextCompressionAdvisor implements CallAdvisor, StreamAdvisor {
         if (request == null || request.prompt() == null) {
             return request;
         }
-        if (!limits.contextCompressionEnabled()) {
+
+        // 手动压缩请求:用户经 /压缩上下文 斜杠命令触发的一次性强制压缩。
+        // 即使自动压缩整体关闭也生效(用户显式请求);token 检测后消费式移除,不重复触发。
+        boolean manualCompress = checkManualCompress(exec);
+
+        if (!manualCompress && !limits.contextCompressionEnabled()) {
             return request;
         }
         List<Message> messages = request.prompt().getInstructions();
         if (messages == null || messages.isEmpty()) {
+            if (manualCompress) {
+                consumeManualCompress(exec);
+            }
             return request;
         }
 
@@ -169,38 +187,46 @@ public class ContextCompressionAdvisor implements CallAdvisor, StreamAdvisor {
         long used = est + overhead;
 
         List<Message> toSend;
-        if (used <= trigger) {
+        if (used <= trigger && !manualCompress) {
             toSend = working;
         } else {
+            // 手动压缩:绕过触发阈值,直接以 target 为目标压缩(trigger 传 0 强制进入压缩分支)。
+            long effectiveTrigger = manualCompress ? 0 : trigger;
+            String modeLabel = manualCompress ? "手动" : "自动";
+
             // 压缩中 trace(只含 summary;进行中瞬态,完成后同 id 更新为持久)
             long compId = SnowflakeId.next();
             a.emitter().emit(EmitEvent.transientOf(compId, "context.compression", null, null,
-                    "正在自动压缩上下文…(当前约 " + used + " token)", null, null, null,
+                    "正在" + modeLabel + "压缩上下文…(当前约 " + used + " token)", null, null, null,
                     EmitEvent.Mode.REPLACE));
 
             ContextSummarizer sum = limits.contextSummaryEnabled() ? summarizer : null;
-            ContextCompressor.Result r = ContextCompressor.compress(working, trigger, target, overhead, sum, tokens);
+            ContextCompressor.Result r = ContextCompressor.compress(working, effectiveTrigger, target, overhead, sum, tokens);
             if (!r.compressed()) {
                 toSend = working;
                 a.emitter().emit(EmitEvent.of(compId, "context.compression", null, null,
-                        "已自动压缩上下文(无需改写)", null, null, null, EmitEvent.Mode.REPLACE));
+                        "已" + modeLabel + "压缩上下文(无需改写)", null, null, null, EmitEvent.Mode.REPLACE));
             } else {
                 toSend = r.messages();
                 baseline = new ArrayList<>(r.messages());
                 absorbed = full.size();
                 long after = ContextCompressor.estimateTokens(toSend, tokens) + overhead;
                 a.emitter().emit(EmitEvent.of(compId, "context.compression", null, null,
-                        "已自动压缩上下文(" + stageName(r.stage()) + ", 消息 " + working.size() + "→"
+                        "已" + modeLabel + "压缩上下文(" + stageName(r.stage()) + ", 消息 " + working.size() + "→"
                                 + toSend.size() + ", 约 " + used + "→" + after + " token 估算)",
                         null, null, null, EmitEvent.Mode.REPLACE));
-                log.info("任务 {} agent {} 上下文压缩: used={} trigger={} target={} messages {}→{} 阶段={} "
+                log.info("任务 {} agent {} {}压缩上下文: used={} trigger={} target={} messages {}→{} 阶段={} "
                                 + "丢历史轮={} 丢本轮工具对={}",
-                        exec.subjectId(), a.agentId(), used, trigger, target, working.size(), toSend.size(),
-                        stageName(r.stage()), r.droppedHistoryTurns(), r.droppedCurrentToolPairs());
+                        exec.subjectId(), a.agentId(), modeLabel, used, trigger, target, working.size(),
+                        toSend.size(), stageName(r.stage()), r.droppedHistoryTurns(), r.droppedCurrentToolPairs());
                 if (after > target) {
-                    log.warn("任务 {} agent {} 上下文压缩后仍 > 目标阈值(本轮单 turn 过大),交由模型上限兜底",
-                            exec.subjectId(), a.agentId());
+                    log.warn("任务 {} agent {} {}压缩后仍 > 目标阈值(本轮单 turn 过大),交由模型上限兜底",
+                            exec.subjectId(), a.agentId(), modeLabel);
                 }
+            }
+            // 手动压缩请求消费:无论是否实际改写,token 用后移除(一次性)。
+            if (manualCompress) {
+                consumeManualCompress(exec);
             }
         }
 
@@ -208,7 +234,7 @@ public class ContextCompressionAdvisor implements CallAdvisor, StreamAdvisor {
         List<Message> finalView;
         if (baseline != null) {
             SystemMessage hint = new SystemMessage(
-                    "【系统提示】早期上下文已被自动压缩，需要之前的具体细节时请通过工具重新读取/搜索，不要凭空猜测。");
+                    "【系统提示】早期上下文已被压缩，需要之前的具体细节时请通过工具重新读取/搜索，不要凭空猜测。");
             finalView = new ArrayList<>();
             finalView.add(hint);
             finalView.addAll(toSend);
@@ -248,5 +274,41 @@ public class ContextCompressionAdvisor implements CallAdvisor, StreamAdvisor {
             case 3 -> "C(删最旧历史轮)";
             default -> "无";
         };
+    }
+
+    /**
+     * 检查是否存在手动压缩请求的任务级 slash token({@code system.compress_context})。
+     * token 由用户经 /压缩上下文 斜杠命令选择后由 slash 层写入任务目录。
+     *
+     * @return true = 存在手动压缩请求
+     */
+    private boolean checkManualCompress(ExecContext exec) {
+        if (slashTokens == null || exec == null) {
+            return false;
+        }
+        try {
+            return slashTokens.hasKind(exec.subjectId(), CompressContextToken.KIND);
+        } catch (RuntimeException e) {
+            log.debug("手动压缩 token 查询失败 task={}", exec.subjectId(), e);
+            return false;
+        }
+    }
+
+    /**
+     * 消费(移除)手动压缩请求 token —— 一次性,压缩完成后立即移除,不重复触发。
+     * 移除后 slash 层广播 {@code slash.tokens.changed},前端底部胶囊自动消失。
+     */
+    private void consumeManualCompress(ExecContext exec) {
+        if (slashTokens == null || exec == null) {
+            return;
+        }
+        try {
+            boolean removed = slashTokens.removeKind(exec.subjectId(), CompressContextToken.KIND);
+            if (removed) {
+                log.debug("手动压缩请求已消费 task={} agent={}", exec.subjectId(), a.agentId());
+            }
+        } catch (RuntimeException e) {
+            log.warn("手动压缩 token 消费失败 task={}", exec.subjectId(), e);
+        }
     }
 }
