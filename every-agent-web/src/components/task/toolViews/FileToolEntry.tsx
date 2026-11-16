@@ -37,6 +37,7 @@ import { workspaceRegistry } from '@/hub/workspaceRegistry'
 import { useTaskWorkspaceRoot } from '../TaskWorkspaceContext'
 import { EntryShell } from '@/components/task/entryViews/EntryShell'
 import { extractFileName, toolStateClass, toolDurationText, toolDurationTintStyle } from './helpers'
+import { ToolStartMeta } from './ToolStartMeta'
 import type { AggregatedToolDetail } from './types'
 
 /** content 字段始终排在参数列表最后，避免开头被巨量正文占据。 */
@@ -161,6 +162,7 @@ export function FileToolEntry({ detail, inlineExtras }: FileToolEntryProps) {
       }
     >
       <div className="nagent-tool__detail">
+          <ToolStartMeta startedAt={detail.startedAt} />
           <div className="nagent-tool__result-item">
             <div className="nagent-tool__result-item-head">
               <WrenchIcon size={12} className={`nagent-tool__icon${stateClass ? ` ${stateClass}` : ''}`} />

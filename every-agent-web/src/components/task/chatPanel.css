@@ -1221,6 +1221,24 @@
   margin: 0;
 }
 
+/* 展开态元信息行:工具开始执行时间点(「开始于 HH:mm:ss」,悬停提示完整年月日,
+   见 toolViews/ToolStartMeta)。老事件 startedAt 缺失时组件不渲染,不占位。
+   时间数字等宽 + tabular-nums,与摘要行耗时列同观感;文本 muted 不与参数/结果争视觉。 */
+.nagent-tool__meta {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  margin-bottom: var(--space-1, 4px);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+.nagent-tool__meta-time {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
 /* 合并块内：每个调用 / 结果作为子项 */
 .nagent-tool__result-item + .nagent-tool__result-item {
   margin-top: 8px;

@@ -36,6 +36,8 @@ export interface AggregatedToolDetail {
   result: unknown
   /** 调用耗时(ms):结果载荷的权威 durationMs;运行中由调用方灌入实时读秒值。 */
   durationMs?: number
+  /** 调用开始时间点(毫秒,宿主时钟):结果载荷的权威 startedAt;运行中由调用方灌入瞬态 tool.started 值;老事件缺失。 */
+  startedAt?: number
   /** 调用行运行态(状态图标 class 的单一来源);缺省时视图按 status 推导(done/error)。 */
   rowState?: ToolCallState
 }

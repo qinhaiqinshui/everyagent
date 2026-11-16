@@ -14,6 +14,7 @@
 import { WrenchIcon } from '@/components/shared/AppGlyphs'
 import JsonBlock from '@/components/shared/JsonBlock'
 import { EntryShell } from '@/components/task/entryViews/EntryShell'
+import { ToolStartMeta } from './ToolStartMeta'
 import { toolStateClass, toolDurationText, toolDurationTintStyle } from './helpers'
 import type { AggregatedToolDetail, ToolViewProps } from './types'
 
@@ -104,6 +105,7 @@ function DefaultEntry({ detail }: { detail: AggregatedToolDetail }) {
       summary={<span className="nagent-tool__inline-preview">{inlinePreview}</span>}
     >
       <div className="nagent-tool__detail">
+          <ToolStartMeta startedAt={detail.startedAt} />
           <div className="nagent-tool__result-item">
             <div className="nagent-tool__result-item-head">
               <WrenchIcon size={12} className={`nagent-tool__icon${stateClass ? ` ${stateClass}` : ''}`} />
