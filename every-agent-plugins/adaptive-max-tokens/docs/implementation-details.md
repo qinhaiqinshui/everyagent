@@ -10,7 +10,7 @@
 
 - **触发信号**:per-subscription 在 `doOnNext` 检测 `finish_reason=length` 帧(真实 provider 帧或 Guard 合成帧,不区分来源)——记 flag 后 `filter` 吞掉该帧不上抛(防止帧泄漏到外层聚合器与前端)。流结束(doOnComplete 或 onErrorResume)时 flag 置位 → 升级预算重试。
 - **交互模型**:Guard 补帧(数据面触发器)→ Adaptive 消费帧升预算重试;Guard 抛异常(控制面兜底)→ Adaptive 不在场时错误收口不丢。Adaptive 只认帧,不认异常类型/文案。异常不会使 Adaptive 失效:Adaptive(+250)在 Guard(+300)外层,Guard 异常必经 Adaptive 的 onErrorResume;Reactor 保证 onNext(帧)先于 onError(异常),flag 必已置位。
-- **升级**:`budget = min(base × multiplier^attempt, ceiling)`;重试零延迟重订阅(不加人工退避)。升级后的 budget 保存在 advisor 实例字段(per-run,主/子 agent 各自隔离),本次任务后续所有轮次均用增大后的值。
+- **升级**:`budget = min(base × multiplier^attempt, ceiling)`;重试零延迟重订阅(不加人工退避)。升级后的 budget 保存在 advisor 实例字段(per-run,主/子 agent 各自隔离),本次任务后续所有轮次均用增大后的值。**重订链(2026-11 生产 bug 修复)**:Spring AI 2 的 `DefaultAroundAdvisorChain` 是一次性消费,同一 chain 第二次 `nextStream` 必抛 `No StreamAdvisors available to execute`——升级重试必须经 `original.copy(this)` 取 fresh 链(铁律与空响应/瞬时错误重试 advisor 一致;copy 基底 = 本 advisor 收到的原始链,每次重试 fresh copy)。旧实现复用同一 chain,升级首轮即必炸(长输出任务 100% 触发)。
 - **回落**:连续 N 轮实际输出(usage completionTokens)< 当前预算 × 低水位 → 衰减回 base(防预算单调膨胀)。
 - **ceiling 硬上限 = 262144(256K tokens)**:2025 年主流商用模型输出上限包络值(GPT-5.2/o3 256K、Claude 4.5 128K、Gemini 3 Pro 128K 等)。超出模型真实上限时厂商返回 400,Adaptive 捕获后一次性回退到触发升级前的上一个 budget 并停止继续上调。
 - **放弃**:预算已达 ceiling 或重试次数上限 → 抛非重试异常 `AdaptiveBudgetExhaustedException`(信息含已放大至 ceiling 多少、建议精简输入/降 reasoningEffort/任务拆分)。
