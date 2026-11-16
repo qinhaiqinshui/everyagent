@@ -9,6 +9,8 @@ import dev.everyagent.plugin.api.slash.SlashTokenEncoder;
 import dev.everyagent.plugin.api.task.StoredTaskInfo;
 import dev.everyagent.plugin.api.task.TaskRuntime;
 import dev.everyagent.plugin.api.task.TaskService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClientRequest;
 import org.springframework.ai.chat.client.ChatClientResponse;
 import org.springframework.ai.chat.client.advisor.ToolCallingAdvisor;
@@ -42,11 +44,19 @@ import tools.jackson.databind.node.ObjectNode;
  */
 public class WaitTaskAdvisor implements CallAdvisor, StreamAdvisor {
 
+    private static final Logger log = LoggerFactory.getLogger(WaitTaskAdvisor.class);
+
     /**
      * 轮询间隔（ms）。包内可覆写的静态字段：默认 1000（规格 §2），
      * 测试调小加速轮询类用例。
      */
     static volatile long pollIntervalMs = 1000L;
+
+    /**
+     * 心跳日志周期（轮询次数）：默认间隔 1000ms 下即每 60s 一条 INFO
+     * 「仍在等待」——等待不再静默（2026-11 生产 8 小时零日志挂起的教训）。
+     */
+    private static final int HEARTBEAT_LOOPS = 60;
 
     /** 循环等待检测的逐跳上限（防御：超长链不无限走；超过即视为无环、正常等待）。 */
     private static final int MAX_CYCLE_HOPS = 16;
@@ -101,13 +111,16 @@ public class WaitTaskAdvisor implements CallAdvisor, StreamAdvisor {
      *       无胶囊轮次的绝大多数路径零开销）；</li>
      *   <li>自等 → error trace + 抛 {@link WaitTaskFailedException}；</li>
      *   <li>循环等待 → 沿 {@code registry.activeOf} 逐跳走（只读，上限
-     *       {@value #MAX_CYCLE_HOPS} 跳），回指本任务即抛；</li>
-     *   <li>发起始 trace（waiting）；</li>
-     *   <li>轮询（快路径先查后等）：done → done trace + 放行；
+     *       {@value #MAX_CYCLE_HOPS} 跳；含<b>在席等待</b>——并发互等也能识别），
+     *       回指本任务即抛；</li>
+     *   <li>发起始 trace（waiting）+ 开始日志；</li>
+     *   <li>轮询（快路径先查后等）：done → done trace + 收口日志 + 放行；
      *       failed / cancelled / missing → error trace + 抛；
-     *       其余（running / waiting-user / created）→ sleep 后续查；
+     *       其余（running / waiting-user / created）→ sleep 后续查，
+     *       每 {@value #HEARTBEAT_LOOPS} 次轮询一条心跳日志（等待不静默）；
      *       InterruptedException → 尽力发 cancelled trace → 恢复中断标记 →
-     *       抛 RuntimeException（任务按取消收口）。</li>
+     *       抛 RuntimeException（任务按取消收口）；</li>
+     *   <li>任意收口路径经 finally {@code registry.finish} 在席等待退场。</li>
      * </ol>
      */
     void waitIfNeeded() {
@@ -115,6 +128,16 @@ public class WaitTaskAdvisor implements CallAdvisor, StreamAdvisor {
         if (b == null) {
             return;
         }
+        try {
+            waitBound(b);
+        } finally {
+            // 在席等待退场：不退场会以陈旧等待污染后续循环检测（误报互等）
+            registry.finish(taskId);
+        }
+    }
+
+    /** 消费到绑定后的等待主体：自等 / 循环检测 / 起始帧 / 轮询（见 {@link #waitIfNeeded}）。 */
+    private void waitBound(WaitRegistry.WaitBinding b) {
         // 自等：目标任务即本任务，永远不会 done → 立即失败收口
         if (taskId.equals(b.targetTaskId())) {
             long traceId = SnowflakeId.next();
@@ -127,10 +150,12 @@ public class WaitTaskAdvisor implements CallAdvisor, StreamAdvisor {
         long traceId = SnowflakeId.next();
         long startedAt = System.currentTimeMillis();
         emitStart(traceId, b, startedAt);
+        log.info("[wait] task={} 开始等待目标任务 {}({})", taskId, b.targetTaskId(), plainTitle(b));
 
         // 快路径（先查后等，需求 9）：进入轮询前先查一次——用户选中时目标进行中、
         // 提交运行时已 done → 起始+完成两连发（waitedMs≈0）直接放行；首查即
         // failed / cancelled / missing 同样直接走终态分支，不进入轮询。
+        int loops = 0;
         while (true) {
             String s = targetStatus(b.targetTaskId());
             if ("done".equals(s)) {
@@ -138,14 +163,25 @@ public class WaitTaskAdvisor implements CallAdvisor, StreamAdvisor {
                 long waitedMs = endedAt - startedAt;
                 emit(traceId, b, "done", "等待完成（" + formatDuration(waitedMs) + "）",
                         doneData(b, startedAt, endedAt, waitedMs));
+                log.info("[wait] task={} 等待目标任务 {} 完成,耗时 {}",
+                        taskId, b.targetTaskId(), formatDuration(waitedMs));
                 return;
             }
             if ("failed".equals(s) || "cancelled".equals(s) || "missing".equals(s)) {
+                log.warn("[wait] task={} 等待目标任务 {} 中止（目标{}）",
+                        taskId, b.targetTaskId(), terminalLabel(s));
                 emit(traceId, b, "error", "目标任务未成功完成，等待中止", errorData(b, s));
                 throw new WaitTaskFailedException("等待的任务「" + plainTitle(b)
                         + "」未成功完成（" + terminalLabel(s) + "），本任务不再继续");
             }
-            // 其余（running / waiting-user / created）→ 虚拟线程 park 后续查
+            // 其余（running / waiting-user / created）→ 虚拟线程 park 后续查;
+            // 每 HEARTBEAT_LOOPS 次轮询一条心跳:静默挂起从此在日志可见
+            loops++;
+            if (loops % HEARTBEAT_LOOPS == 0) {
+                log.info("[wait] task={} 仍在等待目标任务 {}({}),已等 {},目标状态 {}",
+                        taskId, b.targetTaskId(), plainTitle(b),
+                        formatDuration(System.currentTimeMillis() - startedAt), s);
+            }
             try {
                 Thread.sleep(pollIntervalMs);
             } catch (InterruptedException e) {
