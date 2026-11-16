@@ -425,6 +425,12 @@ public final class OsSandbox implements SandboxBackend, NativeExec {
             }
             int code = aborted ? -1 : p.waitFor();
             return new ExecResult(capOutput(outText), capOutput(errText), code, aborted);
+        } catch (InterruptedException e) {
+            // 中断 = 任务取消/级联 stopAll 的 cancel(true):恢复中断标记(供任务层按取消
+            // 收口),按 aborted=true 报「exec 被中断」——与 spawnToFileRedirected 对齐;
+            // 不得吞进通用异常分支伪装成 rc=1 的普通失败(丢中断标记 + 掩盖取消语义)
+            Thread.currentThread().interrupt();
+            return new ExecResult("", "exec 被中断", -1, true);
         } catch (IOException e) {
             return new ExecResult("", "exec 启动失败: " + e.getMessage(), 1, false);
         } catch (Exception e) {
