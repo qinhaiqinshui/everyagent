@@ -338,6 +338,9 @@ export interface PluginToolCallDetail {
   rowState?: 'queued' | 'running' | 'done' | 'error' | 'interrupted' | 'skipped'
   /** 调用耗时（ms）：结果载荷的权威 durationMs；运行中由宿主灌入实时读秒值。 */
   durationMs?: number
+  /** 调用开始时间点（毫秒，宿主时钟）：结果载荷的权威 startedAt；运行中由宿主
+   *  灌入瞬态 tool.started 值；老事件缺失（视图据此不渲染时间点行）。 */
+  startedAt?: number
 }
 
 /** 插件工具视图组件的 props（与核心 ToolViewProps 最小化对齐）。 */

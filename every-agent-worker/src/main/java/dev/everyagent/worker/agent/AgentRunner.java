@@ -10,15 +10,20 @@ import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.stereotype.Component;
 import reactor.core.Disposable;
+import reactor.core.scheduler.Scheduler;
+import reactor.core.scheduler.Schedulers;
 
 import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.stream.Stream;
 
 /**
  * agent 运行入口（agent 层）：薄化——工具循环与轮次聚合全交 {@code ToolCallingAdvisor}，
@@ -122,15 +127,17 @@ public class AgentRunner {
                             Disposable d = holder[0];
                             log.warn("[diag] 任务 {} agent {} 已 {}s 无任何事件(阈值 {}s):"
                                     + "响应式链疑似续体丢失(工具批未调度/流未推进)。现场快照:"
-                                    + "runState={} status={} finished={} subscription={}({}) latchOpen={} —— "
-                                    + "请立即抓取虚拟线程转储辅助定位: "
+                                    + "runState={} status={} finished={} subscription={}({}) latchOpen={}"
+                                    + " —— boundedElastic 池状态(queued>0 且 IDLE = 任务已入队但从未被执行,唤醒丢失铁证):{}"
+                                    + " —— 请立即抓取虚拟线程转储辅助定位: "
                                     + "jcmd <pid> Thread.dump_to_file -format=json /tmp/vt.json "
                                     + "(本诊断仅打点不打断,任务保持原状)",
                                     a.execution().subjectId(), a.agentId(),
                                     idleMs / 1000, inactivityMs / 1000,
                                     a.runState(), a.status(), a.finished,
                                     d == null ? "null" : "present", d != null && d.isDisposed(),
-                                    done.getCount() > 0);
+                                    done.getCount() > 0,
+                                    boundedElasticPoolDump());
                         }
                         catch (RuntimeException e) {
                             // 周期任务抛异常会被调度器静默取消,必须吞掉保住后续检查
@@ -205,5 +212,39 @@ public class AgentRunner {
                 throw new ModelCallException("模型调用失败: " + t.getMessage(), t);
             }
             a.finished = true;
+    }
+
+    /**
+     * boundedElastic 池状态转储(诊断专用,反射读 Scannable.inners):每个 BoundedState 一行,
+     * 含 backing(被 pick 次数)/idleSince/executor 状态(BoundedScheduledExecutorService.toString
+     * 自带 ACTIVE|IDLE + queued=Q/completed=C)。<b>queued&gt;0 且 IDLE = 任务已入队但单工作线程
+     * 未取走</b>(唤醒丢失/队列损坏的直接铁证);backing 恒正且长期不归零 = worker 未 dispose
+     * (嵌套续体泄漏形态,2 核机 20 上限打满后靠 round-robin 复用)。反射失败返回占位串不抛错。
+     */
+    private static String boundedElasticPoolDump() {
+        try {
+            Scheduler sched = Schedulers.boundedElastic();
+            Object real = sched;
+            // Schedulers.boundedElastic() 返回 CachedScheduler 包装,字段 cached 才是本体
+            for (java.lang.reflect.Field f : sched.getClass().getDeclaredFields()) {
+                if ("cached".equals(f.getName())) {
+                    f.setAccessible(true);
+                    real = f.get(sched);
+                    break;
+                }
+            }
+            java.lang.reflect.Method inners = real.getClass().getMethod("inners");
+            inners.setAccessible(true);
+            List<Object> states = new ArrayList<>();
+            ((Stream<?>) inners.invoke(real)).filter(Objects::nonNull).forEach(states::add);
+            StringBuilder sb = new StringBuilder("\n");
+            for (Object s : states) {
+                sb.append("    ").append(s).append('\n');
+            }
+            return sb + "    (states=" + states.size() + ")";
+        }
+        catch (Throwable t) {
+            return "(池转储失败: " + t + ")";
+        }
     }
 }

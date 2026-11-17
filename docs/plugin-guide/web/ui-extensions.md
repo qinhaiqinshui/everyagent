@@ -205,7 +205,7 @@ ctx.ui.registerComposerAbovePanel({ id: 'my-plugin-toolbar', Component: MyToolba
 
 ## 7. `ui.tool_call_views` —— 工具调用视图接管
 
-### 7.1 Definition 字段表（`ToolCallViewDefinition`，`js/index.ts:336-345`；props 见 `PluginToolCallViewProps` `js/index.ts:324-331`、`PluginToolCallDetail` `js/index.ts:308-321`）
+### 7.1 Definition 字段表（`ToolCallViewDefinition`，`js/index.ts:359-368`；props 见 `PluginToolCallViewProps` `js/index.ts:347-354`、`PluginToolCallDetail` `js/index.ts:320-346`）
 
 | 字段 | 类型 | 必填 | 消费位置（宿主） | 说明 |
 |---|---|---|---|---|
@@ -213,7 +213,7 @@ ctx.ui.registerComposerAbovePanel({ id: 'my-plugin-toolbar', Component: MyToolba
 | `toolName` | `string` | ✅ | `toolViews/registry.ts:44` | 以**工具名**为 key 匹配（如 `update_file`） |
 | `Component` | `ComponentType<PluginToolCallViewProps>` | ✅ | `toolViews/registry.ts:47-48` | **整体接管折叠态 + 展开态**，组件完全自治 |
 
-`details[]` 每元素：`type:'tool_call'`、`toolName`、`toolCallId?`、`status?`、`arguments?`、`result?`——同工具多次调用会聚合后一起传入（`ToolCallView.tsx:85-104` 按 run 分组）。
+`details[]` 每元素：`type:'tool_call'`、`toolName`、`toolCallId?`、`status?`、`arguments?`、`result?`、`rowState?`（状态图标类单一来源）、`durationMs?`（权威耗时/运行中读秒）、`startedAt?`（开始时间点毫秒，老事件缺失）——同工具多次调用会聚合后一起传入（`ToolCallView.tsx:85-104` 按 run 分组）。
 
 ### 7.2 注册示例与消费链
 

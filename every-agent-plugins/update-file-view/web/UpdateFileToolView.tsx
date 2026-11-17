@@ -9,7 +9,8 @@
  *         图标与耗时与核心 FileToolEntry 同构：状态类 `nagent-tool-state--*`
  *         （rowState 优先，running 转圈 / done 绿 / error 红），耗时优先权威
  *         durationMs（运行中宿主灌入实时读秒，结果到达冻结权威值）。
- * 展开态：头部（图标 + 工具名 + 可点击路径 chip）→ 内嵌 diff（oldcontent → content
+ * 展开态：开始时间行（开始于 HH:mm:ss，与核心三视图的 ToolStartMeta 同构）→
+ *         头部（图标 + 工具名 + 可点击路径 chip）→ 内嵌 diff（oldcontent → content
  *         行级对比，先删后增 + 词级高亮，一律完整展开）→ 结果块 → 错误块。
  *
  * 变更统计只呈现一处（折叠态徽章），diff 区内不再重复「N 行变更」；
@@ -58,6 +59,8 @@ import {
   toolDurationText,
   toolDurationTintStyle,
   toolStateClass,
+  formatToolStartTime,
+  formatToolStartFullTime,
 } from './utils'
 import { UpdateFileDiff } from './UpdateFileDiff'
 
@@ -209,6 +212,7 @@ function UpdateFileEntry({ detail }: { detail: PluginToolCallDetail }) {
       {open ? (
         <div className="nagent-entry__content">
           <div className="nagent-tool__detail">
+            <ToolStartMeta startedAt={detail.startedAt} />
             <div className="nagent-tool__result-item">
               <div className="nagent-tool__result-item-head">
                 <WrenchIcon size={12} className={`nagent-tool__icon${stateClass ? ` ${stateClass}` : ''}`} />
@@ -264,6 +268,25 @@ function UpdateFileEntry({ detail }: { detail: PluginToolCallDetail }) {
           </div>
         </div>
       ) : null}
+    </div>
+  )
+}
+
+/**
+ * 展开态元信息行：工具开始执行时间点（「开始于 HH:mm:ss」，悬停显完整年月日）。
+ * 与宿主核心视图的 ToolStartMeta 同构：插件不可引用宿主模块，本地按同一 DOM
+ * 结构渲染；类名复用宿主 chatPanel.css 的 .nagent-tool__meta / __meta-time
+ * （插件渲染在宿主页面内，宿主样式照常生效），观感与核心三视图一致。
+ * 时间点来源 = detail.startedAt（宿主结果载荷权威值 / 运行中瞬态 tool.started 值）；
+ * 缺失（老事件未记录/排队未开始）返回 null，展开态保持原样不占位。
+ */
+function ToolStartMeta({ startedAt }: { startedAt: number | undefined }) {
+  const clock = formatToolStartTime(startedAt)
+  if (!clock) return null
+  return (
+    <div className="nagent-tool__meta">
+      开始于
+      <span className="nagent-tool__meta-time" title={formatToolStartFullTime(startedAt)}>{clock}</span>
     </div>
   )
 }

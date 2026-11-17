@@ -378,6 +378,31 @@ export function toolDurationTintStyle(detail: { durationMs?: number }): Record<s
   return { '--tool-dur-tint': `${toolDurationTint(detail.durationMs)}%` }
 }
 
+// ─── 开始时间点（复制自 @/components/task/toolViews/helpers） ──────────────
+
+/** 工具开始时间点 → 「时:分:秒」时钟文本(24 小时制,本地时区)。
+ *  用本地时区组件手动拼接,避免 toLocale* 的本地化差异(12 小时制 AM/PM 等),
+ *  与宿主 TasksPanel.formatTaskTime 同口径;非法/缺失返回空串(视图据此不渲染时间点行)。 */
+export function formatToolStartTime(ms: number | undefined): string {
+  if (ms == null || !Number.isFinite(ms) || ms < 0) return ''
+  const date = new Date(ms)
+  if (Number.isNaN(date.getTime())) return ''
+  const pad = (num: number) => String(num).padStart(2, '0')
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+}
+
+/** 工具开始时间点 → 完整「年-月-日 时:分:秒」文本。
+ *  作时间点行的悬停提示(时钟文本省略日期,跨天任务由此补齐日期上下文);
+ *  非法/缺失返回空串。 */
+export function formatToolStartFullTime(ms: number | undefined): string {
+  if (ms == null || !Number.isFinite(ms) || ms < 0) return ''
+  const date = new Date(ms)
+  if (Number.isNaN(date.getTime())) return ''
+  const pad = (num: number) => String(num).padStart(2, '0')
+  const day = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+  return `${day} ${formatToolStartTime(ms)}`
+}
+
 /**
  * 详情 → 状态图标 class（`nagent-tool-state--*` 颜色/动效单一来源）：
  * 优先 detail.rowState（宿主批壳/单调用直渲灌入）；缺省时按 status 推导
