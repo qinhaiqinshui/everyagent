@@ -195,6 +195,16 @@ public class WorkerServicesImpl implements WorkerServices {
             public boolean hasKind(String taskId, String kind) {
                 return slashStore.hasKind(taskId, kind);
             }
+
+            /**
+             * 消费式移除委托 {@link SlashTaskScopeStore#removeKind}:漏覆写时走接口默认
+             * 实现(恒 false),任务级一次性 token(如旧版 /压缩上下文 bottom 胶囊)永远
+             * 消费不掉——胶囊常驻输入框底部、每轮模型请求都强制压缩一次的根因。
+             */
+            @Override
+            public boolean removeKind(String taskId, String kind) {
+                return slashStore.removeKind(taskId, kind);
+            }
         };
     }
 

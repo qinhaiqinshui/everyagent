@@ -374,7 +374,7 @@ worker 的模型构建经 `ChatModelFactory` 统一入口,遇到特殊 provider(
 - **单一估算口径**:复用全局 `TokenEstimator` SPI(provider 延迟解析,缺失回退 UTF-8 bytes/3);估算函数方向盲,不分设输入/输出两套口径;输入侧残余偏差由压缩自身 offset 校准承担。
 - **累积式裁剪 + 摘要压缩**:首次压缩后持有基线,后续轮只把新增消息 delta 接到基线上增量裁剪;丢弃历史轮前生成要点摘要(失败退化为「保留该轮 user 截断简版」防永久失忆);单条超大工具结果做首尾保留的确定性截断。
 - 配置:`worker.limits.context-compression-enabled` / `context-offset-enabled` / `context-summary-enabled` / `context-summary-max-tokens` / `context-max-tool-result-chars`(超大结果发给模型前的截断闸门)/ `context-trigger-ratio`(0.95)/ `context-target-ratio`(0.50)。
-- 可见性:`task.trace(kind=context_compression)`;用户可经 `/压缩上下文` 斜杠命令**强制压缩**一次(绕过阈值,整体关闭时也生效;压缩完成后消费式移除 token,不残留不重复触发)。
+- 可见性:`task.trace(kind=context_compression)`;用户可经 `/压缩上下文` 斜杠命令**强制压缩**一次(绕过阈值,整体关闭时也生效)。该命令是**输入框内联一次性胶囊**:随消息提交触发、本 run 首个模型请求消费后即弃,不落盘不常驻不重复触发——与无人值守等持久开关(bottom 胶囊 + 任务级 token)划清边界。
 
 **用量**:每轮实测 token 用量由 `usage` 事件上报;task 层 usage 投影把任务下全部 agent 的「最近一轮上下文占用」聚合为 `TaskSummary.usage`(Σ inputTokens / Σ contextWindowTokens,前端任务列表与上下文电池同源同值;已终局 agent 保留最后快照),随 meta.json 持久化并与 per-agent 基线成对回灌;per-agent 口径(主/子一视同仁)另经台账 agents.json 与流内 usage 事件供给前端 agent 卡片。
 

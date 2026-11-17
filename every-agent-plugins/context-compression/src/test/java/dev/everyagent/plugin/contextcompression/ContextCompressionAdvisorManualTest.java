@@ -264,6 +264,82 @@ class ContextCompressionAdvisorManualTest {
     }
 
     @Test
+    void manualRequestRegistryPathForcesCompressionAndConsumes() {
+        // 主通道:inline 胶囊 → CompressContextRequestNode 登记内存注册表 → advisor 检测到
+        // 即强制压缩并消费;不依赖任务级 slash token(slashTokens 恒 false)。
+        List<Message> msgs = buildContext();
+        ChatClientRequest request = buildRequest(msgs);
+
+        ExecContext exec = mockExec("task-6", 1_000_000);
+        AgentContext a = mockAgent(exec);
+        Limits limits = mockLimits(true);
+
+        ManualCompressRegistry registry = new ManualCompressRegistry();
+        registry.mark("task-6");
+
+        SlashTokenService slashTokens = mock(SlashTokenService.class);
+        when(slashTokens.hasKind(anyString(), anyString())).thenReturn(false);
+
+        ContextCompressionAdvisor advisor = new ContextCompressionAdvisor(
+                a, limits, null, null, slashTokens, registry);
+
+        AtomicReference<ChatClientRequest> captured = new AtomicReference<>();
+        CallAdvisorChain chain = mock(CallAdvisorChain.class);
+        when(chain.nextCall(any(ChatClientRequest.class))).thenAnswer(inv -> {
+            captured.set(inv.getArgument(0));
+            return mock(org.springframework.ai.chat.client.ChatClientResponse.class);
+        });
+        advisor.adviseCall(request, chain);
+
+        ChatClientRequest sent = captured.get();
+        assertNotNull(sent);
+        List<Message> out = sent.prompt().getInstructions();
+        assertTrue(out.toString().contains(ContextCompressor.PLACEHOLDER) || out.size() < msgs.size(),
+                "注册表请求应强制压缩(远低于阈值)");
+        assertFalse(registry.has("task-6"), "压缩后请求应被消费(一次性)");
+    }
+
+    @Test
+    void manualRequestRegistryPathWorksEvenWhenAutoDisabled() {
+        // 自动压缩关闭,inline 胶囊显式请求仍生效(与旧 bottom 通道行为一致)。
+        List<Message> msgs = buildContext();
+        ChatClientRequest request = buildRequest(msgs);
+
+        ExecContext exec = mockExec("task-7", 1_000_000);
+        AgentContext a = mockAgent(exec);
+        Limits limits = mockLimits(false);
+
+        ManualCompressRegistry registry = new ManualCompressRegistry();
+        registry.mark("task-7");
+
+        ContextCompressionAdvisor advisor = new ContextCompressionAdvisor(
+                a, limits, null, null, null, registry);
+
+        CallAdvisorChain chain = mock(CallAdvisorChain.class);
+        when(chain.nextCall(any(ChatClientRequest.class)))
+                .thenReturn(mock(org.springframework.ai.chat.client.ChatClientResponse.class));
+        advisor.adviseCall(request, chain);
+
+        assertFalse(registry.has("task-7"), "请求消费,不残留");
+    }
+
+    @Test
+    void slashProviderDefaultSelectIsInline() {
+        // 无自定义 selectHandler → 默认行为:inline 原地插入 opaque 胶囊(输入框普通胶囊,
+        // 不再 bottom 渲染、不写任务级存储)。
+        var items = CompressContextSlashProvider.items(mock(dev.everyagent.plugin.api.WorkerServices.class));
+        var item = items.get(0);
+        var results = item.selectHandler().onSelect(item, "task-x");
+        assertEquals(1, results.size());
+        var result = results.get(0);
+        assertEquals(dev.everyagent.plugin.api.slash.SlashDisplayPosition.INLINE, result.position(),
+                "压缩上下文胶囊应为输入框内联形态");
+        assertNotNull(SlashTokenEncoder.parseToken(result.token()));
+        assertEquals(CompressContextToken.KIND,
+                SlashTokenEncoder.parseToken(result.token()).kind());
+    }
+
+    @Test
     void compressContextSlashResolverReturnsEmpty() {
         CompressContextSlashResolver resolver = new CompressContextSlashResolver();
         assertEquals(CompressContextToken.KIND, resolver.kind());

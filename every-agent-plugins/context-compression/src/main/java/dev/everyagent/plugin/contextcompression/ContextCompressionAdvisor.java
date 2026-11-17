@@ -56,8 +56,10 @@ public class ContextCompressionAdvisor implements CallAdvisor, StreamAdvisor {
     private final ContextSummarizer summarizer;
     /** token 估算口径(全局 TokenEstimator 的输入口径;为空回退内置 bytes/3)。 */
     private final ContextCompressor.TextTokens tokens;
-    /** 任务级 slash token 只读查询(手动压缩请求判定与消费用;为空不支持手动压缩)。 */
+    /** 任务级 slash token 只读查询(旧版 bottom 胶囊残留的兼容消费口;为空跳过)。 */
     private final SlashTokenService slashTokens;
+    /** 手动压缩请求内存注册表(inline 胶囊一次性请求;为空不支持手动压缩)。 */
+    private final ManualCompressRegistry manualRequests;
 
     /** 上轮实际发给模型的指令视图(含注入的提示),供下一轮 offset 校准。 */
     private List<Message> lastSent;
@@ -68,17 +70,24 @@ public class ContextCompressionAdvisor implements CallAdvisor, StreamAdvisor {
 
     public ContextCompressionAdvisor(AgentContext a, WorkerConfig.Limits limits,
             ContextSummarizer summarizer, ContextCompressor.TextTokens tokens) {
-        this(a, limits, summarizer, tokens, null);
+        this(a, limits, summarizer, tokens, null, null);
     }
 
     public ContextCompressionAdvisor(AgentContext a, WorkerConfig.Limits limits,
             ContextSummarizer summarizer, ContextCompressor.TextTokens tokens,
             SlashTokenService slashTokens) {
+        this(a, limits, summarizer, tokens, slashTokens, null);
+    }
+
+    public ContextCompressionAdvisor(AgentContext a, WorkerConfig.Limits limits,
+            ContextSummarizer summarizer, ContextCompressor.TextTokens tokens,
+            SlashTokenService slashTokens, ManualCompressRegistry manualRequests) {
         this.a = a;
         this.limits = limits;
         this.summarizer = summarizer;
         this.tokens = tokens;
         this.slashTokens = slashTokens;
+        this.manualRequests = manualRequests;
     }
 
     @Override
@@ -109,8 +118,8 @@ public class ContextCompressionAdvisor implements CallAdvisor, StreamAdvisor {
             return request;
         }
 
-        // 手动压缩请求:用户经 /压缩上下文 斜杠命令触发的一次性强制压缩。
-        // 即使自动压缩整体关闭也生效(用户显式请求);token 检测后消费式移除,不重复触发。
+        // 手动压缩请求:用户经 /压缩上下文 inline 胶囊随消息提交触发的一次性强制压缩。
+        // 即使自动压缩整体关闭也生效(用户显式请求);检测后消费式移除,不重复触发。
         boolean manualCompress = checkManualCompress(exec);
 
         if (!manualCompress && !limits.contextCompressionEnabled()) {
@@ -277,13 +286,25 @@ public class ContextCompressionAdvisor implements CallAdvisor, StreamAdvisor {
     }
 
     /**
-     * 检查是否存在手动压缩请求的任务级 slash token({@code system.compress_context})。
-     * token 由用户经 /压缩上下文 斜杠命令选择后由 slash 层写入任务目录。
+     * 检测是否存在待消费的手动压缩请求,双通道(任一命中即请求有效):
+     * <ul>
+     *   <li>主通道:{@link ManualCompressRegistry} 内存注册表——/压缩上下文 inline 胶囊
+     *       随消息提交时由 {@code CompressContextRequestNode}(轮次循环 881)登记,per-run
+     *       一次性语义;</li>
+     *   <li>兼容通道:任务级 slash token(旧版 bottom 胶囊写 {@code slash-tokens.json}),
+     *       供线上已残留 token 的存量任务照常消费清零。</li>
+     * </ul>
      *
      * @return true = 存在手动压缩请求
      */
     private boolean checkManualCompress(ExecContext exec) {
-        if (slashTokens == null || exec == null) {
+        if (exec == null) {
+            return false;
+        }
+        if (manualRequests != null && manualRequests.has(exec.subjectId())) {
+            return true;
+        }
+        if (slashTokens == null) {
             return false;
         }
         try {
@@ -295,11 +316,18 @@ public class ContextCompressionAdvisor implements CallAdvisor, StreamAdvisor {
     }
 
     /**
-     * 消费(移除)手动压缩请求 token —— 一次性,压缩完成后立即移除,不重复触发。
-     * 移除后 slash 层广播 {@code slash.tokens.changed},前端底部胶囊自动消失。
+     * 消费(移除)手动压缩请求 —— 一次性,压缩完成后立即移除,不重复触发:
+     * 内存注册表 consume + 兼容通道 removeKind(移除后 slash 层广播
+     * {@code slash.tokens.changed},存量任务的底部胶囊随之消失)。
      */
     private void consumeManualCompress(ExecContext exec) {
-        if (slashTokens == null || exec == null) {
+        if (exec == null) {
+            return;
+        }
+        if (manualRequests != null) {
+            manualRequests.consume(exec.subjectId());
+        }
+        if (slashTokens == null) {
             return;
         }
         try {
