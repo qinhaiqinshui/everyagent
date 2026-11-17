@@ -56,6 +56,12 @@ const pendingComposerTexts: string[] = []
  * 此刻新任务页尚未激活，bridge 仍指旧任务页 → 引用落进旧草稿、新标签页为空）。
  * 因此仅当「当前激活标签是任务标签」（bridge 必属该激活页）时才直写，否则一律排队，
  * 待目标任务页激活注入 bridge 时 flush。
+ *
+ * 激活切换守卫（invalidateComposerBridge）：上面「镜像仍是 task」的判据在
+ * openTab 切换标签的**同一同步调用栈**内是过时的——镜像由 Layout 的 effect 在
+ * React commit 后才更新，此刻它还指向切换前的旧任务标签，直写仍会落进旧草稿。
+ * 故宿主壳层在激活标签真正切换（openTab/点选/关闭）的同步路径上先作废桥，
+ * 让紧跟其后的 append 一律排队，待新激活任务页注入桥时 flush。
  */
 export function appendComposerTextQueued(text: string): void {
   if (composerBridge && activeTabMirror.current?.tabType === 'task') {
@@ -63,6 +69,15 @@ export function appendComposerTextQueued(text: string): void {
     return
   }
   pendingComposerTexts.push(text)
+}
+
+/**
+ * 作废当前草稿桥引用（不清待写队列）：宿主壳层在激活标签切换/关闭的同步路径上调用。
+ * 桥此后由新激活任务页的 TaskChat 重新注入（注入即 flush 队列），窗口期内 append
+ * 一律走排队路径，杜绝「桥仍指向已隐藏/已卸载旧任务页」的陈旧直写。
+ */
+export function invalidateComposerBridge(): void {
+  composerBridge = null
 }
 
 /** 由宿主 TaskChat 在挂载时注入草稿桥接能力；传 null 卸载。注入时 flush 已排队的草稿文本。 */
