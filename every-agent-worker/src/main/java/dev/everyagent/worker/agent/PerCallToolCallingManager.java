@@ -168,14 +168,41 @@ public final class PerCallToolCallingManager implements ToolCallingManager {
         }
         AssistantMessage assistantMessage = toolCallGeneration.get().getOutput();
         ToolContext toolContext = buildToolContext(prompt, assistantMessage);
+        // 工具批入口诊断日志(2026-11 t_145g 静默挂起排障):与 WorkerToolEventAdvisor 的
+        // 「轮次聚合完成」日志构成判定对——轮次完成(hasToolCalls=true)之后本日志未出现,
+        // 即续体丢失发生在「轮聚合 concatWith 续体订阅 → executeToolCalls」之间;
+        // 本日志出现而 tool.started/tool.result 未发,则丢失发生在 per-call 链内。
+        // tool.started 是瞬态事件不落盘,故此处必须落 INFO 日志补齐观测。
+        Object runCtxDiag = toolContext.getContext().get(RUN_CONTEXT_KEY);
+        if (runCtxDiag instanceof RunContext runDiag) {
+            logger.info(String.format("[tool-loop] 工具批开始执行 subject=%s agent=%s calls=[%s] thread=%s",
+                    runDiag.execution().subjectId(), runDiag.agentId(),
+                    assistantMessage.getToolCalls().stream()
+                            .map(tc -> tc.name() + "#" + abbreviateId(tc.id()))
+                            .collect(java.util.stream.Collectors.joining(", ")),
+                    Thread.currentThread().getName()));
+        }
         InternalToolExecutionResult internalToolExecutionResult = executeToolCall(prompt, chatResponse,
                 assistantMessage, toolContext);
         List<Message> conversationHistory = this.buildConversationHistoryAfterToolExecution(
                 prompt.getInstructions(), assistantMessage, internalToolExecutionResult.toolResponseMessage());
+        if (runCtxDiag instanceof RunContext runDiag) {
+            // 批结束分界日志:与入口日志配对。此后续体交回框架 ToolCallingAdvisor 递归订阅
+            // 下一轮模型流——若此日志之后下一轮「轮次聚合完成」迟迟不来,即丢在
+            // 「批完成 → internalStream 下一轮订阅」段(concatWith 续体的下游触发)。
+            logger.info(String.format("[tool-loop] 工具批执行完成 subject=%s agent=%s returnDirect=%s thread=%s",
+                    runDiag.execution().subjectId(), runDiag.agentId(),
+                    internalToolExecutionResult.returnDirect(), Thread.currentThread().getName()));
+        }
         return ToolExecutionResult.builder()
                 .conversationHistory(conversationHistory)
                 .returnDirect(internalToolExecutionResult.returnDirect())
                 .build();
+    }
+
+    /** callId 缩写(前 8 位),日志紧凑用。 */
+    private static String abbreviateId(String id) {
+        return id == null ? "?" : (id.length() <= 8 ? id : id.substring(0, 8));
     }
 
     // ════════════════════════ 照抄:buildToolContext ════════════════════════
