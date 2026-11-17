@@ -26,6 +26,7 @@ import AgentListPanel, { type AgentListItem } from './AgentListPanel'
 import TaskDraftComposerPanel from '@/components/taskComposer/TaskDraftComposerPanel'
 import TaskComposerSurface, { applyComposerDraftChange, type ComposerDraftChange } from '@/components/taskComposer/TaskComposerSurface'
 import TaskModelControls from '@/components/taskComposer/TaskModelControls'
+import type { InlineComposerHandle } from '@/components/taskComposer/InlineComposer'
 import HScrollArea from '@/components/shared/HScrollArea'
 import { ArrowDownIcon, ArrowRightIcon, StopIcon } from '../shared/AppGlyphs'
 import { Button, InlineSpinner } from '@/components/shared/ui'
@@ -680,6 +681,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
    * 输入框草稿桥接：提供给插件（如编辑重发按钮）回填草稿的通用能力，
    * 核心不感知具体业务。
    */
+  const composerEditorHandleRef = React.useRef<InlineComposerHandle | null>(null)
   const composerDraftBridge = React.useMemo<ComposerDraftBridgeValue>(() => ({
     appendText: (text: string) => {
       setError('')
@@ -691,6 +693,26 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
     setRawContent: (rawContent: string) => {
       setError('')
       setDraft({ text: rawContent, rawContent, tokens: [], activeTokenId: undefined })
+    },
+    // 光标处插入：优先走内联编辑器命令式句柄（真实胶囊 DOM + 保留既有草稿结构，
+    // 落位在编辑器当前光标——用户最后停留的输入位置）；编辑器尚未挂载（理论上
+    // 桥注入时子组件已完成挂载，此分支仅防御性兜底）退化为 rawContent 末尾追加，
+    // 重建 DOM 时由 splitComposerRawContent 从 opaque 串还原胶囊。
+    insertAtCaret: (rawContent: string) => {
+      setError('')
+      const editor = composerEditorHandleRef.current
+      if (editor) {
+        if (parseOpaqueTokenText(rawContent)) {
+          editor.insertOpaqueToken(rawContent)
+        } else {
+          editor.insertText(rawContent)
+        }
+        return
+      }
+      setDraft((current) => {
+        const next = (current.rawContent ?? '') + (rawContent || '')
+        return { text: next, rawContent: next, tokens: [], activeTokenId: undefined }
+      })
     },
   }), [])
 
@@ -942,6 +964,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
         error={error || draftWorkerNotice}
         onChangeDraft={handleChangeDraft}
         onSelectLlmConfig={handleSelectLlmConfig}
+        editorHandleRef={composerEditorHandleRef}
         taskScopeTokens={scopeTokens}
         onAddTaskScopeToken={handleAddTaskScopeToken}
         onRemoveTaskScopeToken={handleRemoveTaskScopeToken}
@@ -997,6 +1020,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
             workerId={ownerWorkerId}
             workspace={entry?.workspace}
             isMobile={isMobile}
+            editorHandleRef={composerEditorHandleRef}
             abovePanel={(
               <div className="nagent-composer__above-stack">
                 <AgentListPanel

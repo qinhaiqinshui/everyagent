@@ -5,6 +5,7 @@ import type {
   LLMConfigProfile,
 } from '@/types'
 import type { ComposerDraftChange } from './TaskComposerSurface'
+import type { InlineComposerHandle } from './InlineComposer'
 import { BrandMark } from '../shared/BrandLoadingBlock'
 import { ArrowRightIcon } from '../shared/AppGlyphs'
 import HScrollArea from '../shared/HScrollArea'
@@ -64,6 +65,8 @@ export interface TaskDraftComposerPanelProps {
    * 父组件持有该 ref，本组件在每次光标变化时写入最新偏移。
    */
   composerCaretRef?: React.MutableRefObject<number>
+  /** 外部捕获内联编辑器命令式句柄（透传给 TaskComposerSurface，供宿主「光标处插入」）。可选。 */
+  editorHandleRef?: React.MutableRefObject<InlineComposerHandle | null>
   /** 任务级底部 token（胶囊）列表（草稿本地持有）。 */
   taskScopeTokens?: ChatComposerToken[]
   /** 添加任务级 token（选中 bottom 项）。允许返回 Promise（联动多胶囊逐个 await）。 */
@@ -101,6 +104,7 @@ export default function TaskDraftComposerPanel({
   onChangeDraft,
   onSubmitTask,
   composerCaretRef,
+  editorHandleRef,
   taskScopeTokens,
   onAddTaskScopeToken,
   onRemoveTaskScopeToken,
@@ -133,6 +137,7 @@ export default function TaskDraftComposerPanel({
             onChangeDraft={onChangeDraft}
             onSubmit={onSubmitTask}
             composerCaretRef={composerCaretRef}
+            editorHandleRef={editorHandleRef}
             onAddTaskScopeToken={onAddTaskScopeToken}
             footerControls={(
               <div className="task-composer-footer">

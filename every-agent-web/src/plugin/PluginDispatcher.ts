@@ -240,6 +240,8 @@ export interface RealPluginDispatcher {
   /**
    * 结构化插入一枚胶囊：宿主单点编码 opaque token 后追加进当前激活任务草稿
    * （未绑定草稿时静默降级）。`kind`/`label` 为空时由 `buildOpaqueTokenText` 抛错。
+   * `atCaret: true` 时改为在输入框**光标处**插入（不补空格、聚焦编辑器），
+   * 供「引用到AI对话框」等需要落位光标位置的动作使用。
    */
   appendComposerToken: (input: {
     kind: string
@@ -247,6 +249,7 @@ export interface RealPluginDispatcher {
     summary?: string
     payload?: Record<string, unknown>
     spaced?: boolean
+    atCaret?: boolean
   }) => void
   /**
    * 构造一枚胶囊的 opaque token 串并返回（与 `appendComposerToken` 同源单点编码，
@@ -498,6 +501,12 @@ export const pluginDispatcher: RealPluginDispatcher = {
       summary: input.summary,
       payload: input.payload ?? {},
     })
+    // atCaret：光标处插入原样 opaque 串（胶囊自带零宽空格分隔，不再补空格）；
+    // 默认路径保持「两侧补空格后追加到草稿末尾」的既有口径。
+    if (input.atCaret) {
+      appendComposerTextQueued(opaqueText, { atCaret: true })
+      return
+    }
     const spaced = input.spaced ?? true
     appendComposerTextQueued(spaced ? ` ${opaqueText} ` : opaqueText)
   },

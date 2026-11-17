@@ -386,7 +386,7 @@ ctx.ui.registerFileContentEditor(descriptor)
 
 - 注册与读取 API：`registerFileExplorerAction` / `listRegisteredFileExplorerActions`（`PluginDispatcher.ts`），扩展点名 `ui.file_explorer_actions`。
 - **消费点**：文件树右键/长按菜单构建处 `OpenFilesSidebarPanel.tsx` 的 `getFileActionItems`——先收集内置项（打开/新建/上传/属性/重命名/移动/搜索/下载/终端/系统文件管理器），再把插件注册项按 `isVisible(ctx)` 过滤后**追加到内置菜单项尾部**（与 `FileExplorerAction` 类型注释的约定一致）；面板订阅 `subscribeExtensionsChanged`，插件注册/注销后菜单即时刷新。
-- **内置范例**：git 的「显示 Git 历史」（`every-agent-plugins/git/web/index.ts:42-53`，invoke 里 `ctx.ui.openTab` 打开 git-history 标签）——右键文件树任意节点即可见。
+- **内置范例**：git 的「显示 Git 历史」（`every-agent-plugins/git/web/index.ts:42-53`，invoke 里 `ctx.ui.openTab` 打开 git-history 标签）——右键文件树任意节点即可见；selection-reference 的「引用到AI对话框」（仅文件节点显示）——落位策略与编辑器选区右键（§16.2）**刻意不同**：优先 `getActiveTab()` 判定当前激活任务标签页，命中则 `appendComposerToken({..., atCaret:true})` 插入到该页输入框**光标所在位置**（不新开标签）；未命中才 `openTab('task',{taskId:'__draft__',workspace})` 开新任务草稿页承接（宿主队列兜底 flush）。
 - 历史欠账：该扩展点曾长期无宿主消费点，已接线修复。
 
 ## 14. `ui.round_tail_panels` —— 轮末展示区
@@ -565,7 +565,7 @@ export default plugin
 - **非 CodeMirror 编辑器不接管**：pdf iframe / 图片等编辑器里，容器内根本拿不到选区（`window.getSelection()` 端点不在容器内或 `isCollapsed`）⇒ `readEditorSelection` 返回空快照 ⇒ `selection.text.length === 0` ⇒ 自然放行原生右键菜单（零回归）。
 - **坑**：① `isVisible` 是唯一的内容级过滤闸——想只在特定文件类型出现（如仅 `.ts`）就在它里判断，别拖到 `invoke` 才拦；② `invoke` 里抛错不会炸 UI（宿主吞并 warn），但也意味着**错误静默**，需要可见反馈时自己弹提示；③ `anchor` 是右键触发容器，插件浮层定位应相对它、别假设它一定是编辑器根；④ 路径三口径别混用：回切标签用 `filePath`（原样），交给 AI 用 `relativePath`，业务绝对路径用 `fullPath`；⑤ 行号依赖 CodeMirror DOM 类名（`.cm-line`/`.cm-lineNumbers`），换编辑器则行号降级为 null、引用仍带路径与原文（功能降级不失效）。
 - **坑（`MenuList` 定位必读）**：`MenuList` 的定位 effect 首行是 `if (!anchor) return`（`every-agent-web/src/components/shared/ui/Menu.tsx:255-256`）——`anchor` **必须**传真实触发容器（宿主传编辑器容器）；传 `null` 会让 `menuPosition` 停在 `null`，菜单被渲染到 `top/left: -9999`（屏外，`Menu.tsx:462-463`）。`anchorPoint` 只提供右键坐标，**不能替代** `anchor`。
-- **内置范例**：`selection-reference`（编辑器选区右键「引用到AI对话框」，`invoke` 先 `openTab('task', { taskId:'__draft__', workspace:c.workspaceRoot })` 打开草稿标签——`workspace` 预设 = 选区所属工作区根，新任务挂靠该工作区（与任务页组「+」同范式，缺省该参数宿主会清空预设、草稿回退注册表首选根），再经 `appendComposerToken` 插入 `kind='file.selection'` 胶囊）。注意：菜单里排在它之前的核心「复制」项（§16.1）不是插件范例，但它与插件项走完全相同的注册/排序/过滤路径。
+- **内置范例**：`selection-reference`（编辑器选区右键「引用到AI对话框」，`invoke` 先 `openTab('task', { taskId:'__draft__', workspace:c.workspaceRoot })` 打开草稿标签——`workspace` 预设 = 选区所属工作区根，新任务挂靠该工作区（与任务页组「+」同范式，缺省该参数宿主会清空预设、草稿回退注册表首选根），再经 `appendComposerToken` 插入 `kind='file.selection'` 胶囊）。注意一：菜单里排在它之前的核心「复制」项（§16.1）不是插件范例，但它与插件项走完全相同的注册/排序/过滤路径。注意二：该「恒开新任务页追加到草稿末尾」的落位策略是编辑器选区右键**独有**的；文件树右键的同名菜单（§13）走「当前激活任务页光标处插入、无任务页才开新页」的另一套策略，两者刻意不同。
 
 ## 17. `ui.composer_chip_actions` —— 胶囊激活行为
 
@@ -634,7 +634,7 @@ export default plugin
 - **降级**：未命中（无插件为该 kind 注册动作）→ 保持现状（弹只读详情层），不报错。
 - **同一 kind 两处走同一注册表**：插件用上下文里的 `source` 区分场景。
 - **坑**：① `payload` 是不透明袋——宿主只解码不解释，字段缺失 / 类型错要插件自己兜底降级（建议 payload 里自带定位所需的 `workspaceRoot`/`filePath`，别假设宿主侧解析出的工作区根一定等于原文件的工作区根）；② `source:'replay'` 时没有输入框草稿桥，只能靠 `openFileTab` 等宿主动作响应，别假设能写草稿；③ 往输入框插胶囊用 `appendComposerToken`（见 §22），别自实现 opaque 线格式。
-- **坑（`appendComposerToken` 三则）**：① `appendComposerToken` 的 `payload` 形参是 `Record<string, unknown>`，插件侧 `interface`（如 `SelectionPayload`）**无索引签名** ⇒ 直接传会被 TS 判为不可赋值（TS2322），需展开成新对象字面量 `payload: { ...payload }`（见 §16.2 示例）；② 草稿桥（`setComposerBridge`）只在**激活**任务标签注入——`TaskChat.tsx` 的注入 effect 首行有 `if (!isActive) return` 守卫（`every-agent-web/src/components/task/TaskChat.tsx:711-713`），故没有激活任务标签时（或首个 `TaskChat` 尚未挂载）`appendComposerToken`/`appendComposerText` **静默丢弃**（同 `appendComposerText` 的时序坑）；③ `kind`/`label` 为空时由宿主 `buildOpaqueTokenText` **抛错**（`every-agent-web/src/composerToken/composerOpaqueToken.ts:52-56`，插件错误立刻可见），`appendComposerToken` 自身不做 kind 业务分支。
+- **坑（`appendComposerToken` 三则）**：① `appendComposerToken` 的 `payload` 形参是 `Record<string, unknown>`，插件侧 `interface`（如 `SelectionPayload`）**无索引签名** ⇒ 直接传会被 TS 判为不可赋值（TS2322），需展开成新对象字面量 `payload: { ...payload }`（见 §16.2 示例）；② 草稿桥（`setComposerBridge`）只在**激活**任务标签注入——`TaskChat.tsx` 的注入 effect 首行有 `if (!isActive) return` 守卫，且宿主在激活标签切换/关闭的同步路径上会作废旧桥（`invalidateComposerBridge`）。没有激活任务标签时 `appendComposerToken`/`appendComposerText` 进入宿主**待写队列**，由「接下来激活的首个任务页」挂载注入桥时按序 flush——因此范式是**同一同步调用栈内先 `openTab('task', …)` 再 append**（开标签的同步路径作废旧桥 ⇒ append 必然排队 ⇒ flush 必然落进刚打开的目标页）；只 append 不开标签且无任务页时内容会滞留队列直到下一个任务页激活；③ `kind`/`label` 为空时由宿主 `buildOpaqueTokenText` **抛错**（`every-agent-web/src/composerToken/composerOpaqueToken.ts:52-56`，插件错误立刻可见），`appendComposerToken` 自身不做 kind 业务分支。
 - **内置范例**：`selection-reference`（`kind='file.selection'`，点击经 `openFileTab(..., { lineNumber })` 切回原文件标签并定位起始行）；核心 `system.workspace_file` 亦经此扩展点注册。
 
 ## 18. `ui.settings_sections` —— 设置页设置段
@@ -908,7 +908,7 @@ export default plugin
 | `openSettingsPage` | `(sectionId?: string) => void` | `PluginDispatcher.openSettingsPage` → `ShellBridge.openSettingsPage`（`pluginRuntimeBridge.ts`，`Layout` 挂载注入）→ `settings/settingsNavigation.ts` 服务（pending 意图 + 领域事件 `SETTINGS_SECTION_JUMP_REQUESTED`）→ `SettingsPanel` 订阅 | 打开设置页标签（`page:settings`）并滚动到 `sectionId` 对应设置段（锚点 `data-settings-section-id`，见 §18；省略则仅打开设置页）。设置页标签**常驻挂载、非激活仅 `display:none`**，订阅方须等标签可见后再滚动定位（隐藏期测不到位，重试兜底）；未注册 id **静默忽略不抛错**（不给插件炸 UI 的理由）；宿主内置消费：输入框模型列表为空的空态引导链接（`TaskModelControls`）直达「模型配置」段（`'models'`） |
 | `appendComposerText` | `(text) => void` | `PluginDispatcher.ts:385-387` → `TaskChat.tsx:690-696` 实现、`:711-713` 注入 | 向**当前激活**任务标签的草稿末尾追加纯文本 |
 | `setComposerRawContent` | `(raw) => void` | `PluginDispatcher.ts:398-400` → `TaskChat.tsx:697-703` | 用 rawContent（可含 opaque token 串）**整体替换**草稿（编辑重发回填用） |
-| `appendComposerToken` | `(input: {kind, label, summary?, payload?, spaced?}) => void` | `PluginDispatcher.ts:388-397` → `buildOpaqueTokenText`（`composerToken/composerOpaqueToken.ts:46`）→ `getComposerBridge()?.appendText`（`pluginRuntimeBridge.ts:45`） | 结构化插入一枚胶囊（宿主单点负责 opaque token 编码，插件不碰线格式）；`spaced ?? true` 时补两侧空格（`PluginDispatcher.ts:395-396`）；`kind`/`label` 为空由 `buildOpaqueTokenText` **抛错**（`composerOpaqueToken.ts:52-56`）；未绑定草稿（桥 null）**静默丢弃**；自身不做 kind 业务分支 |
+| `appendComposerToken` | `(input: {kind, label, summary?, payload?, spaced?, atCaret?}) => void` | `PluginDispatcher.ts`（`appendComposerToken`）→ `buildOpaqueTokenText`（`composerToken/composerOpaqueToken.ts:46`）→ `appendComposerTextQueued`（`pluginRuntimeBridge.ts`） | 结构化插入一枚胶囊（宿主单点负责 opaque token 编码，插件不碰线格式）；`spaced ?? true` 时补两侧空格；`atCaret: true` 时改为在输入框**光标处**插入原样 opaque 串（不补空格、聚焦编辑器，编辑器未挂载退化为末尾追加）；`kind`/`label` 为空由 `buildOpaqueTokenText` **抛错**（`composerOpaqueToken.ts:52-56`）；未绑定草稿时进宿主待写队列（目标任务页挂载注入草稿桥即 flush，不再静默丢弃）；自身不做 kind 业务分支 |
 | `buildComposerToken` | `(input: { kind: string; label: string; summary?: string; payload?: Record<string, unknown> }) => string` | `PluginDispatcher.ts`（`buildComposerToken`）→ `buildOpaqueTokenText`（`composerToken/composerOpaqueToken.ts`，**不经 holder 桥**） | 与 `appendComposerToken` 同源单点编码（`buildOpaqueTokenText`），**只返回 opaque 串、不追加草稿**（不走草稿桥，未绑定草稿也照常编码）；供本地 slash provider（§21）的 `select` 构造内联胶囊 token——插入时机与位置由 select 结果的 `position` 决定，不能用「追加到当前激活草稿」语义；`kind`/`label` 为空同样由 `buildOpaqueTokenText` 抛错 |
 
 ```ts

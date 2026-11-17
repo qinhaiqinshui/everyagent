@@ -12,6 +12,9 @@ export interface ComposerDraftBridgeValue {
   /** 用 rawContent（可能含 [[[[...]]]] opaque token 串）替换整个草稿，
    *  InlineComposer 重建 DOM 时会自动解析 opaque token 还原胶囊。 */
   setRawContent: (rawContent: string) => void
+  /** 在输入框光标处插入一段草稿内容（opaque token 串或纯文本）并聚焦；
+   *  编辑器尚未挂载时退化为末尾追加。供「插入到光标位置」类宿主动作使用。 */
+  insertAtCaret: (rawContent: string) => void
 }
 
 export const ComposerDraftBridgeContext = React.createContext<ComposerDraftBridgeValue | null>(null)
