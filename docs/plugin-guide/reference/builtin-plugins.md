@@ -33,7 +33,7 @@ has_children: false
 | empty-response-retry | 空响应重试 | java | AdvisorProvider | — | DO+100 | 入口 21 行 |
 | file-change | 文件变更跟踪 | both | AdvisorProvider + `addRoundClosedListener`；RPC `task.fileChanges` | `ui.round_tail_panels` | HP+301 | 入口 132 行 + web 35 行 |
 | git | Git 操作 | both | AdvisorProvider + SlashProvider + SlashTokenResolver；RPC ×13（`git.*`） | `ui.sidebar_items` + `ui.workspace_tab_types` + `ui.file_explorer_actions` | HP+140；侧边栏 5 | 入口 56 行 + web 57 行 |
-| image-vision | 图片识别 | java | FileReferenceHandler | — | — | 入口 34 行 |
+| image-vision | 图片识别 | java | FileReadHandler | — | — | 入口 35 行 |
 | mobile-keyboard | 移动端键盘增强 | web | —（无 Java） | —（自挂 DOM 悬浮球，不走 register\*） | — | 入口 30 行 + web 300 行 |
 | model-length-guard | 模型输出预算耗尽护栏 | java | AdvisorProvider | — | DO+300 | 入口 23 行 |
 | model-pool | 模型池容灾 | java | ChatModelEnhancer | — | — | 入口 29 行 |
@@ -59,7 +59,7 @@ has_children: false
 ### 2.1 全体共性（读任何一个插件前先知道）
 
 - 形态分布：java-only 19 / both 7 / web-only 5 / **纯声明式 1**（browser，2026-11 新形态：plugin.json 只声明 `skills`，无 Java 无 web，见 §5 browser 条目）。
-- 清单字段全体一致：`id/name/version/description/author` + `enabled`，version 一律 `0.1.0`、author 一律 `everyagent`；含 Java 的 26 个另有 `main`，含前端的 12 个另有 `webMain`（值全部写 `web/index.ts`，宿主实际加载的是构建产物 `web/index.js`，见 [plugin.json 字段参考](../plugin-manifest.md) §5）；browser 另有 `skills`（其余带技能包的是 subagent）。
+- 清单字段全体一致：`id/name/version/description/author` + `enabled`，version 除 image-vision（`0.2.0`，read_file 接管切换）外一律 `0.1.0`、author 一律 `everyagent`；含 Java 的 26 个另有 `main`，含前端的 12 个另有 `webMain`（值全部写 `web/index.ts`，宿主实际加载的是构建产物 `web/index.js`，见 [plugin.json 字段参考](../plugin-manifest.md) §5）；browser 另有 `skills`（其余带技能包的是 subagent）。
 - 用 `contributes.config` 的只有 2 个：image-vision（3 键）、sandbox-windows-codex（6 键）。
 - `enabled:false` 的有 3 个：ripgrep-tool、sandbox-wsl-ubuntu、secret-redaction（内置扫描期整目录跳过；sandbox-windows-mic 已移除）。
 - 依赖红线干净：全部 26 个 pom **零 `every-agent-worker` 依赖**；`task-edit-resend`、`task-input-queue` 额外依赖 `every-agent-contract` 属共享契约层，合规（[架构文档](../../ARCHITECTURE.md) §14.9）。
@@ -84,7 +84,7 @@ has_children: false
 | 技能包物化（给插件带 skill 知识包；**非 SPI**——`activate()` 里一次物化调用） | subagent | `every-agent-plugins/subagent/src/main/java/dev/everyagent/plugin/subagent/SubAgentPlugin.java:52` | 全仓唯一先例：jar 内 `skill/agent-dispatch/skill.md` 物化到 skillsDir，落盘后与用户自制 skill 同权（[advisors §5](../backend/advisors.md)） |
 | TokenEstimator（token 估算） | token-estimator | `every-agent-plugins/token-estimator/src/main/java/dev/everyagent/plugin/tokenEstimator/TokenEstimatorPlugin.java:44` | 全仓唯一实现（BuiltinTokenEstimator）；`calibrate` 等已降为插件内部方法，不再上 SPI |
 | ChatModelEnhancer（模型增强/容灾） | model-pool | `every-agent-plugins/model-pool/src/main/java/dev/everyagent/plugin/modelpool/ModelPoolPlugin.java:26` | 全仓唯一实现：组合 ChatModel 做主备切换 |
-| FileReferenceHandler（@ 文件引用处理） | image-vision | `every-agent-plugins/image-vision/src/main/java/dev/everyagent/plugin/imagevision/ImageVisionPlugin.java:30` | 全仓唯一实现，且是 `contributes.config` → `ctx.config()` 消费链的活样本 |
+| FileReadHandler（read_file 图片接管） | image-vision | `every-agent-plugins/image-vision/src/main/java/dev/everyagent/plugin/imagevision/ImageVisionPlugin.java:31` | 全仓唯一实现，且是 `contributes.config` → `ctx.config()` 消费链的活样本 |
 
 ### 3.2 后端通用注册点（RPC + slash）
 
@@ -244,9 +244,9 @@ has_children: false
 
 ### image-vision（图片识别）
 
-`@` 引用图片 → 压缩 → base64 dataURL 注入视觉模型。
-- 关键文件：`~plugins/image-vision/src/main/java/dev/everyagent/plugin/imagevision/ImageVisionPlugin.java:29-30`；`~plugins/image-vision/plugin.json:8-26`。
-- 值得看：**唯一实现 FileReferenceHandler 的插件**；`contributes.config` 3 键 → `ctx.config()` 的消费链活样本。
+AI 调 `read_file` 读图片 → 接管读取 → 压缩 → base64 dataURL 注入视觉模型；`@` 引用不再自动注入附件（与文本文件一致只留路径文本）。
+- 关键文件：`~plugins/image-vision/src/main/java/dev/everyagent/plugin/imagevision/ImageVisionPlugin.java:30-31`；处理器 `~plugins/image-vision/src/main/java/dev/everyagent/plugin/imagevision/ImageReadHandler.java`；`~plugins/image-vision/plugin.json:8-26`。
+- 值得看：**唯一实现 FileReadHandler 的插件**——核心 `FileTools` 按扩展名分发（授权解析在核心先行完成）、附件经核心 `FileAttachmentAdvisor` 注入，插件只出图片处理逻辑；`contributes.config` 3 键 → `ctx.config()` 的消费链活样本。
 
 ### mobile-keyboard（移动端键盘增强）
 

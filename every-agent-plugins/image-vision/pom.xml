@@ -13,7 +13,7 @@
 
     <artifactId>image-vision</artifactId>
     <name>image-vision</name>
-    <description>图片识别插件:注册图片扩展名 FileReferenceHandler(读取 → 压缩 → base64 dataURL 注入视觉模型)</description>
+    <description>图片识别插件:注册图片扩展名 FileReadHandler 接管 read_file(读取 → 压缩 → base64 dataURL 注入视觉模型)</description>
 
 
     <dependencies>
