@@ -17,8 +17,7 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * FileReadHandlerRegistry「按扩展名一对一映射 + 大小写归一 + 覆盖」的回归测试
- * (模式与 FileReferenceHandlerRegistry 一致)。
+ * FileReadHandlerRegistry「按扩展名一对一映射 + 大小写归一 + 覆盖」的回归测试。
  *
  * <p>锁死三条语义:
  * <ol>

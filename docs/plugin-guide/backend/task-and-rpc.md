@@ -165,7 +165,6 @@ worker 内置节点分两处注册：RPC 线程段 6 个在 `TaskManager.registe
 | **840** | `status` | **临界段**（成对：down 在段外） | 终态事件广播 | worker | `StatusNode.java:36` |
 | 860 | `ledger.persist` | Upstream | 台账落盘 agents.json | worker | `AgentLedgerPersistNode.java:28` |
 | **870** | `queue.loop` | 普通 | 轮次循环：重复 next.proceed 续跑队列项 | **task-input-queue** | `QueueLoopNode.java:54` |
-| 875 | `file.reference.process` | 普通 | `@` 文件引用预处理（每轮；薄壳委托核心 `UserInputMaterializer` 物化） | worker | `FileReferenceProcessNode.java:71-72` |
 | **877** | `edit.resend` | 普通 | 编辑重发截断（每轮） | **task-edit-resend** | `EditResendNode.java:32` |
 | **879** | `wait.bind` | 普通 | 扫描本轮 rawContent 中的 task.wait 胶囊并登记内存绑定（每轮） | **task-wait** | `WaitBindNode.java` |
 | 880 | `consume.input` | 普通 | 消费当前轮输入（每轮） | worker | `ConsumeInputNode.java:24` |
@@ -178,11 +177,11 @@ worker 内置节点分两处注册：RPC 线程段 6 个在 `TaskManager.registe
 
 ```
  外层（先见下行 / 后见上行）                                        内层（紧贴内核 runner.run）
- 10 ─15─ 20 ─ 30 ─ 40 ─ 50 ─55─ 70 ─ 80 ── 100 ── 150 ── 200 ── 310 ─ 340 ─ 350 ─ 390 ┄┄ [420⋯840] ┄┄ 860 ─ 870 ─ 875 ─ 877 ─ 880 ─ 900 ─ 950 → 内核
+ 10 ─15─ 20 ─ 30 ─ 40 ─ 50 ─55─ 70 ─ 80 ── 100 ── 150 ── 200 ── 310 ─ 340 ─ 350 ─ 390 ┄┄ [420⋯840] ┄┄ 860 ─ 870 ─ 877 ─ 880 ─ 900 ─ 950 → 内核
   │   │       │    │    │        │                │                │   ╔═══════════╗    │    │         │         │    │         │
   │   │       │    │    │        │                │                │   ║ 临界段     ║    │  轮次循环段（每轮重入）   │
- 幂等 队列   工作区  id   队列    准入           落盘track        接线            主agent  ║ 840→420   ║ 台账  队列   文件引用  编辑   消费   级联   等子agent
- 检查  dispatch     生成  排队   entry创建      150/200/310/340/350            ║ 共享一把锁 ║ persist loop  875      877   880    停    950
+ 幂等 队列   工作区  id   队列    准入           落盘track        接线            主agent  ║ 840→420   ║ 台账  队列   编辑    消费   级联   等子agent
+ 检查  dispatch     生成  排队   entry创建      150/200/310/340/350            ║ 共享一把锁 ║ persist loop   877    880    停    950
       (插件)              (插件)  (rerun 55 在此)                              ╚═══════════╝   (插件)        (插件)     (插件)
       task-input-queue      task-queue                                            ↑插件禁区[420,850]↑
 ```

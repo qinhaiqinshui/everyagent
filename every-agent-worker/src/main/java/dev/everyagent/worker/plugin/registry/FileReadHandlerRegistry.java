@@ -12,7 +12,7 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * FileReadHandler SPI 注册表（read_file 按扩展名接管）。
  *
- * <p>模式同 {@link FileReferenceHandlerRegistry}：注册时机为插件
+ * <p>模式：按扩展名一对一映射的注册表。注册时机为插件
  * activate() 时经 {@code WorkerPluginContext.registerFileReadHandler} 注册。
  * 扩展名 → handler 一对一映射（小写含点），同扩展名后注册覆盖先注册并打 WARN。
  *

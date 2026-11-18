@@ -1,7 +1,6 @@
 package dev.everyagent.worker.plugin;
 
 import dev.everyagent.plugin.api.WorkerServices;
-import dev.everyagent.plugin.api.attachment.UserInputMaterializer;
 import dev.everyagent.plugin.api.config.WorkerConfig;
 import dev.everyagent.plugin.api.event.StreamEmitter;
 import dev.everyagent.plugin.api.interaction.InteractionService;
@@ -52,7 +51,6 @@ public class WorkerServicesImpl implements WorkerServices {
     private final EventSink eventSink;
     private final IdGenerator idGenerator;
     private final StreamSourceRegistry streamSources;
-    private final UserInputMaterializer userInputMaterializer;
     /** slash 任务级 token 存储:构造器依赖 WorkerServices(本类),用 @Lazy 打断循环依赖。 */
     private final SlashTaskScopeStore slashStore;
     /** 文件工具共享层:文件写监听器注册通道(addFileWriteListener,架构 §7.15.2)。 */
@@ -66,7 +64,6 @@ public class WorkerServicesImpl implements WorkerServices {
             InteractionServiceImpl interaction,
             WorkerProperties workerProperties, EventSink eventSink,
             StreamSourceRegistry streamSources,
-            UserInputMaterializer userInputMaterializer,
             @Lazy SlashTaskScopeStore slashStore,
             FsToolSupport fsToolSupport) {
         this.sandbox = sandbox;
@@ -80,7 +77,6 @@ public class WorkerServicesImpl implements WorkerServices {
         this.workerProperties = workerProperties;
         this.eventSink = eventSink;
         this.streamSources = streamSources;
-        this.userInputMaterializer = userInputMaterializer;
         this.slashStore = slashStore;
         this.fsToolSupport = fsToolSupport;
         this.idGenerator = new IdGenerator() {
@@ -149,11 +145,6 @@ public class WorkerServicesImpl implements WorkerServices {
     @Override
     public InteractionService interaction() {
         return interaction;
-    }
-
-    @Override
-    public UserInputMaterializer userInputMaterializer() {
-        return userInputMaterializer;
     }
 
     @Override

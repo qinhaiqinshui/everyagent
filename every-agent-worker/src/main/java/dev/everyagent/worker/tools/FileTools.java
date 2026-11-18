@@ -63,7 +63,7 @@ public class FileTools {
 
     /**
      * 文件名扩展名(小写含点);无扩展名/以点开头/末尾即点返回空串
-     * (口径与 UserInputMaterializerImpl.extensionOf 一致,查不到 handler)。
+     * (口径与 FileReadHandlerRegistry 的注册键一致,查不到 handler)。
      */
     private static String extensionOf(String path) {
         if (path == null) {
@@ -87,7 +87,7 @@ public class FileTools {
 
     /**
      * 把 read_file 接管处理器返回的附件合并进任务 metadata.attachments(整体替换为新 List,
-     * 避免并发写共享引用;写法对齐 UserInputMaterializerImpl.mergeAttachments)。额外做
+     * 避免并发写共享引用)。额外做
      * 全等去重:已存在的相同附件(equals)跳过——同一图片被 read_file 读两次时不重复注入。
      */
     @SuppressWarnings("unchecked")

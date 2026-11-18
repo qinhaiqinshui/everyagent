@@ -12,14 +12,14 @@ import java.util.Map;
 
 /**
  * 附件 map → Spring AI {@link Media} 的唯一转换点（附件 map 规范见
- * {@code FileReferenceResult}：{@code {type, dataUrl, fileName, mimeType}}）。
+ * {@code FileReadHandler}：{@code {type, dataUrl, fileName, mimeType}}）。
  *
  * <p>两个消费方共用本类，避免「图片 → Media」知识出现两份：
  * <ul>
  *   <li>{@code FileAttachmentAdvisor}：读任务 metadata.attachments（跨轮持续注入）→ 重建末位
  *       UserMessage 为多模态消息；</li>
- *   <li>{@code UserInputMaterializerImpl}：把本轮新收集的附件装配进物化消息（「插入到当前对话」
- *       等不经轮次节点的投递路径）。</li>
+ *   <li>{@code FileTools}：read_file 按扩展名接管（FileReadHandler）产出附件时合并进
+ *       metadata.attachments。</li>
  * </ul>
  *
  * <p>只认 {@code type=image}（dataUrl 形态）；其它类型 / 缺 dataUrl / 转换失败一律跳过，

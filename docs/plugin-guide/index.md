@@ -33,7 +33,7 @@ has_children: false
 | [getting-started.md](getting-started.md) | 用 `create-everyagent-plugin` 脚手架 5 分钟跑通第一个插件 | **已成文** |
 | [plugin-manifest.md](plugin-manifest.md) | `plugin.json` 逐字段：类型 / 缺省 / 谁消费 / 踩坑 + 三形态实例 | **已成文** |
 | [backend/overview.md](backend/overview.md) | 后端模型：`EveryAgentPlugin` 生命周期、URLClassLoader 隔离、扫描→激活全链路 | **已成文** |
-| [backend/tools-and-sandbox.md](backend/tools-and-sandbox.md) | ToolProvider / ToolExecutionInterceptor / SandboxProvider / FileReferenceHandler 与 PermissionGate、jail | **已成文** |
+| [backend/tools-and-sandbox.md](backend/tools-and-sandbox.md) | ToolProvider / ToolExecutionInterceptor / SandboxProvider / FileReadHandler 与 PermissionGate、jail | **已成文** |
 | [backend/advisors.md](backend/advisors.md) | AdvisorProvider / ChatModelEnhancer / TokenEstimator / SearchProvider / AuthorizationHandler + Advisor 链 order 坐标 + 技能包物化（SkillMaterializer） | **已成文** |
 | [backend/task-and-rpc.md](backend/task-and-rpc.md) | TaskAdmissionPolicy / TaskLifecycleNode、`registerRpcMethod` 命名与 ACL、Slash 候选与 token 解析 | **已成文** |
 | [backend/persistence-and-state.md](backend/persistence-and-state.md) | 插件私有数据的合法存放（`pluginDir()` + 自注册 RPC）、两种禁用机制 | **已成文** |
@@ -107,7 +107,7 @@ worker 侧的判定规则（`every-agent-worker/src/main/java/dev/everyagent/wor
 
 | 分组 | 方法 | 详解篇 |
 |---|---|---|
-| 工具与沙箱 | `registerToolProvider` `registerToolExecutionInterceptor` `registerSandboxProvider` `registerFileReferenceHandler` `registerFileReadHandler` | [工具与沙箱](backend/tools-and-sandbox.md) |
+| 工具与沙箱 | `registerToolProvider` `registerToolExecutionInterceptor` `registerSandboxProvider` `registerFileReadHandler` | [工具与沙箱](backend/tools-and-sandbox.md) |
 | Agent 增强 | `registerAdvisorProvider` `registerChatModelEnhancer` `registerTokenEstimator` `registerSearchProvider` `registerAuthorizationHandler` | [Advisor 扩展](backend/advisors.md) |
 | 事件出网 | `registerEventEgressFilter` `registerRoundEgressFilter`（暂无专篇，契约见[架构 §8.5](../ARCHITECTURE.md#85-插件系统统一加载架构)） | [架构说明](../ARCHITECTURE.md) |
 | 任务编排 | `registerTaskAdmissionPolicy` `registerTaskLifecycleNode` | [任务生命周期与 RPC](backend/task-and-rpc.md) |

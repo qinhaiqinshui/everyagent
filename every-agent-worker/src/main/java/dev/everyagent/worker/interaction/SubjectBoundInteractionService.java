@@ -16,7 +16,7 @@ import java.util.function.Consumer;
  * <p>包装裸 {@code InteractionService}（worker 单例，非主体绑定）：{@link #ask} /
  * {@link #askAsync} 的 context map 为 null 或缺 {@code "taskId"} 键时自动填
  * {@code "taskId" → subjectId}（wire 兼容：键名不变，值今天 = taskId），调用方其余键
- * 原样保留；替代 HumanAuthorizationHandler / ImageReferenceHandler / AskUserTool
+ * 原样保留；替代 HumanAuthorizationHandler / AskUserTool
  * 各自手动组装 {@code Map.of("taskId",...)}。agentId 等其余标记由调用方按需经
  * context 参数补充。{@link #hasPendingFor} 无主体维度，原样透传。
  *

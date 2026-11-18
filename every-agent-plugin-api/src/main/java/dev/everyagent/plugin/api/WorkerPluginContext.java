@@ -8,7 +8,6 @@ import dev.everyagent.plugin.api.slash.SlashProvider;
 import dev.everyagent.plugin.api.slash.SlashTokenResolver;
 import dev.everyagent.plugin.api.spi.AdvisorProvider;
 import dev.everyagent.plugin.api.spi.FileReadHandler;
-import dev.everyagent.plugin.api.spi.FileReferenceHandler;
 import dev.everyagent.plugin.api.spi.SandboxProvider;
 import dev.everyagent.plugin.api.spi.SearchProvider;
 import dev.everyagent.plugin.api.spi.TokenEstimator;
@@ -63,9 +62,6 @@ public interface WorkerPluginContext extends TaskPluginContext {
 
     /** 注册 ChatModelEnhancer（模型构建增强器，如模型池容灾）。 */
     void registerChatModelEnhancer(ChatModelEnhancer enhancer);
-
-    /** 注册 FileReferenceHandler（文件引用处理器，按扩展名处理 @ 文件引用）。 */
-    void registerFileReferenceHandler(FileReferenceHandler handler);
 
     /**
      * 注册 FileReadHandler（read_file 按扩展名接管处理器）——read 到的路径由核心授权解析

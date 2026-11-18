@@ -81,7 +81,7 @@ public interface TaskLifecycleContext extends ExecContext {
      * 任务级持久化数据（便捷方法，委托给 {@link #taskInfo()}；同时满足
      * {@link ExecContext#metadata()} 契约：运行期委托 {@link TaskRuntime#metadata()}
      * 返回非空 Map；早期 RPC 阶段 taskInfo() 为 null 时返回 null——既有消费者
-     * （FileReferenceProcessNode）已容忍 null，保持该语义不变）。
+     * （如轮次循环内节点）已容忍 null，保持该语义不变）。
      * @return 任务运行时的 metadata Map，或 taskInfo() 为 null 时返回 null
      */
     @Override

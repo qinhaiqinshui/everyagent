@@ -16,8 +16,8 @@ import java.util.Set;
 
 /**
  * 图片 read_file 接管处理器 —— image-vision 插件对 {@link FileReadHandler} 的唯一实现。
- * 图片处理逻辑自原 ImageReferenceHandler 迁移而来（@ 引用不再自动注入附件：与文本文件
- * 一致只留路径文本，AI 需要看图时自己调 {@code read_file}，由本处理器接管注入）。
+ * 图片字节的读取/压缩/编码逻辑住在本类（@ 引用不再自动注入附件：与文本文件一致只留
+ * 路径文本，AI 需要看图时自己调 {@code read_file}，由本处理器接管注入）。
  *
  * <p>处理流程（{@code read()}）：
  * <ol>

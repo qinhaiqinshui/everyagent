@@ -14,7 +14,7 @@ import org.slf4j.LoggerFactory;
 /**
  * 队列循环节点（order=870，临界段 [420,850] 内侧、ledger.persist(860) 之后）。
  * <p><b>位置红线：必须在临界段内侧。</b>本节点靠重复 {@code next.proceed} 续跑队列项，
- * 其 next 链 = [file.reference.process(875) → edit.resend(877) → consume.input(880) → 内核
+ * 其 next 链 = [edit.resend(877) → consume.input(880) → 内核
  * → cascade.stop(900)↑ → spawned.await(950)↑]，全部是「每轮」语义的节点（逐轮输入预处理、
  * 逐轮失败级联停、逐轮子 agent 等待）。一旦本节点落到临界段之外（如曾经的 395），每轮
  * next.proceed 的上行段会把 status 终态 / registry.remove / persistence.untrack /

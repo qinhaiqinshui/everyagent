@@ -1,10 +1,8 @@
 package dev.everyagent.worker.task.lifecycle;
 
-import dev.everyagent.plugin.api.attachment.UserInputMaterializer;
 import dev.everyagent.worker.hub.HubPool;
 import dev.everyagent.worker.agent.AgentLedger;
 import dev.everyagent.worker.modules.WorkspaceActivityTracker;
-import dev.everyagent.worker.plugin.registry.FileReferenceHandlerRegistry;
 import dev.everyagent.worker.plugin.registry.TaskLifecycleRegistry;
 import dev.everyagent.worker.ship.StreamSourceRegistry;
 import dev.everyagent.worker.interaction.InteractionServiceImpl;
@@ -23,8 +21,8 @@ import org.springframework.stereotype.Component;
  *   → persistence.track(100) → task.wires(200) → model.switch.trace(310)
  *   → main.agent(390) → status.down(840)
  * 轮次循环段(临界段内侧,每轮重入;任务级收口节点全部在循环外侧只执行一次):
- *   queue.loop(870,task-input-queue 插件) 包裹 [ file.reference.process(875)
- *   → edit.resend(877,task-edit-resend 插件) → consume.input(880) → 内核 runner.run 一次 ]
+ *   queue.loop(870,task-input-queue 插件) 包裹 [ edit.resend(877,task-edit-resend 插件)
+ *   → consume.input(880) → 内核 runner.run 一次 ]
  * 上行(整轮任务一次): spawned.await(950) → cascade.stop(900) → ledger.persist(860)
  *   → [临界段: status(840) → concurrency.release(800) → log.flush(750)
  *      → status.persist(650) → disk.index(550)
@@ -41,8 +39,6 @@ public class BuiltInTaskLifecycleNodes {
     private final PermissionGate gate;
     private final InteractionServiceImpl asks;
     private final WorkspaceActivityTracker activityTracker;
-    private final FileReferenceHandlerRegistry fileReferenceHandlerRegistry;
-    private final UserInputMaterializer userInputMaterializer;
     private final AgentLedger agentLedger;
 
     public BuiltInTaskLifecycleNodes(
@@ -53,8 +49,6 @@ public class BuiltInTaskLifecycleNodes {
             PermissionGate gate,
             InteractionServiceImpl asks,
             WorkspaceActivityTracker activityTracker,
-            FileReferenceHandlerRegistry fileReferenceHandlerRegistry,
-            UserInputMaterializer userInputMaterializer,
             AgentLedger agentLedger) {
         this.registry = registry;
         this.store = store;
@@ -63,8 +57,6 @@ public class BuiltInTaskLifecycleNodes {
         this.gate = gate;
         this.asks = asks;
         this.activityTracker = activityTracker;
-        this.fileReferenceHandlerRegistry = fileReferenceHandlerRegistry;
-        this.userInputMaterializer = userInputMaterializer;
         this.agentLedger = agentLedger;
     }
 
@@ -79,7 +71,6 @@ public class BuiltInTaskLifecycleNodes {
         registry.register(new ModelSwitchTraceNode(), "worker");
         registry.register(new MainAgentNode(), "worker");
         // 轮次循环段（临界段内侧、每轮重入：queue.loop=870 插件节点在此之后切入）
-        registry.register(new FileReferenceProcessNode(userInputMaterializer, fileReferenceHandlerRegistry), "worker");  // order=875
         registry.register(new ConsumeInputNode(), "worker");  // order=880
         // 成对节点（下行在段边界外、上行在临界段内）
         registry.register(new StatusNode(pool), "worker");       // order=840

@@ -17,7 +17,7 @@ import java.util.Map;
 import java.util.Objects;
 
 /**
- * 文件附件注入 Advisor（核心统一 Advisor，与 {@link FileReferenceProcessNode} 配对）。
+ * 文件附件注入 Advisor（核心统一 Advisor）。
  *
  * <p>职责单一（一个 Advisor 只做一个功能）：读 {@code ExecContext.metadata().attachments}，
  * 把 {@code type=image} 项转为 Spring AI {@link Media}（data URL base64），重建末位
@@ -30,10 +30,10 @@ import java.util.Objects;
  * 实例），先注入图片 A 后又读入图片 B 时，「已带媒体即跳过」会让 B 本轮不可见；故防重复
  * 注入守卫从「跳过」改为「合并去重」——既有 media 保留在前，新增项按候选序追加。
  *
- * <p>本 Advisor 不感知「图片」业务（不读文件、不压缩、不解析 token）——处理逻辑在各
- * 插件注册的 {@code FileReferenceHandler}；未来 PDF/Word 插件复用同一 Advisor，
- * 按需扩展 type 支持即可（附件 map → Media 的转换在 {@link AttachmentMedia}，
- * 与 {@code UserInputMaterializerImpl} 共用同一份实现）。
+ * <p>本 Advisor 不感知「图片」业务（不读文件、不压缩、不解析 token）——附件由 read_file
+ * 按扩展名接管处理器（{@code FileReadHandler}）产出、核心合并进 metadata.attachments；
+ * 未来 PDF/Word 插件复用同一 Advisor，按需扩展 type 支持即可（附件 map → Media 的转换在
+ * {@link AttachmentMedia}）。
  *
  * <p>attachments 随 meta.json 持久化，多轮持续注入（便于追问）；token 消耗随轮次累积，
  * 「仅当轮」语义可后续细化。

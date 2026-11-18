@@ -11,7 +11,6 @@ import dev.everyagent.worker.plugin.registry.AdvisorProviderRegistry;
 import dev.everyagent.worker.plugin.registry.AuthorizationHandlerRegistry;
 import dev.everyagent.worker.plugin.registry.ChatModelEnhancerRegistry;
 import dev.everyagent.worker.plugin.registry.FileReadHandlerRegistry;
-import dev.everyagent.worker.plugin.registry.FileReferenceHandlerRegistry;
 import dev.everyagent.worker.plugin.registry.PluginStateStore;
 import dev.everyagent.worker.plugin.registry.SandboxProviderRegistry;
 import dev.everyagent.worker.plugin.registry.SearchProviderRegistry;
@@ -103,7 +102,6 @@ public class PluginLoader {
     private final TaskLifecycleRegistry lifecycleRegistry;
     private final ChatModelEnhancerRegistry chatModelEnhancerRegistry;
     private final TaskAdmissionPolicyRegistry admissionPolicyRegistry;
-    private final FileReferenceHandlerRegistry fileReferenceHandlerRegistry;
     private final FileReadHandlerRegistry fileReadHandlerRegistry;
     private final EventEgressFilterRegistry eventEgressFilterRegistry;
     private final RoundEgressFilterRegistry roundEgressFilterRegistry;
@@ -135,7 +133,6 @@ public class PluginLoader {
             TaskLifecycleRegistry lifecycleRegistry,
             ChatModelEnhancerRegistry chatModelEnhancerRegistry,
             TaskAdmissionPolicyRegistry admissionPolicyRegistry,
-            FileReferenceHandlerRegistry fileReferenceHandlerRegistry,
             FileReadHandlerRegistry fileReadHandlerRegistry,
             EventEgressFilterRegistry eventEgressFilterRegistry,
             RoundEgressFilterRegistry roundEgressFilterRegistry,
@@ -156,7 +153,6 @@ public class PluginLoader {
         this.lifecycleRegistry = lifecycleRegistry;
         this.chatModelEnhancerRegistry = chatModelEnhancerRegistry;
         this.admissionPolicyRegistry = admissionPolicyRegistry;
-        this.fileReferenceHandlerRegistry = fileReferenceHandlerRegistry;
         this.fileReadHandlerRegistry = fileReadHandlerRegistry;
         this.eventEgressFilterRegistry = eventEgressFilterRegistry;
         this.roundEgressFilterRegistry = roundEgressFilterRegistry;
@@ -409,7 +405,6 @@ public class PluginLoader {
                     authHandlerRegistry, toolInterceptorRegistry,
                     lifecycleRegistry, chatModelEnhancerRegistry,
                     admissionPolicyRegistry,
-                    fileReferenceHandlerRegistry,
                     fileReadHandlerRegistry,
                     eventEgressFilterRegistry, roundEgressFilterRegistry,
                     rpcDispatcher, slashRegistry, slashTokenHandler, services, config, applicationContext);
