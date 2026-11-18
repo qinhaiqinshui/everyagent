@@ -44,6 +44,9 @@ export interface GitCredential {
 /** 仓库未初始化(git.open 失败)。 */
 export class GitNotInitializedError extends Error {}
 
+/** 本机 git 不可用(worker 抛 UNAVAILABLE,如未安装 git):调用方应静默降级提示,不弹错误框。 */
+export class GitUnavailableError extends Error {}
+
 /**
  * 远端需要认证(worker 抛 AUTH_REQUIRED):携带 host,调用方弹窗收集账号密码后重试。
  * 消息格式统一为「需要认证: <host>」。
@@ -72,6 +75,12 @@ function normalizeError(err: unknown): never {
     && 'message' in err
   ) {
     throw new GitAuthRequiredError(parseAuthHost(String((err as { message?: unknown }).message ?? '')))
+  }
+  // worker 业务错误码 UNAVAILABLE(git 不可用,如未安装 git)→ 调用方静默降级为「不可用」视图,不弹错误框。
+  if (err && typeof err === 'object' && (err as { code?: unknown }).code === 'UNAVAILABLE') {
+    throw new GitUnavailableError(
+      'message' in err ? String((err as { message?: unknown }).message ?? '') : '',
+    )
   }
   const message = err instanceof Error ? err.message : String(err)
   if (/不是 git 仓库|not a git repository|repository not found/i.test(message)) {

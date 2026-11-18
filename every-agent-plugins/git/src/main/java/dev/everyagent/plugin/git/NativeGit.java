@@ -1,6 +1,7 @@
 package dev.everyagent.plugin.git;
 
 import dev.everyagent.plugin.api.config.WorkerConfig;
+import dev.everyagent.plugin.api.exception.UnavailableException;
 import dev.everyagent.plugin.api.spi.ExecResult;
 import dev.everyagent.plugin.api.spi.NativeExec;
 import org.slf4j.Logger;
@@ -306,32 +307,33 @@ public class NativeGit {
         }
     }
 
-    /** 定位 git:配置 → 常见安装路径 → PATH;冒烟验证后缓存;失败置 probeFailed 不再重试。 */
-    private String locateGit() throws IOException {
+    /** 定位 git:配置 → 常见安装路径 → PATH;冒烟验证后缓存;失败置 probeFailed 不再重试。
+     *  git 不可用统一抛 {@link UnavailableException}(经 worker RpcDispatcher 转 rpc.err UNAVAILABLE)。 */
+    private String locateGit() {
         String cached = gitExe;
         if (cached != null) {
             return cached;
         }
         if (probeFailed) {
-            throw new IOException(GIT_UNAVAILABLE);
+            throw new UnavailableException(GIT_UNAVAILABLE);
         }
         synchronized (this) {
             if (gitExe != null) {
                 return gitExe;
             }
             if (probeFailed) {
-                throw new IOException(GIT_UNAVAILABLE);
+                throw new UnavailableException(GIT_UNAVAILABLE);
             }
             String exe = discover();
             if (exe == null) {
                 probeFailed = true;
-                throw new IOException(GIT_UNAVAILABLE);
+                throw new UnavailableException(GIT_UNAVAILABLE);
             }
             ExecResult probe = sandbox.spawnNative(new String[] { exe, "--version" },
                     Path.of(System.getProperty("user.dir")), Map.of(), 15_000);
             if (probe.exitCode() != 0) {
                 probeFailed = true;
-                throw new IOException("git 探测失败(" + exe + "): " + probe.stderr());
+                throw new UnavailableException("git 探测失败(" + exe + "): " + probe.stderr());
             }
             log.info("[git] 使用原生 git: {} ({})", exe, probe.stdout().trim());
             gitExe = exe;
