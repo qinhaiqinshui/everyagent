@@ -12,6 +12,7 @@ import React from 'react'
 import { Button, TextInput } from '@/components/shared/ui'
 import MoreActionsButton, { type MoreActionItem } from '@/components/shared/MoreActionsButton'
 import ConfirmDialog from '@/components/shared/ConfirmDialog'
+import RemoteHubConnectDialog from '@/components/system/RemoteHubConnectDialog'
 import { useHub } from '@/hub/HubProvider'
 import { hubSession, type WorkerInfo } from '@/hub/session'
 import { domainEventBus, DOMAIN_EVENTS } from '@/events/eventBus'
@@ -76,6 +77,8 @@ export default function WorkerList() {
   const [renameDraft, setRenameDraft] = React.useState('')
   /** 待确认移除配置的 workerId。 */
   const [removingId, setRemovingId] = React.useState('')
+  /** 「连接到远程 Hub」弹窗开关(⋮ 菜单入口,任意 worker 行都可发起)。 */
+  const [remoteHubOpen, setRemoteHubOpen] = React.useState(false)
 
   // 别名变化时重渲染(显示名依赖别名)。
   const [, setAliasesVersion] = React.useState(0)
@@ -225,6 +228,7 @@ export default function WorkerList() {
             },
           },
           { key: 'copy-id', label: '复制 worker ID', onSelect: () => void handleCopyWorkerId(worker) },
+          { key: 'remote-hub', label: '连接到远程 Hub…', onSelect: () => setRemoteHubOpen(true) },
         ]
         if (worker.hasApiKey && (state === 'connected' || state === 'disabled')) {
           menuItems.push({
@@ -369,6 +373,7 @@ export default function WorkerList() {
         }}
         onCancel={() => setRemovingId('')}
       />
+      <RemoteHubConnectDialog open={remoteHubOpen} onClose={() => setRemoteHubOpen(false)} />
     </div>
   )
 }
