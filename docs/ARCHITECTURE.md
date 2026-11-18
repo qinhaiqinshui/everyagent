@@ -712,9 +712,10 @@ worker 的运行期责任链统一为 filter 形态（`result = next(ctx)`）：
 
 主 agent 侧生成轮次索引（每行一轮：用户输入 → 主 agent 最终回复）：
 
-- 行格式：`{index, roundId, startSeq, endSeq, user, finalReply, durationMs, startedAt, agentRanges, userMessage}`（**轮行不含任何插件业务字段**，文件变更等按轮旁路数据由插件自持文件 + 插件 RPC 提供，§7.15.2）；seq 一律字符串；`endSeq=""` = 未闭合轮；`roundId` = 稳定主键（开轮落盘即生成、闭合原位改写**沿用不重生成**；旧数据行缺失不写，must-ignore）；`startedAt` = 开轮落盘时刻（epoch 毫秒），`durationMs` = 闭合时当前时间 − startedAt（跨运行延续不失真）；`userMessage` = 完整 user.message payload（渲染投影素材），**形状必须与 user.message 事件 payload 一致**（`{content, data:{rawContent?}}`，两条落盘路径同形）——前端按 `rawContent` 合成 user 气泡回放 @文件胶囊（rounds 通道只做渲染投影，不进前端数据层，§8.3）。
-- 增量写：消费用户输入即落一行 `endSeq=""`；主 agent 最终回复后原位改写闭合（临时文件 + 原子 move，与追加同锁串行）。**`durationMs` 随闭合行同一次落盘内联写入；`round.closed` 通知在闭合行落盘之后推送**（不变式：前端收到通知拉 `task.rounds` 时耗时必已就位；两段写存在竞态——先推送后回填会让前端拿到 `durationMs=0` 且无刷新触发）。旧行无 `startedAt` 时不计算耗时（保持 0，优雅降级）。
-- 旧任务首次 `task.rounds` 惰性全量生成落盘；任务终态补写未闭合轮；中断/失败/取消的未闭合轮自然保留。
+- 行格式：`{index, roundId, startSeq, endSeq, user, finalReply, durationMs, startedAt, agentRanges, userMessage}`（**轮行不含任何插件业务字段**，文件变更等按轮旁路数据由插件自持文件 + 插件 RPC 提供，§7.15.2）；seq 一律字符串；`endSeq=""` = 未闭合轮；`roundId` = 稳定主键（开轮落盘即生成、闭合原位改写**沿用不重生成**；旧数据行缺失不写，must-ignore）；`startedAt` = 开轮落盘时刻（epoch 毫秒），`durationMs` = **最终回复事件时间 − startedAt**（跨运行延续、迟到补闭合均取轮的真实终点，不把补写前的等待算进耗时；事件时间不可得时回退闭合时刻，旧行无 `startedAt` 保持 0）；`userMessage` = 完整 user.message payload（渲染投影素材），**形状必须与 user.message 事件 payload 一致**（`{content, data:{rawContent?}}`，两条落盘路径同形）——前端按 `rawContent` 合成 user 气泡回放 @文件胶囊（rounds 通道只做渲染投影，不进前端数据层，§8.3）。
+- 增量写：消费用户输入即落一行 `endSeq=""`；主 agent 最终回复后原位改写闭合（临时文件 + 原子 move，与追加同锁串行）。**`durationMs` 随闭合行同一次落盘内联写入；`round.closed` 通知在闭合行落盘之后推送**（不变式：前端收到通知拉 `task.rounds` 时耗时必已就位；两段写存在竞态——先推送后回填会让前端拿到 `durationMs=0` 且无刷新触发）。
+- **事件是轮次权威，索引行只是缓存**：闭合落盘是"有事发生时顺手补写"（每轮最终回复后 / 开轮前 / 任务终态收口），任何一次都可能因取消、异常、时序而漏做——因此**开轮决策与"当前有没有开着的轮"一律以事件扫描为准**：尾行未闭合时先按事件对账一次（幂等），真未闭合（中间输入/续跑）才沿用，否则补闭合后正常开新轮（否则该输入及其后全部事件落在任何轮区间之外 → 整轮不可见，前端只剩上一轮已闭合态）；任务终态收口再对账一次（校准点，仍真未闭合的轮保持 `endSeq=""`，由前端按"终态未闭合尾轮"常开视图渲染）。
+- 旧任务首次 `task.rounds` 惰性全量生成落盘；中断/失败/取消的未闭合轮自然保留（不伪造最终回复）。
 - 消息编辑重发（`truncateAfterSeq`）：事件日志按 `seq >= editSeq` 截断重写；rounds.jsonl 同步截断为 `startSeq < editSeq` 的行（编辑点之前的轮次保留，新轮 index 顺延）。**事件文件重写只针对 agent 事件日志（`<agentId>.jsonl`）**——任务目录下的 `rounds.jsonl`/`queue.jsonl` 不属事件空间（行无 seq 字段），误入事件重写会被整文件清空。
 - 前端"双击打开任务" = 拉 meta → 一次 `task.rounds` 渲染折叠轮次 → 展开按 seq 区间懒加载过程内容。
 

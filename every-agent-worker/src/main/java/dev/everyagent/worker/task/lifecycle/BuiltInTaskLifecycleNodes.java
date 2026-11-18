@@ -6,6 +6,7 @@ import dev.everyagent.worker.modules.WorkspaceActivityTracker;
 import dev.everyagent.worker.plugin.registry.TaskLifecycleRegistry;
 import dev.everyagent.worker.ship.StreamSourceRegistry;
 import dev.everyagent.worker.interaction.InteractionServiceImpl;
+import dev.everyagent.worker.task.RoundIndexStore;
 import dev.everyagent.worker.task.TaskStore;
 import dev.everyagent.worker.tools.PermissionGate;
 import jakarta.annotation.PostConstruct;
@@ -25,7 +26,7 @@ import org.springframework.stereotype.Component;
  *   → consume.input(880) → 内核 runner.run 一次 ]
  * 上行(整轮任务一次): spawned.await(950) → cascade.stop(900) → ledger.persist(860)
  *   → [临界段: status(840) → concurrency.release(800) → log.flush(750)
- *      → status.persist(650) → disk.index(550)
+ *      → rounds.reconcile(700) → status.persist(650) → disk.index(550)
  *      → persistence.untrack(500) → gate.evict(450) → registry.remove(420)]
  *   → workspace.activity(350)
  */
@@ -40,6 +41,7 @@ public class BuiltInTaskLifecycleNodes {
     private final InteractionServiceImpl asks;
     private final WorkspaceActivityTracker activityTracker;
     private final AgentLedger agentLedger;
+    private final RoundIndexStore roundIndexStore;
 
     public BuiltInTaskLifecycleNodes(
             TaskLifecycleRegistry registry,
@@ -49,7 +51,8 @@ public class BuiltInTaskLifecycleNodes {
             PermissionGate gate,
             InteractionServiceImpl asks,
             WorkspaceActivityTracker activityTracker,
-            AgentLedger agentLedger) {
+            AgentLedger agentLedger,
+            RoundIndexStore roundIndexStore) {
         this.registry = registry;
         this.store = store;
         this.pool = pool;
@@ -58,6 +61,7 @@ public class BuiltInTaskLifecycleNodes {
         this.asks = asks;
         this.activityTracker = activityTracker;
         this.agentLedger = agentLedger;
+        this.roundIndexStore = roundIndexStore;
     }
 
     @PostConstruct
@@ -80,6 +84,7 @@ public class BuiltInTaskLifecycleNodes {
         // 临界段内纯上行节点（UpstreamNode，order ∈ [420,850]）
         registry.register(new ConcurrencyReleaseNode(), "worker");
         registry.register(new LogFlushNode(store), "worker");
+        registry.register(new RoundIndexReconcileNode(roundIndexStore), "worker");  // order=700
         registry.register(new StatusPersistNode(store), "worker");
         registry.register(new DiskIndexNode(store), "worker");
         registry.register(new PersistenceUntrackNode(store, streamSources), "worker");

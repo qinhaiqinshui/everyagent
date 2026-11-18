@@ -25,8 +25,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * RoundIndexStore 开轮/闭合单测(@TempDir,无 Spring):
- * openRoundAtStart(开轮路径:空/已闭合尾行时追加未闭合轮,未闭合尾行时沿用不写)、
- * persistClosedRounds(advisor 路径:只把已落盘未闭合行改判闭合、幂等去重、续跑闭合)。
+ * openRoundAtStart(开轮路径:空/已闭合尾行时追加未闭合轮,未闭合尾行时沿用不写,尾行陈旧则先对账
+ * 补闭合再开新轮)、persistClosedRounds(advisor 路径:只把已落盘未闭合行改判闭合、幂等去重、
+ * 续跑闭合、迟到补闭合按最终回复时间计耗时)。
  * 事件经真实 TaskEvents emit 入口发射(同轮 delta/thinking/message 共享 id=seq,贴近线上形态)。
  */
 class RoundIndexPersistTest {
@@ -118,7 +119,7 @@ class RoundIndexPersistTest {
     /** 开一轮:user.message 落盘后调用 openRoundAtStart(与 consumeInput 同路径)。 */
     private long openRound(String question) {
         long seq = emitUserMessage(question);
-        rounds.openRoundAtStart(dir(), "t1", seq, question, null);
+        rounds.openRoundAtStart(dir(), log, "t1", MAIN, seq, question, null);
         return seq;
     }
 
@@ -214,7 +215,7 @@ class RoundIndexPersistTest {
         rounds.persistClosedRounds(dir(), log, "t1", MAIN); // 第 1 轮闭合落盘
         // 中断:新输入无最终回复 → 开轮路径即落未闭合行(endSeq="")
         long interruptedSeq = emitUserMessage("被中断之问");
-        rounds.openRoundAtStart(dir(), "t1", interruptedSeq, "被中断之问", null);
+        rounds.openRoundAtStart(dir(), log, "t1", MAIN, interruptedSeq, "被中断之问", null);
         emitDelta(MAIN, "半截");
         List<RoundIndex.Round> before = store.readRounds(dir());
         assertEquals(2, before.size());
@@ -280,6 +281,51 @@ class RoundIndexPersistTest {
     }
 
     @Test
+    void openRoundAtStartReconcilesMissedCloseAndOpensNewRound() {
+        // 线上事故形态(t_4yca):第 1 轮最终回复已产出,但那次闭合落盘被漏掉(未调用 persistClosedRounds),
+        // 尾行停在未闭合。此时再来一条用户输入——若沿用尾行,这条输入与其后全部事件都落在任何轮区间
+        // 之外(前端只看到「上一轮已闭合」,实际执行整轮不可见)。开轮前对账必须先补闭合再开新轮。
+        long s1 = openRound("第一问");
+        emitMessage(MAIN, "", "第一答", List.of()); // 最终回复已入日志,闭合落盘却没发生
+        assertNull(store.readRounds(dir()).get(0).endSeq(), "前置:尾行仍未闭合(闭合被漏做)");
+
+        long s2 = emitUserMessage("执行");
+        assertTrue(rounds.openRoundAtStart(dir(), log, "t1", MAIN, s2, "执行", null),
+                "对账发现上一轮其实已闭合 → 开新轮(true)");
+
+        List<RoundIndex.Round> all = store.readRounds(dir());
+        assertEquals(2, all.size(), "上一轮补闭合 + 新轮追加,共 2 行");
+        RoundIndex.Round first = all.get(0);
+        assertTrue(first.closed(), "对账把漏做闭合的第 1 轮补上了");
+        assertEquals("第一答", first.finalReply());
+        assertEquals(s1, first.startSeq());
+        RoundIndex.Round second = all.get(1);
+        assertEquals(2, second.index(), "新轮 index 顺延");
+        assertEquals(s2, second.startSeq());
+        assertEquals("执行", second.user());
+        assertNull(second.endSeq(), "新轮未闭合");
+    }
+
+    @Test
+    void lateReconcileDurationUsesFinalReplyTimeNotNow() throws Exception {
+        // 迟到补闭合(终态收口对账/下次开轮对账)必须按轮的真实终点计耗时:取最终回复事件时间 −
+        // 磁盘 startedAt,而不是「补闭合那一刻」——否则等待时间会被算进轮耗时。
+        long s1 = emitUserMessage("被中断之问");
+        long startedAt = System.currentTimeMillis() - 5000;
+        store.appendRound("t1", new RoundIndex.Round("round_old", 1L, s1, null, "被中断之问", "",
+                List.of(), 0L, startedAt, null));
+        emitMessage(MAIN, "", "补完之答", List.of()); // 终点事件时间 ≈ 当前时间
+        Thread.sleep(300); // 补闭合迟到:若用 now − startedAt 会多算这 300ms
+        rounds.persistClosedRounds(dir(), log, "t1", MAIN);
+
+        RoundIndex.Round closed = store.readRounds(dir()).get(0);
+        assertTrue(closed.closed());
+        assertTrue(closed.durationMs() >= 5000, "耗时至少覆盖开轮至今: " + closed.durationMs());
+        assertTrue(closed.durationMs() < 5600,
+                "耗时取最终回复事件时间(不含补闭合前的等待): " + closed.durationMs());
+    }
+
+    @Test
     void persistClosedRoundsSkipsDurationWhenStartedAtUnknown() throws Exception {
         // 旧行/scan 行无 startedAt(0):闭合时不据此计耗时,保持 0(优雅降级,不产生负值/假耗时)
         long s1 = emitUserMessage("旧数据之问");
@@ -301,13 +347,13 @@ class RoundIndexPersistTest {
         rounds.persistClosedRounds(dir(), log, "t1", MAIN);
 
         long secondSeq = emitUserMessage("第二问");
-        rounds.openRoundAtStart(dir(), "t1", secondSeq, "第二问", null);
+        rounds.openRoundAtStart(dir(), log, "t1", MAIN, secondSeq, "第二问", null);
         emitMessage(MAIN, "想", "先调工具",
                 List.of(new ToolCallPart("c2", "bash", "{}")));
         emitToolResult("c2", "bash", "ok", MAIN);
         // 开着的轮内第二条用户输入:openRoundAtStart 沿用当前未闭合轮,不写新行
         long midSeq = emitUserMessage("中间补充输入");
-        rounds.openRoundAtStart(dir(), "t1", midSeq, "中间补充输入", null);
+        rounds.openRoundAtStart(dir(), log, "t1", MAIN, midSeq, "中间补充输入", null);
         emitDelta(MAIN, "答");
         emitMessage(MAIN, "", "第二答", List.of());
         rounds.persistClosedRounds(dir(), log, "t1", MAIN);
@@ -331,7 +377,7 @@ class RoundIndexPersistTest {
 
         // 再次 open(尾行未闭合)→ 沿用当前轮,不重新生成(roundId 不变、行数不变)
         long s2 = emitUserMessage("中间补充");
-        assertFalse(rounds.openRoundAtStart(dir(), "t1", s2, "中间补充", null), "未闭合尾行沿用返回 false");
+        assertFalse(rounds.openRoundAtStart(dir(), log, "t1", MAIN, s2, "中间补充", null), "未闭合尾行沿用返回 false");
         List<RoundIndex.Round> afterReuse = store.readRounds(dir());
         assertEquals(1, afterReuse.size(), "沿用不追加新行");
         assertEquals(first.roundId(), afterReuse.get(0).roundId(), "沿用轮 roundId 不重新生成");
