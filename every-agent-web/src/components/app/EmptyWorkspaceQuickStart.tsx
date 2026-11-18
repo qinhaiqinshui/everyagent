@@ -1,17 +1,19 @@
 /**
  * 空工作区快捷入口(主界面标签页全关后的空白页「开始」区,VSCode 欢迎页风格)。
  *
- * 三张横向卡片(左图标 + 右标题/灰色说明,整卡可点)。本组件**只做导航**:点击跳转到
+ * 四张横向卡片(左图标 + 右标题/灰色说明,整卡可点)。本组件**只做导航**:点击跳转到
  * 对应页面,操作在目标页面内完成——不弹对话框、不发 RPC、不前置校验 worker 状态
  * (空态/未连接态由目标页面各自展示)。
- * 1. 新建工作区(项目)→ 新建任务草稿页(输入框的工作区选择器可浏览并注册目录);
- * 2. 添加模型配置 → 设置页「模型配置」段(段内「添加」按钮);
- * 3. 导入 skill → 设置页「Skills」段(段内「导入 zip」按钮)。
+ * 1. 新建任务 → 新建任务草稿页(输入框 + 工作区选择器,首次发送即建任务);
+ * 2. 新建工作区(项目)→ 新建任务草稿页(输入框的工作区选择器可浏览并注册目录);
+ * 3. 添加模型配置 → 设置页「模型配置」段(段内「添加」按钮);
+ * 4. 导入 skill → 设置页「Skills」段(段内「导入 zip」按钮)。
  */
 import React from 'react'
 import {
   BrainIcon,
   FolderPlusIcon,
+  PlusIcon,
   UploadIcon,
 } from '@/components/shared/AppGlyphs'
 import { SETTINGS_SECTION_ID } from '@/components/system/settingsSectionIds'
@@ -31,13 +33,24 @@ export default function EmptyWorkspaceQuickStart() {
     requestOpenSettingsPage(sectionId)
   }
 
+  /** 打开唯一的新建任务草稿标签(已打开则聚焦,草稿文本保留)。 */
+  const openDraftTask = () => {
+    openTab('task', { taskId: DRAFT_TASK_ID }, '新任务')
+  }
+
   return (
     <div style={listStyle}>
+      <QuickStartCard
+        icon={<PlusIcon size={22} style={{ color: 'var(--accent-blue)' }} />}
+        title="新建任务"
+        description="选择工作区后对话,首次发送即建任务"
+        onClick={openDraftTask}
+      />
       <QuickStartCard
         icon={<FolderPlusIcon size={22} style={{ color: 'var(--accent-blue)' }} />}
         title="新建工作区(项目)"
         description="在新建任务页选择目录注册为工作区"
-        onClick={() => openTab('task', { taskId: DRAFT_TASK_ID }, '新任务')}
+        onClick={openDraftTask}
       />
       <QuickStartCard
         icon={<BrainIcon size={22} style={{ color: 'var(--accent-blue)' }} />}
