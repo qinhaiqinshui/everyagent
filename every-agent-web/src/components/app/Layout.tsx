@@ -41,6 +41,7 @@ import BrowserNotificationHost from './BrowserNotificationHost'
 import BrowserNotificationGuide from './BrowserNotificationGuide'
 import ReconnectionModal from './ReconnectionModal'
 import MissingWorkspaceRepairHost from './MissingWorkspaceRepairHost'
+import EmptyWorkspaceQuickStart from './EmptyWorkspaceQuickStart'
 import RawAccessConfirmHost from '@/components/files/RawAccessConfirmHost'
 import { WorkspaceShellProvider } from './WorkspaceShellContext'
 import { setShellBridge, invalidateComposerBridge } from '@/plugin/pluginRuntimeBridge'
@@ -1154,6 +1155,10 @@ function EmptyWorkspaceHome({ onNewTask }: { onNewTask: () => void }) {
       >
         <BrandMark size={108} animated={false} />
       </div>
+      {/* 「开始」区小标题(VSCode 欢迎页风格):复用 emptyWorkspaceHintStyle,仅清掉默认段落边距。 */}
+      <p style={{ ...emptyWorkspaceHintStyle, margin: 0 }}>开始</p>
+      {/* 冷启动快捷入口(新建工作区/添加模型配置/导入 skill),弹窗逻辑组件自持。 */}
+      <EmptyWorkspaceQuickStart />
     </div>
   )
 }
