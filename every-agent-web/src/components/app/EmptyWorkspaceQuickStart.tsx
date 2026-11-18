@@ -5,7 +5,8 @@
  * 对应页面,操作在目标页面内完成——不弹对话框、不发 RPC、不前置校验 worker 状态
  * (空态/未连接态由目标页面各自展示)。
  * 1. 新建任务 → 新建任务草稿页(输入框 + 工作区选择器,首次发送即建任务);
- * 2. 新建工作区(项目)→ 新建任务草稿页(输入框的工作区选择器可浏览并注册目录);
+ * 2. 新建工作区(项目)→ 新建任务草稿页,并自动打开工作区选择器的目录浏览弹窗
+ *    (经 taskWorkspaceBrowseIntent 通知草稿页,弹窗与选目录逻辑仍归草稿页所有);
  * 3. 添加模型配置 → 设置页「模型配置」段(段内「添加」按钮);
  * 4. 导入 skill → 设置页「Skills」段(段内「导入 zip」按钮)。
  */
@@ -20,6 +21,7 @@ import { SETTINGS_SECTION_ID } from '@/components/system/settingsSectionIds'
 import { useWorkspaceShell } from '@/components/app/WorkspaceShellContext'
 import { requestOpenSettingsPage } from '@/settings/settingsNavigation'
 import { DRAFT_TASK_ID } from '@/components/task/taskChatDraft'
+import { requestDraftWorkspaceBrowse } from '@/components/taskComposer/taskWorkspaceBrowseIntent'
 
 export default function EmptyWorkspaceQuickStart() {
   const { openTab } = useWorkspaceShell()
@@ -38,6 +40,15 @@ export default function EmptyWorkspaceQuickStart() {
     openTab('task', { taskId: DRAFT_TASK_ID }, '新任务')
   }
 
+  /**
+   * 新建工作区:先打开草稿标签,再发浏览意图由草稿页的工作区选择器弹目录浏览框
+   * (顺序不可倒置——先保证标签存在/可见,弹窗才落在用户看得见的页面上)。
+   */
+  const openDraftTaskWithWorkspaceBrowse = () => {
+    openDraftTask()
+    requestDraftWorkspaceBrowse()
+  }
+
   return (
     <div style={listStyle}>
       <QuickStartCard
@@ -49,8 +60,8 @@ export default function EmptyWorkspaceQuickStart() {
       <QuickStartCard
         icon={<FolderPlusIcon size={22} style={{ color: 'var(--accent-blue)' }} />}
         title="新建工作区(项目)"
-        description="在新建任务页选择目录注册为工作区"
-        onClick={openDraftTask}
+        description="选择目录注册为工作区"
+        onClick={openDraftTaskWithWorkspaceBrowse}
       />
       <QuickStartCard
         icon={<BrainIcon size={22} style={{ color: 'var(--accent-blue)' }} />}

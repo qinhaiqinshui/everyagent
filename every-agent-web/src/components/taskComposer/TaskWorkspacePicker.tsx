@@ -7,10 +7,17 @@
  *
  * 延迟注册:浏览确认只把目录记为待选(不上报 workspaces.add),避免多次浏览
  * 留下一堆空工作区;真正注册发生在任务创建时(worker task.run resolve 即注册)。
+ *
+ * 浏览弹窗的打开入口有二:本选择器下拉里的「＋ 新工作区」;外部导航意图
+ * (空态页快捷入口「新建工作区(项目)」经 taskWorkspaceBrowseIntent 发来)。
  */
 import React from 'react'
 import { Select } from 'antd'
 import WorkspaceBrowserModal from '@/components/shared/WorkspaceBrowserModal'
+import {
+  consumePendingDraftWorkspaceBrowse,
+  subscribeDraftWorkspaceBrowse,
+} from './taskWorkspaceBrowseIntent'
 import type { WorkspaceEntry } from '@/hub/workspaceRegistry'
 
 interface TaskWorkspacePickerProps {
@@ -35,6 +42,16 @@ function displayRootLabel(root: string): string {
 export default function TaskWorkspacePicker({ workspaces, selected, onSelect, onPickExternal, workerId }: TaskWorkspacePickerProps) {
   const [browserOpen, setBrowserOpen] = React.useState(false)
   const inRegistry = workspaces.some((entry) => entry.root === selected)
+
+  // 外部浏览意图(空态页快捷入口「新建工作区」):挂载时消费 pending(标签懒加载首挂),
+  // 已挂载时走订阅即时打开。消费即清空,选择器重挂不会因陈旧 pending 再弹。
+  React.useEffect(() => {
+    const openFromIntent = () => {
+      if (consumePendingDraftWorkspaceBrowse()) setBrowserOpen(true)
+    }
+    openFromIntent()
+    return subscribeDraftWorkspaceBrowse(openFromIntent)
+  }, [])
 
   return (
     <div className="task-workspace-picker">
