@@ -9,6 +9,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.JsonNode;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Function;
@@ -111,6 +112,22 @@ public class HubPool implements EventSink {
 
     public void addListener(Listener l) {
         listeners.add(l);
+    }
+
+    /**
+     * 单条 hub 连接的只读快照:<b>只含地址与状态,绝不含 apiKey/hubKey</b>
+     * (设置弹窗展示「该 worker 已连接到的 hub」,凭据不出 worker,同 config.get 的掩码原则)。
+     */
+    public record HubView(String url, boolean connected, boolean local) {
+    }
+
+    /** 全部 hub 连接的只读快照(配置序,与 {@link #conns()} 一一对应)。 */
+    public List<HubView> hubViews() {
+        List<HubView> out = new ArrayList<>(conns.size());
+        for (HubLink c : conns) {
+            out.add(new HubView(c.url(), c.isConnected(), WorkerProperties.isLoopbackHubUrl(c.url())));
+        }
+        return out;
     }
 
     /** 全部连接(配置期固定,顺序即配置序)。 */

@@ -255,6 +255,7 @@ worker 端 `RpcDispatcher` 注册方法;应答回**请求来源连接**的 `evt`
 | `rpc.cancel` | 取消进行中的长 RPC(Future.cancel) |
 | `plugin.list` / `install` / `uninstall` / `enable` / `disable` / `webSource` / `asset` | 插件管理(worker 核心注册,§8.5):目录(含禁用项)、`.eap` 安装/卸载、启停(**均重启 worker 后生效**)、web 源码/静态资源读取 |
 | `sys.methods` / `sys.info` | 能力发现:本 worker 支持的方法清单与版本、workspace/模型/hub 元信息 |
+| `sys.hubs` | 本 worker 的 hub 连接清单(**只读展示**):每条 `{url, connected, local}`,配置序;**不含任何凭据**(apiKey/hubKey 明文不出 worker,同 `config.get` 的掩码原则)。设置页「连接到远程 Hub」弹窗据此展示「该 worker 已连接到的 hub(含本地)」——用户据此选对要连的地址 |
 | `worker.restart` | 重启 worker 进程(设置页「重启 Worker」按钮):应答 ok 后优雅关闭 ApplicationContext(断开 hub 连接、销毁插件),再按运行环境拉起新进程——**systemd 管辖**(服务器 host 部署)不自 fork,以约定退出码交接 supervisor 拉起;**无 supervisor**(desktop/bat/nohup)以重建的启动命令**自重启**;启动命令无法重建时拒绝执行(worker 不重启) |
 
 **扩展规则**:协议固定的是交互形状(请求/应答/分批/进度/取消/通知),不是内容;`method` 只是字符串命名空间(`域.动作`),`params`/`result` 是自由 JSON。新功能 = 注册新 method,零改协议、零改 hub。兼容规则:method 只加不改;breaking change 用新名,老客户端靠 `sys.methods` 发现能力。

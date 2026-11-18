@@ -392,9 +392,10 @@ public class WorkerProperties implements WorkerConfig {
     /**
      * 回环 hub 地址判定(与 desktop credentials.isLoopbackWsUrl 同集):
      * 本机 hub 连接由 desktop 独占注入(desktop-worker.yml 恒 hubs[0]),用户文件里的
-     * 回环条目剔除(防重复、防凭据错配,与 desktop 生成侧剔除逻辑成对)。
+     * 回环条目剔除(防重复、防凭据错配,与 desktop 生成侧剔除逻辑成对);
+     * 另供 sys.hubs 把「本地 hub」标出来(前端展示用)。
      */
-    static boolean isLoopbackHubUrl(String url) {
+    public static boolean isLoopbackHubUrl(String url) {
         if (url == null || url.isBlank()) {
             return false;
         }

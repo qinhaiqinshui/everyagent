@@ -318,6 +318,15 @@ class WorkerHubE2eTest {
         assertTrue(methods.contains("task.run") && methods.contains("git.status")
                 && methods.contains("workspaces.list") && methods.contains("task.delete"), methods);
 
+        // sys.hubs:本 worker 的 hub 连接清单(只读展示)——只回地址与状态,凭据绝不上线
+        String hubs = rpc("sys.hubs", "{}");
+        JsonNode hubList = Json.parse(hubs).path("payload").path("result").path("hubs");
+        assertTrue(hubList.size() >= 1, "至少一条 hub 连接: " + hubs);
+        assertEquals("ws://127.0.0.1:" + hubPort + "/ws", hubList.get(0).path("url").asString(""), hubs);
+        assertTrue(hubList.get(0).path("connected").asBoolean(false), "本机 hub 已连接: " + hubs);
+        assertTrue(hubList.get(0).path("local").asBoolean(false), "回环地址应标记为本地 hub: " + hubs);
+        assertFalse(hubs.contains(KEY) || hubs.contains(HUB_KEY), "hub 清单不得携带任何凭据: " + hubs);
+
         String wsList = rpc("workspaces.list", "{}");
         // 断言走解析后比较:线上 JSON 反斜杠已转义,裸 contains 匹配不到 Windows 路径
         boolean hasWs = false;

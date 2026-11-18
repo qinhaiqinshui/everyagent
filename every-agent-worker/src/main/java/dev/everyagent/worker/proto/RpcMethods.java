@@ -119,6 +119,11 @@ public final class RpcMethods {
     public static final String MENTION_QUERY = "mention.query";
     public static final String SYS_METHODS = "sys.methods";
     public static final String SYS_INFO = "sys.info";
+    /**
+     * 本 worker 的 hub 连接清单(只读展示):应答 {hubs:[{url, connected, local}]},不含任何凭据。
+     * 设置页「连接到远程 Hub」弹窗据此展示「该 worker 已连接到的 hub(含本地)」。
+     */
+    public static final String SYS_HUBS = "sys.hubs";
     /** 重启 worker 进程(自重启:优雅关闭后以重建的启动命令重新拉起,架构 §5.5)。 */
     public static final String WORKER_RESTART = "worker.restart";
 

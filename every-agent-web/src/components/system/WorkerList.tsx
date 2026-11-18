@@ -77,8 +77,8 @@ export default function WorkerList() {
   const [renameDraft, setRenameDraft] = React.useState('')
   /** 待确认移除配置的 workerId。 */
   const [removingId, setRemovingId] = React.useState('')
-  /** 「连接到远程 Hub」弹窗开关(⋮ 菜单入口,任意 worker 行都可发起)。 */
-  const [remoteHubOpen, setRemoteHubOpen] = React.useState(false)
+  /** 「连接到远程 Hub」弹窗:发起该操作的 workerId(空 = 弹窗关闭)。 */
+  const [remoteHubWorkerId, setRemoteHubWorkerId] = React.useState('')
 
   // 别名变化时重渲染(显示名依赖别名)。
   const [, setAliasesVersion] = React.useState(0)
@@ -191,6 +191,11 @@ export default function WorkerList() {
     ? hub.directory.find((w) => w.workerId === removingId) ?? null
     : null
 
+  /** 「连接到远程 Hub」弹窗的发起 worker(从目录实时取,以便拿到最新连接状态)。 */
+  const remoteHubWorker = remoteHubWorkerId
+    ? hub.directory.find((w) => w.workerId === remoteHubWorkerId) ?? null
+    : null
+
   // 排序:在线优先,再按显示名。
   const sorted = [...hub.directory].sort((a, b) => {
     if (a.online !== b.online) return a.online ? -1 : 1
@@ -228,7 +233,7 @@ export default function WorkerList() {
             },
           },
           { key: 'copy-id', label: '复制 worker ID', onSelect: () => void handleCopyWorkerId(worker) },
-          { key: 'remote-hub', label: '连接到远程 Hub…', onSelect: () => setRemoteHubOpen(true) },
+          { key: 'remote-hub', label: '连接到远程 Hub…', onSelect: () => setRemoteHubWorkerId(worker.workerId) },
         ]
         if (worker.hasApiKey && (state === 'connected' || state === 'disabled')) {
           menuItems.push({
@@ -373,7 +378,11 @@ export default function WorkerList() {
         }}
         onCancel={() => setRemovingId('')}
       />
-      <RemoteHubConnectDialog open={remoteHubOpen} onClose={() => setRemoteHubOpen(false)} />
+      <RemoteHubConnectDialog
+        open={Boolean(remoteHubWorkerId)}
+        worker={remoteHubWorker}
+        onClose={() => setRemoteHubWorkerId('')}
+      />
     </div>
   )
 }

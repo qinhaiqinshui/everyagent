@@ -182,6 +182,37 @@ describe('重启(hydrate)流程:密文还原、旧明文迁移', () => {
   })
 })
 
+describe('workerHubs:sys.hubs 只读清单归一化', () => {
+  it('只保留有效地址、补齐布尔默认值(不猜测凭据)', async () => {
+    const { hubSession } = await freshSession()
+    const clients = hubSession.workerClients as unknown as Map<
+      string,
+      { state: string; rpc: () => Promise<unknown> }
+    >
+    clients.set('w1', {
+      state: 'open',
+      rpc: async () => ({
+        hubs: [
+          { url: 'ws://127.0.0.1:6101/ws', connected: true, local: true },
+          { url: ' wss://hub.example.com/ws ', connected: false },
+          { url: '', connected: true },
+          null,
+          { connected: true },
+        ],
+      }),
+    })
+    expect(await hubSession.workerHubs('w1')).toEqual([
+      { url: 'ws://127.0.0.1:6101/ws', connected: true, local: true },
+      { url: 'wss://hub.example.com/ws', connected: false, local: false },
+    ])
+  })
+
+  it('worker 未连接(无数据连接)时立即拒绝,不挂起', async () => {
+    const { hubSession } = await freshSession()
+    await expect(hubSession.workerHubs('nope')).rejects.toThrow()
+  })
+})
+
 describe('非安全上下文:setWorkerApiKey 落盘 b64 混淆(凭据仍持久化)', () => {
   it('b64: 前缀混淆值落盘、明文不直接出现、可解回,directory 仍视为已配置', async () => {
     const { hubSession, storage } = await freshSession({

@@ -70,6 +70,19 @@ export interface WorkerConnectResult {
   online?: boolean
 }
 
+/**
+ * 某台 worker 的 hub 连接快照(sys.hubs,只读展示用):worker 连到哪些 hub
+ * (含本地回环 hub)。**不含凭据** —— worker 侧只回地址与状态。
+ */
+export interface WorkerHubInfo {
+  /** hub 地址(worker 配置里的原始 url)。 */
+  url: string
+  /** 该条连接当前是否在线。 */
+  connected: boolean
+  /** 是否本地(回环地址)hub —— 桌面版自动拉起的那一个。 */
+  local: boolean
+}
+
 const WEB_DIRECTORY_CLIENT_ID = 'web-fe-directory'
 
 /** 被 hub 限流(单 IP hello 超 60/min)后的前端退避:首次 15s,指数增长,上限 120s。 */
@@ -422,6 +435,23 @@ class HubSession {
       return Promise.reject(new Error('worker ' + workerId + ' 未连接'))
     }
     return client.rpc(workerId, method, params, opts)
+  }
+
+  /**
+   * 读取某台 worker 的 hub 连接清单(sys.hubs):只含 `{url, connected, local}`,无凭据。
+   * 设置页「连接到远程 Hub」弹窗据此展示「该 worker 已连接到的 hub(含本地)」;
+   * worker 未连接时 rpcTo 立即拒绝,调用方降级为提示(不阻塞用户手填地址)。
+   */
+  async workerHubs(workerId: string): Promise<WorkerHubInfo[]> {
+    const res = (await this.rpcTo(workerId, 'sys.hubs')) as { hubs?: unknown } | null
+    const raw = Array.isArray(res?.hubs) ? (res.hubs as unknown[]) : []
+    return raw.flatMap((item) => {
+      if (!item || typeof item !== 'object') return []
+      const hub = item as { url?: unknown; connected?: unknown; local?: unknown }
+      const url = typeof hub.url === 'string' ? hub.url.trim() : ''
+      if (!url) return []
+      return [{ url, connected: hub.connected === true, local: hub.local === true }]
+    })
   }
 
   /** 遍历所有「在线且已建立连接」的 worker。 */
