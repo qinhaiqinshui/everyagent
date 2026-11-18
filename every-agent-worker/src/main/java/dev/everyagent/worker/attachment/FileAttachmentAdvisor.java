@@ -14,14 +14,21 @@ import org.springframework.core.Ordered;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * 文件附件注入 Advisor（核心统一 Advisor，与 {@link FileReferenceProcessNode} 配对）。
  *
  * <p>职责单一（一个 Advisor 只做一个功能）：读 {@code ExecContext.metadata().attachments}，
  * 把 {@code type=image} 项转为 Spring AI {@link Media}（data URL base64），重建末位
- * {@link UserMessage} 为带媒体的多模态消息并 {@code mutate()}。无附件 / 无 user 消息 /
- * 末位 user 消息已带媒体 → 原样放行。
+ * {@link UserMessage} 为带媒体的多模态消息并 {@code mutate()}。无附件 / 无 user 消息 →
+ * 原样放行；末位 user 消息已带媒体时做<b>合并去重</b>而非整条跳过——只追加尚不存在的
+ * 候选项（判重口径：data + name + mimeType 组合比较），全部已存在则原样放行（不重建消息）。
+ *
+ * <p>合并而非跳过的原因：read_file 按扩展名接管（FileReadHandler）可在<b>同一 run 中途</b>
+ * 把新附件并入 metadata.attachments（工具循环跨多次模型调用、instructions 复用同一消息
+ * 实例），先注入图片 A 后又读入图片 B 时，「已带媒体即跳过」会让 B 本轮不可见；故防重复
+ * 注入守卫从「跳过」改为「合并去重」——既有 media 保留在前，新增项按候选序追加。
  *
  * <p>本 Advisor 不感知「图片」业务（不读文件、不压缩、不解析 token）——处理逻辑在各
  * 插件注册的 {@code FileReferenceHandler}；未来 PDF/Word 插件复用同一 Advisor，
@@ -68,14 +75,18 @@ public class FileAttachmentAdvisor implements BaseAdvisor {
             return chatClientRequest;
         }
         UserMessage lastUser = (UserMessage) instructions.get(lastUserIndex);
-        if (!lastUser.getMedia().isEmpty()) {
-            // 已带媒体（防御重复注入），原样放行。
+        List<Media> existing = lastUser.getMedia();
+        List<Media> additions = notPresentIn(media, existing);
+        if (additions.isEmpty()) {
+            // 末位已带媒体且候选全部已存在（或候选为空，前文已短路）→ 原样放行，不重建消息。
             return chatClientRequest;
         }
+        List<Media> merged = new ArrayList<>(existing);
+        merged.addAll(additions); // 既有在前，新增按候选序
         List<Message> out = new ArrayList<>(instructions);
         out.set(lastUserIndex, UserMessage.builder()
                 .text(lastUser.getText())
-                .media(media)
+                .media(merged)
                 .metadata(lastUser.getMetadata())
                 .build());
         Prompt newPrompt = new Prompt(out, chatClientRequest.prompt().getOptions());
@@ -105,5 +116,34 @@ public class FileAttachmentAdvisor implements BaseAdvisor {
             }
         }
         return AttachmentMedia.toMedia(maps);
+    }
+
+    /**
+     * 候选中筛出「尚未存在」的 Media，供合并去重。判重口径：data（dataUrl 字符串）+
+     * name + mimeType 组合比较——{@link Media} 未覆写 equals（身份等价），不能依赖
+     * 集合 contains/record equals，须逐项显式比较。
+     */
+    private static List<Media> notPresentIn(List<Media> candidates, List<Media> existing) {
+        if (existing.isEmpty()) {
+            return candidates;
+        }
+        List<Media> additions = new ArrayList<>();
+        for (Media candidate : candidates) {
+            if (!containsMedia(existing, candidate)) {
+                additions.add(candidate);
+            }
+        }
+        return additions;
+    }
+
+    private static boolean containsMedia(List<Media> existing, Media candidate) {
+        for (Media has : existing) {
+            if (Objects.equals(candidate.getData(), has.getData())
+                    && Objects.equals(candidate.getName(), has.getName())
+                    && Objects.equals(candidate.getMimeType(), has.getMimeType())) {
+                return true;
+            }
+        }
+        return false;
     }
 }
