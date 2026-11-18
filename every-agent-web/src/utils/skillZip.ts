@@ -1,8 +1,7 @@
 /**
  * skill zip 导入/导出的共享工具(自 SkillListTable.tsx 抽出,逻辑原样搬运)。
  *
- * 供设置页「Skill 列表」(SkillListTable)与空工作区快捷入口
- * (EmptyWorkspaceQuickStart)两处复用:
+ * 供设置页「Skill 列表」(SkillListTable)使用:
  * - MAX_IMPORT_ZIP_BYTES / ZIP_RPC_TIMEOUT_MS:导入 zip 的前端预检上限与 RPC 宽限超时;
  * - base64ToBytes / bytesToBase64:zip 内容与 wire base64 的互转;
  * - pickZipFile:唤起单选 zip 文件选择器(须在用户手势调用栈内触发)。

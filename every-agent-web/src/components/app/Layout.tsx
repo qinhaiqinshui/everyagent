@@ -1157,7 +1157,7 @@ function EmptyWorkspaceHome({ onNewTask }: { onNewTask: () => void }) {
       </div>
       {/* 「开始」区小标题(VSCode 欢迎页风格):复用 emptyWorkspaceHintStyle,仅清掉默认段落边距。 */}
       <p style={{ ...emptyWorkspaceHintStyle, margin: 0 }}>开始</p>
-      {/* 冷启动快捷入口(新建工作区/添加模型配置/导入 skill),弹窗逻辑组件自持。 */}
+      {/* 冷启动快捷入口(新建工作区/添加模型配置/导入 skill):纯导航,跳到对应页面再操作。 */}
       <EmptyWorkspaceQuickStart />
     </div>
   )
