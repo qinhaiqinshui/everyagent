@@ -2,7 +2,9 @@
  * 桌面版 bootstrap:检测 Electron preload 暴露的 window.everyAgentDesktop,
  * 若存在则把本地 hub/worker 的默认连接配置写入 hubSession(自动建连)。
  *
- * 仅在「尚未配置 / hub 地址不同 / 缺该 worker 凭证」时自动注入,尊重用户已保存的配置。
+ * 仅在「尚未配置 / 仍指向本机 hub 但 key 不同 / 缺该 worker 凭证」时自动注入;
+ * 一旦 hub 地址已被用户显式配置为远程 hub(见「连接到远程 Hub」弹窗),重启后必须保持,
+ * 绝不覆盖回本机 hub。
  */
 import { hubSession } from '@/hub/session'
 import { setNotificationAdapter } from '@/notification'
@@ -69,8 +71,13 @@ export async function applyDesktopBootstrapIfPresent(): Promise<void> {
     // 直接比较会误判为「配置不同」而反复覆盖用户配置。
     await hubSession.ensureHydrated()
     const current = hubSession.config
+    // 仅两种情况注入本机 hub 配置:
+    // 1) 尚无任何配置(首启初始化);
+    // 2) 仍指向本机 hub 地址但 key 不同(本机 hub key 轮换,原地更新)。
+    // 其余情况——current.hubUrl 指向其他地址——说明用户已显式连接到远程 hub,
+    // 重启后必须尊重该配置,绝不覆盖回本机。
     const needHubConfig =
-      !current || current.hubUrl !== boot.hubUrl || current.hubKey !== boot.hubKey
+      !current || (current.hubUrl === boot.hubUrl && current.hubKey !== boot.hubKey)
 
     if (needHubConfig) {
       await hubSession.applyConfig({
