@@ -133,6 +133,36 @@ public class SlashTaskScopeStore implements SlashTokenService {
         return false;
     }
 
+    /**
+     * 移除该任务中所有指定 kind 的任务级 token(消费式一次性命令用,如「压缩上下文」)。
+     * 移除后落盘并广播 {@code slash.tokens.changed}。
+     *
+     * @return true = 有 token 被移除;false = 无匹配 token 或任务不可寻。
+     */
+    @Override
+    public boolean removeKind(String taskId, String kind) {
+        if (kind == null || kind.isBlank()) {
+            return false;
+        }
+        synchronized (lockOf(taskId)) {
+            Path dir = workerServices.dataDirOf(taskId);
+            if (dir == null) {
+                return false;
+            }
+            List<String> tokens = readTokens(dir);
+            boolean removed = tokens.removeIf(t -> {
+                SlashTokenEncoder.ParsedToken parsed = SlashTokenEncoder.parseToken(t);
+                return parsed != null && kind.equals(parsed.kind());
+            });
+            if (!removed) {
+                return false;
+            }
+            writeTokens(dir, tokens);
+            emitChanged(taskId, tokens);
+            return true;
+        }
+    }
+
     // ---- 内部 ----
 
     /** 读取 {@code slash-tokens.json};文件不存在视为空列表。 */

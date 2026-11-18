@@ -172,9 +172,10 @@ public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
                     exec.subjectId(), a.agentId, Thread.currentThread().getName());
             return chatClientResponse;
         }
-        log.debug("[advisor] doAfterStream 发射轮次 agentId={} subject={} hasToolCalls={} thread={}",
+        log.info("[advisor] 轮次聚合完成 agentId={} subject={} hasToolCalls={} toolCalls={} thread={}",
                 a.agentId, exec.subjectId(),
                 out.getToolCalls() != null && !out.getToolCalls().isEmpty(),
+                out.getToolCalls() == null ? 0 : out.getToolCalls().size(),
                 Thread.currentThread().getName());
         long rid = ensureRoundId();
         // 文本(逐字 delta 已在 adviseStream tap 逐 chunk 发出;此处只记终值供收口/子 agent 结果用)

@@ -126,6 +126,19 @@ describe('detailOfCall / detailOfOrphan(载荷 → 美化视图输入)', () => {
     expect(detail.result).toBe('plain output')
   })
 
+  it('开始时间点 startedAt 随结果载荷透传(展开态「开始于」元信息行的数据源)', () => {
+    const detail = detailOfCall(
+      callOf('c1', 'shell', '{}'),
+      resultOf('c1', { startedAt: 1730000000000, durationMs: 1200 }),
+    )
+    expect(detail.startedAt).toBe(1730000000000)
+    // 结果未到 → undefined(运行中由 messageView 灌瞬态 tool.started 值);老事件缺失同 undefined。
+    expect(detailOfCall(callOf('c1', 'shell', '{}'), null).startedAt).toBeUndefined()
+    expect(detailOfCall(callOf('c1', 'shell', '{}'), resultOf('c1')).startedAt).toBeUndefined()
+    // 孤儿兜底同样透传。
+    expect(detailOfOrphan(resultOf('c1', { startedAt: 1730000005000 })).startedAt).toBe(1730000005000)
+  })
+
   it('孤儿详情:无下发锚点,参数 null,工具名回填缺失时回退「工具」', () => {
     expect(detailOfOrphan(resultOf('c1', { toolName: 'known' })).toolName).toBe('known')
     const unknown = detailOfOrphan(resultOf('c1', { content: 'raw' }))

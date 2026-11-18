@@ -12,13 +12,17 @@ export type CodeBlockProps = {
   variant?: 'preview' | 'display'
   /** 外层附加样式(如预览的分层缩进 marginLeft)。 */
   style?: React.CSSProperties
+  /** 源码起始行(1-based,markdown 文件预览滚动同步用;聊天场景缺省)。 */
+  sourceLine?: number
+  /** 源码结束行(1-based,含围栏闭合行;块内比例插值用)。 */
+  sourceLineEnd?: number
 }
 
 /**
  * 共享代码块渲染组件(MarkdownPreview / MarkdownDisplay 共用)。
  * 头部条:左侧语言标签 + 右侧复制按钮;正文 Prism 高亮,长行横向滚动不撑破容器(移动端)。
  */
-export default function CodeBlock({ code, language, variant = 'preview', style }: CodeBlockProps) {
+export default function CodeBlock({ code, language, variant = 'preview', style, sourceLine, sourceLineEnd }: CodeBlockProps) {
   const lang = React.useMemo(() => normalizeCodeLanguage(language), [language])
   const html = React.useMemo(() => (lang ? highlightCode(code, lang) : null), [code, lang])
   const [copied, setCopied] = React.useState(false)
@@ -40,7 +44,12 @@ export default function CodeBlock({ code, language, variant = 'preview', style }
   }, [code])
 
   return (
-    <div className={`code-block code-block--${variant}`} style={style}>
+    <div
+      className={`code-block code-block--${variant}`}
+      style={style}
+      data-source-line={sourceLine}
+      data-source-line-end={sourceLineEnd}
+    >
       <div className="code-block__header">
         <span className="code-block__lang">{lang ?? 'text'}</span>
         <button

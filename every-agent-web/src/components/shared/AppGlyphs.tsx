@@ -102,6 +102,28 @@ export function CopyIcon({ size = 16, style }: AppGlyphProps) {
   )
 }
 
+/** 粘贴(剪贴板+内容横线):文件资源管理器树「粘贴」按钮/菜单项。 */
+export function PasteIcon({ size = 16, style }: AppGlyphProps) {
+  return (
+    <Svg size={size} style={style}>
+      <rect x="3.2" y="3.4" width="9.6" height="10.2" rx="1.4" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M6 2.6H10A0.9 0.9 0 0 1 10.9 3.5V4.4A0.9 0.9 0 0 1 10 5.3H6A0.9 0.9 0 0 1 5.1 4.4V3.5A0.9 0.9 0 0 1 6 2.6Z" stroke="currentColor" strokeWidth="1.2" />
+      <path d="M5.8 8.4H10.2M5.8 11H9" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </Svg>
+  )
+}
+
+/** 剪切(剪刀):文件资源管理器树「剪切」菜单项(Ctrl+X)。 */
+export function ScissorsIcon({ size = 16, style }: AppGlyphProps) {
+  return (
+    <Svg size={size} style={style}>
+      <circle cx="3.9" cy="4" r="1.9" stroke="currentColor" strokeWidth="1.3" />
+      <circle cx="3.9" cy="12" r="1.9" stroke="currentColor" strokeWidth="1.3" />
+      <path d="M5.3 5.3L12.9 12.2M5.3 10.7L12.9 3.8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+    </Svg>
+  )
+}
+
 export function CheckIcon({ size = 16, style }: AppGlyphProps) {
   return (
     <Svg size={size} style={style}>

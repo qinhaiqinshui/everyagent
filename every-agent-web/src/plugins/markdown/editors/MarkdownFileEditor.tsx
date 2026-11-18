@@ -3,6 +3,7 @@ import MarkdownOutlinePanel from './MarkdownOutlinePanel'
 import MarkdownPreview from './MarkdownPreview'
 import MarkdownSplitEditor from './MarkdownSplitEditor'
 import { parseMarkdownHeadings, type MarkdownHeading } from './markdownOutline'
+import { getPreviewTopSourceLine } from './markdownScrollSync'
 import Dialog from '@/components/shared/ui/Dialog'
 import { useResponsiveViewport } from '@/hooks/useResponsiveViewport'
 import type { FileContentEditorDescriptor, FileContentEditorProps, FileContentHeaderAction } from '@/components/files/editors/types'
@@ -32,24 +33,38 @@ function MarkdownFileEditor({
   const [layout, setLayout] = React.useState<MarkdownLayout>('horizontal')
   const [wrapLines, setWrapLines] = React.useState(true)
   const [copied, setCopied] = React.useState(false)
+  // 只读预览 → 编辑模式切换时迁移阅读位置:切换前从预览读取视口顶部源行号,
+  // 交给 MarkdownSplitEditor 在编辑器挂载后定位(该切换会整体重建编辑器组件树)。
+  const [initialEditLine, setInitialEditLine] = React.useState<number | null>(null)
   const previewRootRef = React.useRef<HTMLDivElement | null>(null)
   const previewComponentRef = React.useRef<React.ElementRef<typeof MarkdownPreview> | null>(null)
   const splitEditorRef = React.useRef<React.ElementRef<typeof MarkdownSplitEditor> | null>(null)
-  const previousModeRef = React.useRef(mode)
+  // 单元格编辑触发的 readonly→readwrite 升级标记:升级后保持在预览视图继续编辑,
+  // 而不像显式「编辑」按钮那样切入源码视图(渲染期同步处消费并清除)。
+  const cellEditUpgradeRef = React.useRef(false)
   const headings = React.useMemo<MarkdownHeading[]>(() => (
     parseMarkdownHeadings(mode === 'readonly' ? content : draftContent)
   ), [content, draftContent, mode])
   const sourceContent = mode === 'readonly' ? content : draftContent
 
-  React.useEffect(() => {
-    const previousMode = previousModeRef.current
-    if (mode === 'readonly') {
+  // mode 切换时同步(渲染期)调整视图:readonly→readwrite 进入源码视图,回退 readonly 回预览。
+  // 用「渲染期 setState」而非 effect:MarkdownSplitEditor 首次挂载就直接以目标视图挂载——
+  // 避免「先以编辑器隐藏(preview)形态挂载、下个 effect 再翻转」导致 CodeMirror 在
+  // display:none 下创建、测量几何失真(首切编辑模式滚动定位失效的根因)。
+  const [prevMode, setPrevMode] = React.useState(mode)
+  if (mode !== prevMode) {
+    setPrevMode(mode)
+    if (mode === 'readwrite' && prevMode === 'readonly' && viewMode === 'preview') {
+      // 预览内单元格编辑触发的升级:保持预览视图继续编辑/查看;显式「编辑」按钮才切源码视图。
+      if (cellEditUpgradeRef.current) {
+        cellEditUpgradeRef.current = false
+      } else {
+        setViewMode('editor')
+      }
+    } else if (mode === 'readonly') {
       setViewMode('preview')
-    } else if (previousMode === 'readonly' && viewMode === 'preview') {
-      setViewMode('editor')
     }
-    previousModeRef.current = mode
-  }, [mode, viewMode])
+  }
 
   // 行定位请求（如搜索结果点击跳转到指定行）到来时切到源码视图：
   // 预览视图不挂载 CodeMirror，行定位无法生效；split/editor 视图保持不动。
@@ -72,6 +87,21 @@ function MarkdownFileEditor({
       // ignore
     }
   }, [sourceContent])
+
+  /**
+   * 只读预览内的表格单元格编辑提交:先把编辑写入草稿(宿主 mode 切换不重读文件,
+   * 草稿无缝继承),再请求把文件标签升级为可编辑(用户随后经标题栏保存按钮落盘),
+   * 并记录当前阅读行号供升级后定位。升级后停留预览视图(cellEditUpgradeRef)。
+   */
+  const handleReadonlyCellEdit = React.useCallback((next: string) => {
+    const topLine = getPreviewTopSourceLine(previewRootRef.current)
+    if (topLine != null) {
+      setInitialEditLine(Math.max(1, Math.round(topLine)))
+    }
+    onDraftChange(next)
+    cellEditUpgradeRef.current = true
+    onRequestEditMode?.()
+  }, [onDraftChange, onRequestEditMode])
 
   const headerActions = React.useMemo<FileContentHeaderAction[]>(() => {
     const actions: FileContentHeaderAction[] = [
@@ -101,6 +131,11 @@ function MarkdownFileEditor({
       label: viewMode === 'preview' ? '编辑' : '预览',
       onClick: () => {
         if (mode === 'readonly') {
+          // DOM 切换(mode 变化会整体重建编辑器组件树)前先捕获预览视口顶部源行号。
+          const topLine = getPreviewTopSourceLine(previewRootRef.current)
+          if (topLine != null) {
+            setInitialEditLine(Math.max(1, Math.round(topLine)))
+          }
           onRequestEditMode?.()
         } else if (viewMode === 'preview') {
           setViewMode('editor')
@@ -226,6 +261,7 @@ function MarkdownFileEditor({
                 wrapLines={wrapLines}
                 workspaceRoot={markdownPreviewContext.workspaceRoot}
                 baseDir={markdownPreviewContext.baseDir}
+                onContentChange={onRequestEditMode ? handleReadonlyCellEdit : undefined}
               />
             </div>
           </div>
@@ -257,6 +293,7 @@ function MarkdownFileEditor({
             onViewModeChange={setViewMode}
             workspaceRoot={markdownPreviewContext.workspaceRoot}
             baseDir={markdownPreviewContext.baseDir}
+            initialEditorLine={initialEditLine}
           />
         </div>
         {!isMobile && showOutline ? (

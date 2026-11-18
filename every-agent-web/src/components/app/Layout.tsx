@@ -43,7 +43,7 @@ import ReconnectionModal from './ReconnectionModal'
 import MissingWorkspaceRepairHost from './MissingWorkspaceRepairHost'
 import RawAccessConfirmHost from '@/components/files/RawAccessConfirmHost'
 import { WorkspaceShellProvider } from './WorkspaceShellContext'
-import { setShellBridge } from '@/plugin/pluginRuntimeBridge'
+import { setShellBridge, invalidateComposerBridge } from '@/plugin/pluginRuntimeBridge'
 import { requestOpenSettingsPage } from '@/settings/settingsNavigation'
 import { domainEventBus, DOMAIN_EVENTS } from '@/events/eventBus'
 import { setActiveTabMirror } from '@/plugin/activeTabMirror'
@@ -338,8 +338,24 @@ function LayoutContent({ initialThemeType }: { initialThemeType: ThemeMode }) {
     showToast: (message, type) => showToast(message, type),
   }), [updateSelectedFilePath, showToast])
 
+  /**
+   * 当前激活标签 id 的同步镜像：activateWorkspaceTab / closeWorkspaceTabNow 走
+   * setState（异步生效），而「作废草稿桥」必须在切换的同一同步调用栈内完成
+   * （见 activateWorkspaceTab 注释），故用 ref 读「此刻」的激活 id。
+   */
+  const activeWorkspaceTabIdRef = React.useRef<WorkspaceTab['id'] | null>(activeWorkspaceTabId)
+  activeWorkspaceTabIdRef.current = activeWorkspaceTabId
+
   const activateWorkspaceTab = React.useCallback((tab: WorkspaceTab | null, options?: { collapseSidebar?: boolean }) => {
     if (!tab) return
+    // 激活标签真正切换 → 同步作废草稿桥：openTab(切换) 与随后的 appendComposerToken
+    // 常在同一同步调用栈内（插件「先开标签页再插胶囊」），此时 activeTabMirror 尚未
+    // 随 React commit 更新、composerBridge 仍指切换前的旧任务页——不作废会把内容
+    // 直写进已隐藏的旧草稿（表现为「新打开的任务标签页输入框为空」）。作废后 append
+    // 一律排队，待新激活任务页注入桥时 flush。
+    if (tab.id !== activeWorkspaceTabIdRef.current) {
+      invalidateComposerBridge()
+    }
     setActiveWorkspaceTabId(tab.id)
     getTabDefinition(tab)?.onActivate?.(tab, tabRenderCtx)
     if (options?.collapseSidebar && isMobile) {
@@ -368,6 +384,9 @@ function LayoutContent({ initialThemeType }: { initialThemeType: ThemeMode }) {
   }, [activateWorkspaceTab])
 
   const closeWorkspaceTabNow = React.useCallback((tabId: WorkspaceTab['id']) => {
+    // 关闭标签 → 同步作废草稿桥：被关的可能是桥当前指向的（激活）任务页，其
+    // TaskChat 即将卸载，留着陈旧引用只会在下一个任务页注入前吞掉直写内容。
+    invalidateComposerBridge()
     // 关闭任务标签页:发事件让 task 层自行退订 stream 频道。
     domainEventBus.emit(DOMAIN_EVENTS.WORKSPACE_TAB_CLOSED, { tabId })
     setWorkspaceTabs((current) => {

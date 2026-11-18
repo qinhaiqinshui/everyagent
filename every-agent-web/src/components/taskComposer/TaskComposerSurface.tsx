@@ -112,6 +112,12 @@ export interface TaskComposerSurfaceProps {
    */
   composerCaretRef?: React.MutableRefObject<number>
   /**
+   * 外部捕获内联编辑器命令式句柄（focus / 光标定位 / 光标处插入）。可选。
+   * 父组件（TaskChat）持有该 ref，经 composer 草稿桥把「插入到光标位置」类
+   * 宿主动作路由到编辑器；本组件在编辑器挂载/卸载时同步写入。
+   */
+  editorHandleRef?: React.MutableRefObject<InlineComposerHandle | null>
+  /**
    * 选中 position === 'bottom' 的 `/` 项时回调宿主（宿主负责 applyTaskToken + 更新自身列表）。
    * 允许返回 Promise：多个 bottom 结果（如「无人值守」联动「AI 审议」）会**逐个 await**，
    * 保证前一个胶囊先落盘（RPC 完成）再 apply 下一个，避免并行 RPC 的 meta 写竞态与中间态回显抖动。
@@ -230,11 +236,21 @@ export default function TaskComposerSurface({
   error,
   showSendButton = true,
   composerCaretRef,
+  editorHandleRef,
   onAddTaskScopeToken,
   onChangeDraft,
   onSubmit,
 }: TaskComposerSurfaceProps) {
   const editorRef = React.useRef<InlineComposerHandle | null>(null)
+  // 编辑器句柄双写：同一份 InlineComposerHandle 同时喂内部 editorRef（`/` `@` 面板
+  // 插入用）与外部 editorHandleRef（TaskChat 经草稿桥做「光标处插入」等宿主动作用）。
+  // useCallback 包住保持引用稳定，避免内联函数 ref 每次渲染触发 detach/attach。
+  const editorRefCallback = React.useCallback((handle: InlineComposerHandle | null) => {
+    editorRef.current = handle
+    if (editorHandleRef) {
+      editorHandleRef.current = handle
+    }
+  }, [editorHandleRef])
   const editorTextRef = React.useRef(draft.text)
   const editorCaretRef = React.useRef(0)
   const { showToast } = useAppUi()
@@ -829,7 +845,7 @@ export default function TaskComposerSurface({
         ) : null}
 
         <InlineComposer
-          ref={editorRef}
+          ref={editorRefCallback}
           rawContent={draft.rawContent}
           tokens={draft.tokens}
           placeholder={placeholder}

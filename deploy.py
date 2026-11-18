@@ -27,6 +27,8 @@ SSH 密码：优先级 DEPLOY_SSH_PASSWORD 环境变量 > 交互输入 > --passw
           worker 侧的内置插件 jar 被运行中的 worker 锁定时 clean 会失败——构建前请先停掉本机 worker。
 服务器前置（host 模式）：nginx（已装）、systemd；Java 25 需可用——可手动预装
           openjdk-25-jre-headless，或由脚本在缺失时 apt 安装（幂等，已装则跳过）。
+          ripgrep 无需服务器安装：runtime/bin/rg 随 worker 包分发（本机缺失时按钉死
+          版本自动下载 musl 静态版，见 ensure_runtime_rg）。
           hub 端口 6101 由 nginx 反代（/hub/）对外暴露，防火墙只需开 80（默认）。需 sudo（建议免密）。
 
 示例：
@@ -34,6 +36,17 @@ SSH 密码：优先级 DEPLOY_SSH_PASSWORD 环境变量 > 交互输入 > --passw
 
   # 只部署 worker（--no-deps 不连带拉起依赖的 hub）
   python deploy.py worker --no-deps --host 1.2.3.4 --user root -k ~/.ssh/id_rsa
+
+  # worker 连远程 hub（hub 不与 worker 同机时必须显式指向；不填 = 打包默认 ws://localhost:6101/ws
+  # 即「连本机 hub」，hub 不在本机时表现为无限重连失败。凭据用目标 hub 的 api-key / hub-key）
+  python deploy.py worker --host 1.2.3.4 --worker-hub-url ws://120.25.206.241:6101/ws \
+      --worker-api-key <数据归属密钥> --hub-key <远程hub的HUB_KEY>
+
+  # worker/hub 的 JVM 内存参数默认按 2c2G 小服务器收敛（worker -Xmx512m / hub -Xmx256m，
+  # 显式限堆，避免依赖 JVM 按物理内存 1/4 取默认堆上限的漂移行为）；大内存机器可覆盖：
+  python deploy.py worker --host 1.2.3.4 --worker-java-opts "-Xmx2g -XX:MaxMetaspaceSize=256m"
+  # （也可经 --config 文件 WORKER_JAVA_OPTS= / HUB_JAVA_OPTS= 或环境变量
+  #   DEPLOY_WORKER_JAVA_OPTS / DEPLOY_HUB_JAVA_OPTS 提供；显式传空字符串清除全部 JVM 参数）
 
   # 预览：不构建、不上传、不连服务器
   python deploy.py all --dry-run
@@ -52,6 +65,7 @@ SSH 密码：优先级 DEPLOY_SSH_PASSWORD 环境变量 > 交互输入 > --passw
   #                                              # docker 模式必填(worker 拒绝空凭据启动)，
   #                                              # host 模式也可由服务器上 application-worker.yaml 提供
   #   WORKSPACE_ROOT=/srv/everyagent/workspaces
+  #   WORKER_HUB_URL=ws://120.25.206.241:6101/ws   # worker 要连的 hub(留空 = 同机 localhost:6101)
   #   DEPLOY_HOST=1.2.3.4
   #   DEPLOY_USER=ubuntu
   #   DEPLOY_KEY=~/.ssh/id_rsa
@@ -74,6 +88,7 @@ import sys
 import tarfile
 import tempfile
 import time
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 
@@ -144,24 +159,65 @@ WORKER_IMAGE = "eclipse-temurin:25-jre"
 # TODO: pin @sha256:<digest>（同上）
 WEB_IMAGE = "nginx:alpine"
 
+# ripgrep 程序附属文件（仓库根 runtime/ 唯一真源，不入 git）：
+# worker 搜索引擎（RgSearchEngine）与 shell 工具的 rg PATH 注入都按 <cwd>/runtime/bin/rg
+# 解析（RipgrepBinary 无系统 PATH 回退），desktop 打包经 electron-builder extraResources
+# 搬运——deploy 部署同一机制：随 worker 包分发到 <worker>/runtime/，服务器端零安装。
+# 本机缺失（新克隆环境常见）时按钉死版本自动下载：musl 静态版在任意 Linux（glibc/musl）
+# 均可直接执行；官方 GitHub release 优先，国内镜像 fallback，全失败仅 WARN（服务端搜索
+# 降级，不阻塞部署），不悄悄改用 apt 版（版本漂移、且仍需配 worker.tools.rg-path 才生效）。
+RG_VERSION = "15.2.0"
+_RG_MUSL_TARBALL = f"ripgrep-{RG_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+RG_DOWNLOAD_URLS = [
+    f"https://github.com/BurntSushi/ripgrep/releases/download/{RG_VERSION}/{_RG_MUSL_TARBALL}",
+    f"https://ghfast.top/https://github.com/BurntSushi/ripgrep/releases/download/{RG_VERSION}/{_RG_MUSL_TARBALL}",
+]
+
+# JVM 启动参数默认值（host 模式注入 systemd ExecStart，docker 模式注入 compose command）。
+# 默认面向 2c2G 小服务器收敛：hub+nginx+OS 常驻约 0.65G，worker 限堆 512m 后进程峰值约
+# 0.9G（堆+元空间+线程栈+直接内存），总占用约 1.5G 仍留余量；实测 worker 不限堆跑任务
+# 常驻 <650MB、hub <260MB。显式限堆避免依赖 JVM「按物理内存 1/4 取默认堆上限」的漂移行为。
+# 覆盖途径：--worker-java-opts / --hub-java-opts > DEPLOY_WORKER_JAVA_OPTS / DEPLOY_HUB_JAVA_OPTS
+# > --config 文件 WORKER_JAVA_OPTS= / HUB_JAVA_OPTS=；CLI 显式传空字符串可清除全部 JVM 参数。
+DEFAULT_WORKER_JAVA_OPTS = "-Xmx512m -XX:MaxMetaspaceSize=192m"
+DEFAULT_HUB_JAVA_OPTS = "-Xmx256m -XX:MaxMetaspaceSize=128m"
+
 # 服务器端 docker-compose：官方镜像 + 挂载本地编译产物，不构建自定义镜像。
 # 三个服务始终定义齐全；只部署部分时，未部署的服务不会被启动（其挂载路径无需存在）。
 # worker 通过 bind mount 把「宿主工作区根」挂到容器内相同绝对路径，
 # 这样 worker 的目录选择 / fs 操作直接落在宿主真实目录上（由 WORKSPACE_ROOT 控制）。
+
+def java_cmd_line(java_bin: str, opts: str, jar: str) -> str:
+    """systemd ExecStart 用的单行 java 命令：JVM 参数按空白拆分（支持空格分隔的多项）后重组。"""
+    parts = [java_bin, *(p for p in (opts or "").split() if p), "-jar", jar]
+    return " ".join(parts)
+
+
+def java_cmd_list(java_bin: str, opts: str) -> str:
+    """compose command 用的 JSON 风格参数列表（jar 路径固定为容器内 /app/app.jar）。"""
+    parts = [java_bin, *(p for p in (opts or "").split() if p), "-jar", "/app/app.jar"]
+    return "[" + ", ".join(f'"{p}"' for p in parts) + "]"
+
 
 def render_compose(cfg) -> str:
     """生成运行时 compose：官方镜像 + 挂载本地产物。
     WORKSPACE_ROOT 非空时，把该宿主绝对路径「同路径」挂入 worker 容器，
     并写入同名环境变量，使 worker 默认工作区指向宿主真实目录。"""
     ws = (getattr(cfg, "workspace_root", "") or "").strip()
+    hub_cmd = java_cmd_list("java", getattr(cfg, "hub_java_opts", DEFAULT_HUB_JAVA_OPTS))
+    worker_cmd = java_cmd_list("java", getattr(cfg, "worker_java_opts", DEFAULT_WORKER_JAVA_OPTS))
     hub_key = getattr(cfg, "hub_key", "") or ""
     worker_api_key = getattr(cfg, "worker_api_key", "") or ""
     web_port = getattr(cfg, "web_port", 80) or 80
     worker_volumes = [
         "      - ./worker/app.jar:/app/app.jar:ro",
+        # runtime/ 程序附属文件(rg 等):与 app.jar 同源 staging 上传;worker 按
+        # <cwd>/runtime/bin 解析(RipgrepBinary),故配合 working_dir: /app 命中。
+        "      - ./worker/runtime:/app/runtime:ro",
         "      - worker-home:/everyagent",
     ]
     worker_id = getattr(cfg, "worker_id", "company-pc") or "company-pc"
+    worker_hub_url = (getattr(cfg, "worker_hub_url", "") or "").strip() or "ws://hub:6101/ws"
     worker_env = [
         f'      WORKER_ID: "{worker_id}"',
         "      EVERYAGENT_HOME: /everyagent",
@@ -172,8 +228,9 @@ def render_compose(cfg) -> str:
         # 打包默认已无任何密钥(fail-closed):worker 凭据必须显式注入——
         # api-key=数据归属密钥(WORKER_API_KEY),hub-key=与 hub 同一密钥(HUB_KEY)
         f'      WORKER_API_KEY: "{worker_api_key}"',
-        # 容器内经服务名访问 hub(打包默认 url=localhost,容器网络里不通)
-        '      WORKER_HUB_URL: "ws://hub:6101/ws"',
+        # 容器内经服务名访问 hub(打包默认 url=localhost,容器网络里不通);
+        # --worker-hub-url / DEPLOY_WORKER_HUB_URL 显式给出时以之为准(hub 跨机部署)
+        f'      WORKER_HUB_URL: "{worker_hub_url}"',
     ]
     if ws:
         if not ws.startswith("/"):
@@ -187,7 +244,7 @@ services:
   hub:
     image: {HUB_IMAGE}
     container_name: everyagent-hub
-    command: ["java", "-jar", "/app/app.jar"]
+    command: {hub_cmd}
     volumes:
       - ./hub/app.jar:/app/app.jar:ro
     ports:
@@ -201,7 +258,10 @@ services:
   worker:
     image: {WORKER_IMAGE}
     container_name: everyagent-worker
-    command: ["java", "-jar", "/app/app.jar"]
+    command: {worker_cmd}
+    # user.dir 决定 runtime/ 解析基点(<cwd>/runtime/bin/rg)与插件扫描(<cwd>/every-agent-plugins/)，
+    # 不设则默认 / ，rg 命不中、插件也扫不到。
+    working_dir: /app
     volumes:
 {"\n".join(worker_volumes)}
     environment:
@@ -239,6 +299,8 @@ volumes:
 
 def render_hub_service(cfg, java_bin: str) -> str:
     cur = f"{cfg.remote_dir.rstrip('/')}/current"
+    exec_start = java_cmd_line(java_bin, getattr(cfg, "hub_java_opts", DEFAULT_HUB_JAVA_OPTS), f"{cur}/hub/app.jar")
+    user_line = service_user_line(cfg)
     return f"""\
 [Unit]
 Description=Every Agent Hub
@@ -247,8 +309,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory={cur}/hub
-ExecStart={java_bin} -jar {cur}/hub/app.jar
+{user_line}WorkingDirectory={cur}/hub
+ExecStart={exec_start}
 EnvironmentFile={cur}/.env
 # hub 打包默认只监听 127.0.0.1(安全整改);host 部署显式放开保持既有行为
 # (nginx 反代与跨机 worker 直连均可达;如确认 hub/worker/webapp 全部同机、且无需
@@ -264,18 +326,27 @@ WantedBy=multi-user.target
 
 def render_worker_service(cfg, java_bin: str) -> str:
     cur = f"{cfg.remote_dir.rstrip('/')}/current"
+    exec_start = java_cmd_line(java_bin, getattr(cfg, "worker_java_opts", DEFAULT_WORKER_JAVA_OPTS), f"{cur}/worker/app.jar")
+    user_line = service_user_line(cfg)
     return f"""\
 [Unit]
 Description=Every Agent Worker
+# 不设 Requires/Wants=everyagent-hub.service：worker 可只连远程 hub 独立部署（hub 不在本机）。
+# 仅保留 After 排序——本机若同时部署了 hub 则 worker 排在其后启动；hub.service 不存在时
+# systemd 忽略该名，无副作用。worker 自带断线重连，hub 后起也不影响。
 After=network-online.target everyagent-hub.service
 Wants=network-online.target
-Requires=everyagent-hub.service
 
 [Service]
 Type=simple
-WorkingDirectory={cur}/worker
-ExecStart={java_bin} -jar {cur}/worker/app.jar
+{user_line}WorkingDirectory={cur}/worker
+ExecStart={exec_start}
 EnvironmentFile={cur}/.env
+# worker.restart 的 systemd 交接(架构 §5.5):worker 优雅关闭后以退出码 75 请求重启;
+# SuccessExitStatus 把 75 记为成功(避免 journal 误报 failed),RestartForceExitStatus
+# 强制对该码执行重启(覆盖 Restart=on-failure 不重启成功退出的默认)。
+SuccessExitStatus=75
+RestartForceExitStatus=75
 Restart=on-failure
 RestartSec=5
 
@@ -314,32 +385,66 @@ server {{
     location / {{
         try_files $uri $uri/ /index.html;
     }}
+
+    # SPA 缓存策略:index.html 禁缓存(每次协商校验 ETag,部署后立即生效),
+    # 带 hash 的 vite assets 长缓存不变。缺省 nginx 不发 Cache-Control,
+    # 浏览器按启发式缓存长时间复用旧 index.html → 引用旧 hash 资源,
+    # 出现「已部署但页面仍是旧版」。
+    location = /index.html {{
+        add_header Cache-Control "no-cache";
+    }}
+
+    location /assets/ {{
+        add_header Cache-Control "public, max-age=31536000, immutable";
+    }}
 }}
 """
 
 
 def render_runtime_env_file(cfg) -> str:
     """生成远端运行期 .env（HUB_KEY 原文,hub/worker 启动自算 sha256;REMOTE_HUB_KEY
-    供 worker.yml 第二条 hub 条目用,同一台 hub 时与 HUB_KEY 同值）。"""
+    供 worker.yml 第二条 hub 条目用,同一台 hub 时与 HUB_KEY 同值）。
+
+    只写显式提供的键：凭据/WORKER_ID 未给时不写行——空值行无意义，且默认 WORKER_ID=company-pc
+    会以 env 优先级压过登录用户 ~/.everyagent/application-worker.yaml 里的 worker-id。
+    不设 EVERYAGENT_HOME：服务以登录用户运行(systemd User=)，worker home 落其家目录
+    ~/.everyagent，application-worker.yaml 等用户配置从那里读(重部署不丢)。"""
     ws = (getattr(cfg, "workspace_root", "") or "").strip()
     hub_key = getattr(cfg, "hub_key", "") or ""
     worker_api_key = getattr(cfg, "worker_api_key", "") or ""
-    lines = [
-        f"HUB_KEY={hub_key}",
-        f"REMOTE_HUB_KEY={hub_key}",
-        # worker 数据归属密钥(host 模式通常由服务器上 ${EVERYAGENT_HOME}/application-worker.yaml
-        # 的 worker.hubs 列表提供凭据;留空时该文件可用 ${WORKER_API_KEY} 占位符引用本行)
-        f"WORKER_API_KEY={worker_api_key}",
-        f"WORKER_ID={getattr(cfg, 'worker_id', 'company-pc') or 'company-pc'}",
-        "EVERYAGENT_HOME=/var/lib/everyagent",
+    lines = []
+    if hub_key:
+        lines.append(f"HUB_KEY={hub_key}")
+        lines.append(f"REMOTE_HUB_KEY={hub_key}")
+    if worker_api_key:
+        lines.append(f"WORKER_API_KEY={worker_api_key}")
+    worker_id = getattr(cfg, "worker_id", None)
+    if worker_id:
+        lines.append(f"WORKER_ID={worker_id}")
+    if ws:
+        lines.append(f"WORKSPACE_ROOT={ws}")
+    hub_url = (getattr(cfg, "worker_hub_url", "") or "").strip()
+    if hub_url:
+        # worker 连接的 hub 地址:仅当用户配置文件未定义 worker.hubs 时经占位符生效;
+        # application-worker.yaml 里写了 hubs 列表则以文件为准,本行不参与
+        lines.append(f"WORKER_HUB_URL={hub_url}")
+    lines += [
+        "# 未写出的键以登录用户 ~/.everyagent/application-worker.yaml 为准",
+        "# (worker.hubs 凭据/worker-id 等;该文件不在 release 内,重新部署不覆盖)。",
         "# hub 监听地址由 systemd 单元(hub.service)注入 SERVER_ADDRESS=0.0.0.0 保持既有行为;",
         "# 若 hub/worker/webapp 全部同机且无需跨机直连 6101,取消下一行注释收紧为仅回环",
         "# (本文件优先级高于单元内的 Environment=;worker 不受影响——其 server.address 在打包 yml 固定回环)。",
         "#SERVER_ADDRESS=127.0.0.1",
     ]
-    if ws:
-        lines.append(f"WORKSPACE_ROOT={ws}")
     return "\n".join(lines) + "\n"
+
+
+def service_user_line(cfg) -> str:
+    """systemd 运行用户：以 SSH 登录用户运行——其家目录即 worker/hub 的 ~/.everyagent，
+    用户配置 application-worker.yaml 从那里读；也避免服务以 root 跑 AI 下发的命令。
+    root 登录时不写 User=（维持 root 运行，home=/root）。"""
+    u = (getattr(cfg, "user", "") or "").strip()
+    return f"User={u}\n" if u and u != "root" else ""
 
 
 def host_deploy_command(cfg, services, ts: str) -> str:
@@ -374,7 +479,6 @@ def host_deploy_command(cfg, services, ts: str) -> str:
         lines.append(f"{sudo} cp {cur}/systemd/everyagent-hub.service /etc/systemd/system/")
     if "worker" in services:
         lines.append(f"{sudo} cp {cur}/systemd/everyagent-worker.service /etc/systemd/system/")
-        lines.append(f"{sudo} mkdir -p /var/lib/everyagent")
     lines.append(f"{sudo} systemctl daemon-reload")
     if "hub" in services:
         lines.append(f"{sudo} systemctl enable everyagent-hub")
@@ -452,10 +556,14 @@ def find_hub_jar() -> Path:
 
 def find_worker_jar() -> Path:
     d = REPO_ROOT / "every-agent-worker" / "target"
-    cands = [p for p in d.glob("every-agent-worker-*.jar") if not p.name.endswith(".original")]
+    # 只认 spring-boot repackage 的 classifier=exec 产物(fat jar,带 Main-Class):
+    # 同目录无后缀 jar 是 thin(供插件模块依赖,-Dmaven.test.skip 打包必产出,无 Main-Class,
+    # java -jar 报「没有主清单属性」),-tests.jar 是 test-jar;旧 glob 全量匹配后取字典序
+    # 最大者恰是 thin('-'<'.' ,719K 即此),必错。mtime 最新防多版本共存时旧版本字典序更高。
+    cands = list(d.glob("every-agent-worker-*-exec.jar"))
     if not cands:
-        raise FileNotFoundError(f"未找到 worker 的可运行 jar，请确认本地已执行 mvn package（期望 {d} 下有 *.jar）")
-    return sorted(cands)[-1]
+        raise FileNotFoundError(f"未找到 worker 的可执行 jar，请确认本地已执行 mvn package（期望 {d} 下有 *-exec.jar）")
+    return max(cands, key=lambda p: p.stat().st_mtime)
 
 
 def build_builtin_plugins(cfg) -> None:
@@ -504,6 +612,65 @@ def stage_builtin_plugins(cfg, out_dir: Path) -> int:
     return sum(1 for p in out_dir.iterdir() if p.is_dir()) if out_dir.is_dir() else 0
 
 
+def ensure_runtime_rg() -> Path | None:
+    """仓库根 runtime/bin/rg 在位性探测；缺失时按钉死版本下载 musl 静态版。
+
+    返回 rg 文件路径；下载全失败返回 None（调用方 WARN 降级，不阻塞部署——
+    搜索功能缺失远比「部署中断」可接受，且用户可手动放置后重跑）。
+    """
+    rg = REPO_ROOT / "runtime" / "bin" / "rg"
+    if rg.is_file():
+        return rg
+    rg.parent.mkdir(parents=True, exist_ok=True)
+    member = f"ripgrep-{RG_VERSION}-x86_64-unknown-linux-musl/rg"
+    for url in RG_DOWNLOAD_URLS:
+        try:
+            log(f"[rg] 本机缺失 runtime/bin/rg，尝试下载 {RG_VERSION}（musl 静态）: {url}")
+            req = urllib.request.Request(url, headers={"User-Agent": "everyagent-deploy"})
+            with urllib.request.urlopen(req, timeout=120) as resp, tempfile.TemporaryFile() as tmp:
+                shutil.copyfileobj(resp, tmp)
+                tmp.seek(0)
+                # 只取成员字节流，不经 extract 落盘（不信任下载内容里的任意路径）
+                with tarfile.open(fileobj=tmp, mode="r:gz") as tar:
+                    f = tar.extractfile(member)
+                    if f is None:
+                        raise RuntimeError(f"tar 内未找到 {member}")
+                    data = f.read()
+            if not data.startswith(b"\x7fELF"):
+                raise RuntimeError("下载内容不是 ELF 二进制")
+            tmp_target = rg.with_suffix(".part")
+            tmp_target.write_bytes(data)
+            os.chmod(tmp_target, 0o755)
+            tmp_target.replace(rg)
+            log(f"[rg] 已就位 {rg}（{len(data) // 1024} KB，{RG_VERSION} musl 静态）")
+            return rg
+        except Exception as e:  # noqa: BLE001 —— 逐源尝试，最后统一降级
+            log(f"[rg] 下载失败（{url}）: {e}")
+    return None
+
+
+def stage_runtime(worker_dir: Path) -> None:
+    """把仓库根 runtime/（程序附属文件唯一真源，架构 §5.9）整体搬到 release 的 worker/ 下。
+
+    与 desktop 打包（electron-builder extraResources from: ../runtime）同一份源、同一布局：
+    服务端 worker 的 JVM 工作目录即 worker/（systemd WorkingDirectory / compose working_dir），
+    <cwd>/runtime/bin/rg 命中。缺 rg 时先 ensure_runtime_rg() 自动补齐再搬。
+    """
+    rg = ensure_runtime_rg()
+    if rg is None:
+        log("[警告] runtime/bin/rg 不可得（本机缺失且下载失败）：服务端 worker 搜索引擎与 "
+            "shell 的 rg PATH 注入将降级（启动日志会告警）。修复：手动放置 musl 静态 rg 到 "
+            "runtime/bin/rg（https://github.com/BurntSushi/ripgrep/releases，x86_64-unknown-linux-musl）后重部署。")
+        return
+    src = REPO_ROOT / "runtime"
+    dst = worker_dir / "runtime"
+    if dst.exists():
+        shutil.rmtree(dst)
+    shutil.copytree(src, dst)
+    os.chmod(dst / "bin" / "rg", 0o755)  # copytree 保留源权限；显式钉一次防 Windows 源丢执行位
+    log(f"已暂存 runtime/ 附属文件（rg {RG_VERSION} 等） -> worker/runtime/")
+
+
 def build_artifacts(cfg, services) -> Path:
     staging = Path(tempfile.mkdtemp(prefix="eadeploy-"))
     log(f"本地构建产物到临时目录: {staging}")
@@ -550,6 +717,9 @@ def build_artifacts(cfg, services) -> Path:
             build_builtin_plugins(cfg)
             count = stage_builtin_plugins(cfg, d / "every-agent-plugins")
             log(f"已暂存 {count} 个内置插件 -> worker/every-agent-plugins/")
+        # runtime/ 附属文件（rg 等）：搜索引擎与 shell PATH 注入都按 <cwd>/runtime/bin 解析，
+        # 只发 jar 的话服务端启动即告警 rg 缺失、搜索降级（docker 模式 compose 已挂 /app/runtime）。
+        stage_runtime(d)
     if "webapp" in services:
         src = REPO_ROOT / "every-agent-web" / "dist"
         if not src.is_dir():
@@ -805,6 +975,9 @@ def extract_command(cfg, services, ts: str) -> str:
     lines.append(f"rm -rf {cur}; ln -sfn {rel} {cur}")
     # .env 内含 hub/worker 密钥原文：解包后立即收紧为 600，避免同机其它用户读取
     lines.append(f"[ -f {rel}/.env ] && chmod 600 {rel}/.env || true")
+    # runtime/bin/rg 的执行位：打包机多为 Windows（NTFS 无 POSIX 执行位，tar 保留不了 755），
+    # 服务端统一钉回；worker 的 RipgrepBinary 按 isExecutable 判定，缺执行位等同 rg 缺失。
+    lines.append(f'[ -f {rel}/worker/runtime/bin/rg ] && chmod 755 {rel}/worker/runtime/bin/rg || true')
     if "webapp" in services:
         # nginx 以 www-data 运行，站点根在用户 home 下时需保证其对整条路径
         # 有遍历(x)权限、对 dist 静态文件有读(r)权限，否则 stat 报 13: Permission denied。
@@ -869,11 +1042,18 @@ def deploy(cfg, services) -> None:
                 "worker 将使用容器内默认工作区，且无法访问宿主目录（除非改用同路径 bind mount）。")
         else:
             log("[警告] 未设置 WORKSPACE_ROOT（--workspace-root / DEPLOY_WORKSPACE_ROOT），"
-                "worker 将使用 EVERYAGENT_HOME 默认工作区（/var/lib/everyagent），无法访问你指定的宿主目录。")
+                "worker 默认工作区将落在运行用户家目录 ~/.everyagent 下（/home/<登录用户>/.everyagent）。")
     if "worker" in services and mode == "docker" and not (getattr(cfg, "worker_api_key", "") or "").strip():
         log("[警告] docker 模式未提供 WORKER_API_KEY（--worker-api-key / DEPLOY_WORKER_API_KEY / 配置文件 WORKER_API_KEY=）："
             "worker 凭据 fail-closed,容器将因缺 api-key 拒绝启动——"
             "除非 EVERYAGENT_HOME 卷内已有提供凭据的 application-worker.yaml。")
+    if "worker" in services and mode == "host" and not (getattr(cfg, "worker_hub_url", "") or "").strip():
+        log("[提示] 未设置 --worker-hub-url：worker 将连接打包默认 ws://localhost:6101/ws（同机 hub）。"
+            "hub 与 worker 不同机时请传 --worker-hub-url ws://<hub地址>:6101/ws，否则会无限重连本机。")
+    if "worker" in services and mode == "host" and not (getattr(cfg, "worker_api_key", "") or "").strip():
+        log("[提示] host 模式未提供 WORKER_API_KEY：worker 凭据可改由登录用户 ~/.everyagent/application-worker.yaml "
+            "的 worker.hubs 列表提供（服务以登录用户运行，其家目录即 worker home；该文件不在 release 内，重部署不丢）。"
+            "两处都未提供时 worker 将因缺 api-key/hub-key 拒绝启动（fail-closed）。")
     if cfg.dry_run:
         log("== DRY RUN: 仅本地预览, 不执行本地构建、不连接服务器 ==")
         print("\n---- 本地将执行的构建命令 ----")
@@ -906,6 +1086,10 @@ def deploy(cfg, services) -> None:
             print("  systemd/everyagent-worker.service")
             print("  nginx/everyagent.conf")
             print("  .env  (HUB_KEY 原文,hub/worker 启动自算 sha256;解包后 chmod 600)")
+            print(f"  worker 启动命令: {cfg.java_bin} {cfg.worker_java_opts or '(无JVM参数)'} -jar <current>/worker/app.jar")
+            print(f"  hub   启动命令: {cfg.java_bin} {cfg.hub_java_opts or '(无JVM参数)'} -jar <current>/hub/app.jar")
+            print(f"  systemd 运行用户: {cfg.user or 'root'}（worker/hub home = 其家目录 ~/.everyagent，"
+                  "application-worker.yaml 等用户配置从那里读）")
         # 预览统一打码(前4...后4)，密钥原文不落终端/CI 日志；
         # 实际上传到服务器的 .env / docker-compose.yml 仍写原文(服务端运行需要)。
         print("\n---- 运行期配置预览(敏感值已打码) ----")
@@ -997,10 +1181,21 @@ def parse_args(argv):
                                         "默认 DEPLOY_JAVA_HOME / 配置文件 DEPLOY_JAVA_HOME / 环境变量 JAVA_HOME）")
     p.add_argument("--java-bin", help="host 模式下远端运行的 java 可执行文件（默认 /usr/bin/java，即脚本首次部署时"
                                         "apt 安装的 openjdk-25-jre-headless；docker 模式忽略 / DEPLOY_JAVA_BIN）")
+    p.add_argument("--worker-java-opts", default=None,
+                   help="worker 的 JVM 启动参数（host 模式注入 systemd ExecStart，docker 模式注入 compose command；"
+                        "默认 '-Xmx512m -XX:MaxMetaspaceSize=192m'，按 2c2G 小服务器收敛；"
+                        "可用 DEPLOY_WORKER_JAVA_OPTS / 配置文件 WORKER_JAVA_OPTS= 覆盖，显式传空字符串清除）")
+    p.add_argument("--hub-java-opts", default=None,
+                   help="hub 的 JVM 启动参数（注入位置同上；默认 '-Xmx256m -XX:MaxMetaspaceSize=128m'；"
+                        "可用 DEPLOY_HUB_JAVA_OPTS / 配置文件 HUB_JAVA_OPTS= 覆盖，显式传空字符串清除）")
     p.add_argument("--npm", help="本地 npm 可执行文件（默认 npm / DEPLOY_NPM）")
     p.add_argument("--workspace-root", help="宿主工作区根(绝对路径)；bind mount 进 worker 使工作区落在宿主真实目录。不填则 worker 用容器内默认目录（DEPLOY_WORKSPACE_ROOT）")
     p.add_argument("--hub-key", help="原始 hub key(必填,hub/worker 启动自算 sha256)；前端设置页与 worker hubs[].hub-key 填同一密钥。也可写在 --config 文件的 HUB_KEY= 一行。")
     p.add_argument("--worker-api-key", help="worker 数据归属密钥(前端连接该 worker 时填同值)；docker 模式必填(worker 凭据 fail-closed,空则容器拒绝启动)，host 模式可留空(由服务器上 application-worker.yaml 提供凭据)。也可写在 --config 文件的 WORKER_API_KEY= 一行。")
+    p.add_argument("--worker-hub-url", default=None,
+                   help="worker 要连接的 hub 地址(如 ws://1.2.3.4:6101/ws)；host 模式写入 .env 的 WORKER_HUB_URL，"
+                        "docker 模式覆盖 compose 默认 ws://hub:6101/ws；不填 = 打包默认 ws://localhost:6101/ws(同机 hub)。"
+                        "也可用 DEPLOY_WORKER_HUB_URL / 配置文件 WORKER_HUB_URL= 提供")
     p.add_argument("--keep-releases", type=int, default=3, help="保留最近几个 release（默认 3）")
     p.add_argument("--no-deps", action="store_true", help="部署时不连带拉起所依赖的服务")
     p.add_argument("--pull", action="store_true", help="up 时强制拉取最新官方镜像")
@@ -1056,10 +1251,22 @@ def parse_args(argv):
     args.hub_key = args.hub_key or os.environ.get("DEPLOY_HUB_KEY") or local.get("HUB_KEY", "")
     args.worker_api_key = (args.worker_api_key or os.environ.get("DEPLOY_WORKER_API_KEY")
                            or local.get("WORKER_API_KEY", ""))
+    args.worker_hub_url = (args.worker_hub_url or os.environ.get("DEPLOY_WORKER_HUB_URL")
+                           or local.get("WORKER_HUB_URL", ""))
+    if args.worker_hub_url and not args.worker_hub_url.strip().lower().startswith(("ws://", "wss://")):
+        p.error("--worker-hub-url 必须以 ws:// 或 wss:// 开头（当前值不含合法 scheme）")
     args.web_port = args.web_port or int(os.environ.get("DEPLOY_WEB_PORT") or local.get("DEPLOY_WEB_PORT", "80"))
     args.compose = args.compose or os.environ.get("DEPLOY_COMPOSE") or local.get("DEPLOY_COMPOSE", "docker compose")
     args.mode = args.mode or os.environ.get("DEPLOY_MODE") or local.get("DEPLOY_MODE", "host")
     args.java_bin = args.java_bin or os.environ.get("DEPLOY_JAVA_BIN") or local.get("DEPLOY_JAVA_BIN", "/usr/bin/java")
+    # JVM 参数优先级：CLI > DEPLOY_*_JAVA_OPTS > --config 文件 *_JAVA_OPTS= > DEFAULT_*_JAVA_OPTS。
+    # CLI 用 is None 判断是否显式给出——显式传空字符串意为「清除全部 JVM 参数」，不能被 or 链吞掉。
+    if args.worker_java_opts is None:
+        args.worker_java_opts = (os.environ.get("DEPLOY_WORKER_JAVA_OPTS")
+                                 or local.get("WORKER_JAVA_OPTS", "") or DEFAULT_WORKER_JAVA_OPTS)
+    if args.hub_java_opts is None:
+        args.hub_java_opts = (os.environ.get("DEPLOY_HUB_JAVA_OPTS")
+                              or local.get("HUB_JAVA_OPTS", "") or DEFAULT_HUB_JAVA_OPTS)
 
     def _truthy(v):
         return v is not None and str(v).strip().lower() in ("1", "true", "yes", "y", "on")
@@ -1067,7 +1274,9 @@ def parse_args(argv):
 
     # 运行期变量来源（host 与 docker 共用）：--env-file > --config(deploy.env) > 硬默认。
     runtime = load_env_file(Path(args.env_file)) if args.env_file else {}
-    args.worker_id = runtime.get("WORKER_ID") or local.get("WORKER_ID", "company-pc")
+    # 不设硬默认 company-pc：未显式提供时 .env 不写 WORKER_ID 行——否则 env 会以更高优先级
+    # 压过登录用户 ~/.everyagent/application-worker.yaml 的 worker-id(用户在文件里改了也不生效)
+    args.worker_id = runtime.get("WORKER_ID") or local.get("WORKER_ID")
 
     if any(s in args.services for s in ("hub", "worker")) and not (args.hub_key or "").strip():
         p.error("部署 hub/worker 必须提供原始 hub key（--hub-key / DEPLOY_HUB_KEY / 配置文件 HUB_KEY=）；"

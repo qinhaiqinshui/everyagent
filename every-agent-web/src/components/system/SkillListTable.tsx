@@ -15,6 +15,13 @@
  *   注意:内置/插件包是物化产物,worker 重启/插件 activate 时按内容逐字节比对会**覆盖**掉人工
  *   修改(用户自制 skill 目录不受影响);表格的 name/描述列来自 `SkillCatalog` 首次扫描的内存
  *   快照,改 frontmatter 后要重启 worker 才会在表格/`/` 菜单上体现(正文改动立即生效,AI 按需读盘);
+ * - 导入/导出(每个 worker 分组头各一对,§5.5):「导出」→ **弹选择框勾选 skill 清单**(默认全不选,
+ *   附「全选/清空」快捷与已选计数)→ 确认后该 worker 的 `skill.export{skillIds:[...]}`(仅打包勾选
+ *   的 skill 目录,含 scripts/ 等附属文件;小包单帧内联、大包 rpc.data 分批,onData 增量拼装)→
+ *   `downloadBlob` 存为 `skills-<worker>.zip`;「导入」→ 文件选择器选 zip → 确认框(提示同名 skill
+ *   覆盖)→ 读字节 base64 单帧 `skill.import`(前端预检 16MB,与 worker 上限对齐)→ 成功后 toast
+ *   + 定向重载(worker 侧导入后失效 catalog 缓存重扫并广播 config.changed{keys:["skills"]},导入的
+ *   skill 无需重启 worker 即出现在本表格);
  * - 刷新:`config.changed{keys:["skills"]}` 广播定向刷新来源 worker(机制同 modelConfigs),
  *   worker 连接集合变化时全量重载;组件卸载时清理全部订阅。
  */
@@ -27,6 +34,58 @@ import { workspaceRegistry } from '@/hub/workspaceRegistry'
 import { useWorkspaceShell } from '@/components/app/WorkspaceShellContext'
 import { useAppUi } from '@/components/app/AppUiContext'
 import { onWorkerAliasesChanged, workerDisplayName } from '@/settings/workerAliases'
+import { machinePathToBusiness } from '@/platform/fs/pathUtils'
+import { downloadBlob } from '@/utils/downloadBlob'
+
+/** 导入 zip 的前端预检上限(与 worker 侧 skill.import 的 16MB 解码上限对齐)。 */
+const MAX_IMPORT_ZIP_BYTES = 16 * 1024 * 1024
+
+/** 导出/导入 RPC 超时(打包/解压大目录时的宽限,纯客户端语义)。 */
+const ZIP_RPC_TIMEOUT_MS = 300_000
+
+/** base64 → 字节(逐字符拷贝,UTF-8 安全)。 */
+function base64ToBytes(base64: string): Uint8Array {
+  const binary = atob(base64)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i)
+  }
+  return bytes
+}
+
+/** 字节 → base64(分块 btoa,避免大数组爆调用栈)。 */
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = ''
+  const CHUNK = 0x8000
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK))
+  }
+  return btoa(binary)
+}
+
+/** 视图 → 精确长度 ArrayBuffer(Blob 兼容;规避 lib 对 Uint8Array 泛型的推断差异)。 */
+function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
+}
+
+/** 单选 zip 文件(须在用户手势调用栈内触发);取消返回 null。 */
+function pickZipFile(): Promise<File | null> {
+  return new Promise((resolve) => {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.accept = '.zip,application/zip'
+    input.addEventListener('change', () => {
+      resolve(input.files && input.files.length > 0 ? input.files[0] : null)
+    })
+    input.click()
+  })
+}
+
+/** worker 显示名 → 合法下载文件名(剥非法字符)。 */
+function downloadFileName(workerId: string, displayName: string): string {
+  const raw = (displayName || workerId).replace(/[\\/:*?"<>|\s]+/g, '-').replace(/^-+|-+$/g, '')
+  return 'skills-' + (raw || workerId) + '.zip'
+}
 
 /** worker skill.list 应答单项(wire 形状)。 */
 interface SkillInfo {
@@ -83,6 +142,24 @@ function errorMessage(error: unknown): string {
   return typeof error === 'string' ? error : '未知错误'
 }
 
+/** skill.export 应答/分批项:小包单帧 ok 内联 base64,大包 rpc.data 分批({offset,size,base64})+ 末帧 ok 汇总。 */
+interface SkillExportPart {
+  offset?: number
+  size?: number
+  base64?: string
+}
+
+interface SkillExportResult extends SkillExportPart {
+  skillCount?: number
+  fileCount?: number
+}
+
+/** skill.import 应答:{fileCount(解压文件数), skillCount(重扫后的 skill 总数)}。 */
+interface SkillImportResult {
+  fileCount?: number
+  skillCount?: number
+}
+
 /** 行内标题展示名:name 为空回落 id。 */
 function skillLabel(skill: SkillInfo): string {
   return skill.name || skill.id
@@ -102,6 +179,19 @@ export default function SkillListTable() {
   /** 配置框白名单勾选态(已勾选的工作区根集合=仅暴露)。 */
   const [checkedWhitelist, setCheckedWhitelist] = React.useState<Set<string>>(new Set())
   const [savingExclusions, setSavingExclusions] = React.useState(false)
+
+  // ---- 导入/导出(§5.5 skill.export / skill.import,按 worker 定向) ----
+
+  /** workerId → 进行中的 zip 操作('export'=导出中 / 'import'=导入中);undefined=空闲。 */
+  const [zipBusy, setZipBusy] = React.useState<Record<string, 'export' | 'import' | undefined>>({})
+  /** 打开中的导出选择框(勾选 skill 清单后确认导出)。 */
+  const [exportDialog, setExportDialog] = React.useState<{ workerId: string } | null>(null)
+  /** 导出选择框勾选态(已勾选的 skill id 集合;默认全不选,须显式选择)。 */
+  const [checkedExport, setCheckedExport] = React.useState<Set<string>>(new Set())
+  const [exporting, setExporting] = React.useState(false)
+  /** 待确认的导入(workerId + 已选 zip 文件)。 */
+  const [importDialog, setImportDialog] = React.useState<{ workerId: string; file: File } | null>(null)
+  const [importing, setImporting] = React.useState(false)
 
   // 别名/注册表是组件外单例:订阅变化触发重渲染(组头显示名、配置框工作区列表)。
   const [, setAliasesVersion] = React.useState(0)
@@ -313,10 +403,168 @@ export default function SkillListTable() {
       return
     }
     // 以可编辑模式打开:详情页即编辑位(改正文/改 frontmatter 一处完成),不再要求先点标签页里的「编辑」。
+    // knowledgePath 是 worker 机器原始路径(Unix 绝路径 /home/... 单前导 /),必须走 machinePathToBusiness
+    // 转 `//` 业务外部标记后再交给文件标签页——直接透传会被 resolveMachinePath 当工作区相对路径拼接
+    // 工作区根,worker 报 NOT_FOUND(Linux worker 必现;Windows 盘符路径恰命中 isAbsoluteBusinessPath
+    // 而侥幸可用,同口径见 FileToolEntry.handleOpenFile)。
     openGlobalFileTab(
-      { workspaceRoot: anchor.root, filePath: skill.knowledgePath },
+      { workspaceRoot: anchor.root, filePath: machinePathToBusiness(skill.knowledgePath) },
       { mode: 'readwrite' },
     )
+  }
+
+  // ---- 导入/导出 ----
+
+  /** 打开导出选择框(勾选态清零,默认全不选——须显式选择要导出的 skill)。 */
+  const handleExportClick = (workerId: string) => {
+    if (zipBusy[workerId]) return
+    setCheckedExport(new Set())
+    setExportDialog({ workerId })
+  }
+
+  const toggleExportSkill = (id: string, checked: boolean) => {
+    setCheckedExport((prev) => {
+      const next = new Set(prev)
+      if (checked) next.add(id)
+      else next.delete(id)
+      return next
+    })
+  }
+
+  /** 确认导出:skill.export{skillIds} → 拼装分批 → 浏览器下载 skills-<worker>.zip。 */
+  const handleExportConfirm = async () => {
+    if (!exportDialog || exporting || checkedExport.size === 0) return
+    const workerId = exportDialog.workerId
+    setExporting(true)
+    setZipBusy((prev) => ({ ...prev, [workerId]: 'export' }))
+    try {
+      const parts: { offset: number; data: Uint8Array }[] = []
+      const result = await hubSession.rpcTo(workerId, 'skill.export', {
+        skillIds: [...checkedExport],
+      }, {
+        timeoutMs: ZIP_RPC_TIMEOUT_MS,
+        onData: (batch) => {
+          for (const item of batch as SkillExportPart[]) {
+            if (item && typeof item.base64 === 'string' && item.base64) {
+              parts.push({ offset: item.offset ?? 0, data: base64ToBytes(item.base64) })
+            }
+          }
+        },
+      }) as SkillExportResult
+      let bytes: Uint8Array
+      if (result && typeof result.base64 === 'string' && result.base64) {
+        bytes = base64ToBytes(result.base64) // 小包:单帧内联
+      } else {
+        if (parts.length === 0) throw new Error('导出内容为空')
+        parts.sort((a, b) => a.offset - b.offset)
+        const total = parts.reduce((sum, part) => sum + part.data.length, 0)
+        const merged = new Uint8Array(total)
+        let cursor = 0
+        for (const part of parts) {
+          merged.set(part.data, cursor)
+          cursor += part.data.length
+        }
+        bytes = merged
+      }
+      const displayName = workerNameOf(workerId)
+      downloadBlob(
+        new Blob([toArrayBuffer(bytes)], { type: 'application/zip' }),
+        downloadFileName(workerId, displayName),
+      )
+      const count = typeof result?.skillCount === 'number' ? result.skillCount : checkedExport.size
+      showToast('已导出 ' + displayName + ' 的 ' + count + ' 个 skill', 'success')
+      setExportDialog(null)
+    } catch (error) {
+      showToast('导出失败:' + errorMessage(error), 'error')
+    } finally {
+      setExporting(false)
+      setZipBusy((prev) => ({ ...prev, [workerId]: undefined }))
+    }
+  }
+
+  /** 导出选择框主体:该 worker 的 skill 勾选清单(全选/清空快捷 + 已选计数)。 */
+  const renderExportDialogBody = (): React.ReactNode => {
+    if (!exportDialog) return null
+    const skills = groups[exportDialog.workerId]?.skills ?? []
+    return (
+      <div style={dialogBodyStyle}>
+        <div style={exportToolbarStyle}>
+          <Button
+            type="button"
+            variant="text"
+            size="sm"
+            disabled={exporting || skills.length === 0}
+            onClick={() => setCheckedExport(new Set(skills.map((s) => s.id)))}
+          >
+            全选
+          </Button>
+          <Button
+            type="button"
+            variant="text"
+            size="sm"
+            disabled={exporting || checkedExport.size === 0}
+            onClick={() => setCheckedExport(new Set())}
+          >
+            清空
+          </Button>
+          <span style={sectionHintStyle}>已选 {checkedExport.size} / {skills.length}</span>
+        </div>
+        <div style={wsListStyle}>
+          {skills.map((skill) => (
+            <label key={skill.id} style={wsRowStyle(false)} title={skill.knowledgePath}>
+              <Checkbox
+                checked={checkedExport.has(skill.id)}
+                disabled={exporting}
+                onChange={(event) => toggleExportSkill(skill.id, event.target.checked)}
+              />
+              <span style={exportIdStyle}>{skill.id}</span>
+              <span style={exportNameStyle}>{skillLabel(skill)}</span>
+            </label>
+          ))}
+        </div>
+      </div>
+    )
+  }
+
+  /** 选 zip → 确认框(覆盖提示)→ 确认后才发 RPC。 */
+  const handleImportPick = async (workerId: string) => {
+    if (zipBusy[workerId]) return
+    const file = await pickZipFile()
+    if (!file) return
+    if (file.size > MAX_IMPORT_ZIP_BYTES) {
+      showToast(
+        'zip 超过 ' + Math.floor(MAX_IMPORT_ZIP_BYTES / 1024 / 1024) + 'MB 上限(当前 '
+        + Math.ceil(file.size / 1024 / 1024) + 'MB)',
+        'error',
+      )
+      return
+    }
+    setImportDialog({ workerId, file })
+  }
+
+  const handleImportConfirm = async () => {
+    if (!importDialog || importing) return
+    const { workerId, file } = importDialog
+    setImporting(true)
+    setZipBusy((prev) => ({ ...prev, [workerId]: 'import' }))
+    try {
+      const content = new Uint8Array(await file.arrayBuffer())
+      const result = await hubSession.rpcTo(workerId, 'skill.import', {
+        contentBase64: bytesToBase64(content),
+      }, { timeoutMs: ZIP_RPC_TIMEOUT_MS }) as SkillImportResult | null
+      setImportDialog(null)
+      const summary = result && typeof result.skillCount === 'number'
+        ? ',目录现有 ' + result.skillCount + ' 个 skill'
+        : ''
+      showToast('已导入「' + file.name + '」' + summary, 'success')
+      // worker 侧导入后广播 config.changed{keys:["skills"]} 会触发刷新;此处再定向拉一次兜底(幂等)。
+      void loadWorkerSkills(workerId)
+    } catch (error) {
+      showToast('导入失败:' + errorMessage(error), 'error')
+    } finally {
+      setImporting(false)
+      setZipBusy((prev) => ({ ...prev, [workerId]: undefined }))
+    }
   }
 
   // ---- 渲染 ----
@@ -424,6 +672,8 @@ export default function SkillListTable() {
     <div style={wrapStyle}>
       {connectedWorkerIds.map((workerId) => {
         const group = groups[workerId] ?? emptyGroup('loading')
+        const busy = zipBusy[workerId]
+        const exportable = group.status === 'loaded' && group.skills.length > 0
         return (
           <div key={workerId} style={groupStyle}>
             <div style={groupHeaderStyle}>
@@ -436,11 +686,47 @@ export default function SkillListTable() {
                     ? '读取失败'
                     : group.skills.length + ' 项'}
               </span>
+              <span style={groupActionsStyle}>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  loading={busy === 'export'}
+                  disabled={!exportable || (Boolean(busy) && busy !== 'export')}
+                  title={'选择要导出的 skill,仅勾选目录打包为 zip 下载(不含按工作区的暴露配置)'}
+                  onClick={() => handleExportClick(workerId)}
+                >
+                  导出
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  loading={busy === 'import'}
+                  disabled={Boolean(busy) && busy !== 'import'}
+                  title={'选择 zip 解压导入该 worker 的 skill 目录(同名 skill 会被覆盖,导入后立即生效)'}
+                  onClick={() => void handleImportPick(workerId)}
+                >
+                  导入
+                </Button>
+              </span>
             </div>
             {renderGroup(workerId)}
           </div>
         )
       })}
+      <ConfirmDialog
+        open={Boolean(exportDialog)}
+        title={'导出 skill:' + (exportDialog ? workerNameOf(exportDialog.workerId) : '')}
+        subtitle="勾选要导出的 skill(仅勾选的目录打包为 zip,含 scripts/ 等附属文件;同名 skill 在导入时会被覆盖)。不含按工作区的暴露配置。"
+        confirmLabel={exporting ? '导出中…' : checkedExport.size > 0 ? '导出(' + checkedExport.size + ')' : '导出'}
+        hideDefaultMessageBlock
+        body={renderExportDialogBody()}
+        onConfirm={() => void handleExportConfirm()}
+        onCancel={() => {
+          if (!exporting) setExportDialog(null)
+        }}
+      />
       <ConfirmDialog
         open={Boolean(dialog)}
         title={'配置自动暴露:' + (dialog ? skillLabel(dialog.skill) : '')}
@@ -451,6 +737,22 @@ export default function SkillListTable() {
         onConfirm={() => void handleSaveExclusions()}
         onCancel={() => {
           if (!savingExclusions) setDialog(null)
+        }}
+      />
+      <ConfirmDialog
+        open={Boolean(importDialog)}
+        title={'导入 skill zip:' + (importDialog ? workerNameOf(importDialog.workerId) : '')}
+        subtitle="zip 将解压进该 worker 的 skill 目录:同名 skill 目录会被覆盖(其余不受影响),导入的 skill 立即生效、无需重启 worker。注意同 id 的内置/插件包 skill 重启 worker 后会被源内容重新物化。"
+        confirmLabel={importing ? '导入中…' : '导入'}
+        hideDefaultMessageBlock
+        body={importDialog ? (
+          <p style={hintStyle}>
+            文件:{importDialog.file.name}({Math.ceil(importDialog.file.size / 1024)} KB)
+          </p>
+        ) : null}
+        onConfirm={() => void handleImportConfirm()}
+        onCancel={() => {
+          if (!importing) setImportDialog(null)
         }}
       />
     </div>
@@ -502,6 +804,37 @@ const groupMetaStyle: React.CSSProperties = {
   color: 'var(--text-muted)',
   whiteSpace: 'nowrap',
   flexShrink: 0,
+}
+
+const groupActionsStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 6,
+  flexShrink: 0,
+}
+
+const exportToolbarStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 4,
+}
+
+const exportIdStyle: React.CSSProperties = {
+  fontFamily: 'var(--font-mono, monospace)',
+  fontSize: 'var(--text-xs)',
+  color: 'var(--text-primary)',
+  whiteSpace: 'nowrap',
+  minWidth: 0,
+}
+
+const exportNameStyle: React.CSSProperties = {
+  fontSize: 'var(--text-xs)',
+  color: 'var(--text-muted)',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+  minWidth: 0,
+  marginLeft: 'auto',
 }
 
 const groupErrorStyle: React.CSSProperties = {

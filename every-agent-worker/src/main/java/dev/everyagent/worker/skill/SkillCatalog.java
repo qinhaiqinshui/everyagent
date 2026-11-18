@@ -65,6 +65,23 @@ public class SkillCatalog {
         this.skillsDir = props.resolveSkillsDir();
     }
 
+    /** 系统技能目录(唯一真相源路径,§7.17;skill.export / skill.import 的打包/解压根)。 */
+    public Path skillsDir() {
+        return skillsDir;
+    }
+
+    /**
+     * 失效扫描缓存,下次 {@link #scan()} 重扫目录。
+     * 仅供 {@code skill.import} 导入成功后调用(§5.5/§7.17):导入的 skill 无需重启
+     * worker 即进入 skill.list / {@code /} 菜单 / prompt 注入集合;其余目录变更
+     * (手工增删 skill 目录)仍遵循「重启生效」的懒加载取舍。
+     */
+    public void invalidate() {
+        synchronized (this) {
+            cached = null;
+        }
+    }
+
     /**
      * 返回 skill 列表。首次调用时实扫目录并缓存,此后只读快照。
      *

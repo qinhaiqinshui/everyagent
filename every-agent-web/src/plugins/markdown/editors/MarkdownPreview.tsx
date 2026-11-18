@@ -3,14 +3,12 @@ import Markdown from "react-markdown"
 import remarkGfm from 'remark-gfm'
 import { buildMarkdownComponents } from '@/components/shared/markdown/sharedMarkdownRenderer'
 import { remarkFourTildeStrikethrough } from '@/components/shared/markdown/remarkFourTildeStrikethrough'
-import { useWorkspaceShell } from '@/components/app/WorkspaceShellContext'
+import { useMarkdownLinkNav } from '@/components/shared/markdown/useMarkdownLinkNav'
 import { useAppUi } from '@/components/app/AppUiContext'
-import { resolveWorkspaceRelativePath, toBusinessAbsolutePath, decodeMarkdownUri } from '@/platform/fs/pathUtils'
-import { workspaceGateway } from '@/platform/fs/workspaceGateway'
-import { isExternalLinkUrl, openExternalLink } from '@/platform/externalLink'
 import { parseMarkdownHeadings, resolveMarkdownHeadingAnchor, type MarkdownHeading } from './markdownOutline'
 import MarkdownImage from './MarkdownImage'
 import { rawHtmlRehypePlugins } from './rawHtmlPipeline'
+import { replaceMarkdownRange, type MarkdownTableCellEditRequest } from '@/components/shared/markdown/markdownTableEdit'
 
 export type MarkdownPreviewHandle = {
   /** 大纲选中标题时调用；返回该 id 是否存在于当前文档（用于决定是否滚动）。不再有折叠展开逻辑。 */
@@ -19,6 +17,8 @@ export type MarkdownPreviewHandle = {
 
 type MarkdownPreviewProps = {
   content: string
+  /** 内容回写通道(表格单元格编辑等预览内编辑);缺省时预览完全只读。 */
+  onContentChange?: (next: string) => void
   wrapLines?: boolean
   /** 所属工作区根(用于解析内嵌相对路径图片/文件链接);缺省时内嵌图片仅外部 URL 可渲染。 */
   workspaceRoot?: string
@@ -33,17 +33,16 @@ type MarkdownPreviewProps = {
  * 大纲跳转通过 react-markdown 传入的 hast 节点 position 行号 → parseMarkdownHeadings 预计算的 id 映射，
  * 与 MarkdownOutlinePanel 列出的标题一一对应。
  *
- * 链接导航(onLinkClick，仅预览场景接管)：
+ * 链接导航(useMarkdownLinkNav，与聊天 MarkdownDisplay 共用)：
  * - `#锚点` → 本文件内滚动到对应标题(锚点 slug 与标题 slug 按同一规则匹配)；
  * - 相对路径(如 `../web/ui-extensions.md`) → 以 md 所在目录解析为工作区路径，
  *   存在性校验后经 openGlobalFileTab 打开文件标签页；
  * - 外部链接(http(s)/mailto/tel) → web 新开浏览器标签页，desktop 交系统默认浏览器。
  */
 const MarkdownPreview = React.forwardRef<MarkdownPreviewHandle, MarkdownPreviewProps>(function MarkdownPreview(
-  { content, wrapLines = true, workspaceRoot, baseDir },
+  { content, onContentChange, wrapLines = true, workspaceRoot, baseDir },
   ref,
 ) {
-  const { openGlobalFileTab } = useWorkspaceShell()
   const { showToast } = useAppUi()
   const rootRef = React.useRef<HTMLDivElement | null>(null)
 
@@ -79,56 +78,17 @@ const MarkdownPreview = React.forwardRef<MarkdownPreviewHandle, MarkdownPreviewP
     })
   }, [headings, showToast])
 
-  /** 工作区文件链接：剥离 #fragment、按 md 所在目录解析相对路径，存在性校验后开文件标签页。 */
-  const openWorkspaceFileLink = React.useCallback((rawHref: string) => {
-    // fragment(目标文件内锚点)本预览无法承载——文件标签页定位体系只到行号;这里只管打开文件。
-    // 目的地被 CommonMark URI 规范化过(中文 → %XX 编码),先解码再解析。
-    const pathPart = rawHref.split('#')[0] ?? ''
-    const target = decodeMarkdownUri(pathPart)
-    const rel = resolveWorkspaceRelativePath(baseDir ?? '', target)
-    if (!rel) return
-    const businessPath = toBusinessAbsolutePath(rel)
-    if (!workspaceRoot) {
-      showToast(`缺少工作区上下文，无法打开文件链接：${businessPath}`, 'error')
-      return
-    }
-    void workspaceGateway.statRaw(workspaceRoot, rel)
-      .then((stat) => {
-        if (stat.isDirectory) {
-          showToast(`链接指向的是目录而非文件：${businessPath}`, 'error')
-          return
-        }
-        openGlobalFileTab({ workspaceRoot, filePath: businessPath })
-      })
-      .catch(() => {
-        showToast(`链接指向的文件不存在：${businessPath}`, 'error')
-      })
-  }, [baseDir, openGlobalFileTab, showToast, workspaceRoot])
-
   /**
    * markdown 链接统一分发(全部接管，避免浏览器把工作区路径当 URL 新开标签页)：
-   * `#锚点` → 本文件跳转；外部链接 → 统一外链入口；其余按工作区文件链接处理。
+   * `#锚点` → 本文件跳转；外部链接 → 统一外链入口；其余按工作区文件链接处理(见 useMarkdownLinkNav)。
    */
-  const handleLinkClick = React.useCallback((href: string): boolean => {
-    const trimmed = href.trim()
-    if (!trimmed) return false
-    if (trimmed.startsWith('#')) {
-      const anchor = trimmed.slice(1)
-      if (anchor) revealAnchor(anchor)
-      return true
-    }
-    if (isExternalLinkUrl(trimmed)) {
-      openExternalLink(trimmed)
-      return true
-    }
-    // 带协议前缀但不在放行名单(如 ftp:)的链接:提示后忽略,不当作工作区文件路径解析。
-    if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed)) {
-      showToast(`暂不支持打开该协议的链接：${trimmed}`, 'error')
-      return true
-    }
-    openWorkspaceFileLink(trimmed)
-    return true
-  }, [openWorkspaceFileLink, revealAnchor, showToast])
+  const handleLinkClick = useMarkdownLinkNav({ workspaceRoot, baseDir, onAnchor: revealAnchor })
+
+  /** 表格单元格编辑提交:按 offset 区间替换源文本;源已被并发修改时放弃本次提交。 */
+  const handleTableCellEdit = React.useCallback((request: MarkdownTableCellEditRequest) => {
+    const next = replaceMarkdownRange(normalized, request)
+    if (next != null && next !== normalized) onContentChange?.(next)
+  }, [normalized, onContentChange])
 
   const components = React.useMemo(
     () => buildMarkdownComponents({
@@ -139,8 +99,10 @@ const MarkdownPreview = React.forwardRef<MarkdownPreviewHandle, MarkdownPreviewP
         ? (src, alt) => <MarkdownImage src={src} alt={alt} workspaceRoot={workspaceRoot} baseDir={baseDir} />
         : undefined,
       onLinkClick: handleLinkClick,
+      sourceText: onContentChange ? normalized : undefined,
+      onTableCellEdit: onContentChange ? handleTableCellEdit : undefined,
     }),
-    [wrapLines, headingIds, baseDir, workspaceRoot, handleLinkClick],
+    [wrapLines, headingIds, baseDir, workspaceRoot, handleLinkClick, onContentChange, handleTableCellEdit],
   )
 
   React.useImperativeHandle(ref, () => ({

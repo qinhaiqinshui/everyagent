@@ -246,6 +246,14 @@ public class TransientErrorRetryAdvisor implements CallAdvisor, StreamAdvisor {
      * 退避 + 倒计时:每秒一条瞬态 retry(不落盘),最后一秒结束后触发重试。
      * 中止(dispose)会取消 interval,不再触发重试(与 n 的中止感知 delayWithProgress 等效);
      * 实际等待 = 向上取整到秒,略大于 {@code delayMs},可接受。
+     *
+     * <p><b>终态闸门(2026-11 t_5v9a/sub_5v917)</b>:最后一 tick 的重订点检查 agent 终态——
+     * stop_agent/级联 stopAll 会同步 {@code claimTerminal(stopped)}(实体 status=stopped、
+     * finished=true);若 dispose 的 cancel 因链上任何一层的传播缺口未能取消 interval
+     * (读秒因此继续走完),此处闸门以 {@link AgentCancelledException} 终止旧流、不再重订——
+     * 「停止后旧流读秒到期复活、与重新派发的新运行并发跑」从数据面被根治。判定口径与
+     * WaitTaskAdvisor 的 exec.terminal() leak-guard 同思路,但作用于 agent 级终态
+     * (stop_agent 停子 agent 不收口主体,主体级 terminal 拦不到)。
      */
     private Flux<ChatClientResponse> backoffAndRetry(long delayMs, int attempt, String error,
             ChatClientRequest request, StreamAdvisorChain original,
@@ -266,6 +274,12 @@ public class TransientErrorRetryAdvisor implements CallAdvisor, StreamAdvisor {
                                     delayMs, elapsed, remaining, error),
                             EmitEvent.Mode.REPLACE));
                     if (i == ticks - 1) {
+                        if (a.finished() || "stopped".equals(a.status())) {
+                            log.info("任务 {} agent {} 已停止(stopped),放弃第 {} 次重订(终态闸门)",
+                                    a.execution().subjectId(), a.agentId(), attempt);
+                            return Flux.error(new AgentCancelledException(
+                                    "agent 已停止,重试读秒中止"));
+                        }
                         return attemptStream(request, original.copy(this), original,
                                 emittedSignal, retries, totalDelayMs, waveId);
                     }

@@ -1,6 +1,7 @@
 # Every Agent — 核心约束(每会话加载,保持精简)
 
 - 唯一架构事实源:[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。实现与文档冲突时,先改文档再改代码;§14 是红线清单。
+- **文档纪律**:ARCHITECTURE.md 只收录架构级内容(模块边界、wire 契约、持久化布局、不变式、红线、决策);实现细节——修复叙事与事故 ID、算法调参常数、文件/函数级清单、UI 展示细节、重构步骤史——一律不写入,落在代码注释、commit 信息、插件指南或设计文档;写入前先过 §14.10 收录判据(「换一种实现还成立吗?」)。
 - 三层解耦:hub / worker / client 只依赖 `every-agent-contract`,互相零依赖。
 - hub 零状态、零缓冲、零业务逻辑、零 ack;一切补齐走 worker 的本地事件日志 + `task.poll` 拉取。stream 频道订阅通知(subscriber.join/leave)是无状态 fire-and-forget msg,不存订阅簿。
 - worker:本地事件日志先行,发布/落盘永不阻塞任务线程;任务跑在虚拟线程(Java 25)。任务流混合模型:实时增量由 DataPusher 定向推送(stream 频道,ext.target=sessionId),历史/补齐走 `task.poll`(§7.13)。

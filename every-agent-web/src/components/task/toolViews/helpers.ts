@@ -54,12 +54,12 @@ function readToolResult(content: string | undefined): unknown {
 
 /**
  * 以 message 下发的 toolCall 为锚点聚合展示详情(ThreadItem 载荷 → 美化视图输入):
- * 参数来自下发 arguments JSON(解析失败/为空 → null),结果/状态/耗时来自按 callId
- * 配对到的 tool.result 载荷(未到 → null/undefined)。批壳调用行与孤儿兜底共用。
+ * 参数来自下发 arguments JSON(解析失败/为空 → null),结果/状态/耗时/开始时间点来自按
+ * callId 配对到的 tool.result 载荷(未到 → null/undefined)。批壳调用行与孤儿兜底共用。
  */
 export function buildDetailFromCall(
   call: { id: string; function: { name: string; arguments: string } },
-  result: { content?: string; status?: 'success' | 'error'; toolName?: string; durationMs?: number } | null,
+  result: { content?: string; status?: 'success' | 'error'; toolName?: string; durationMs?: number; startedAt?: number } | null,
 ): AggregatedToolDetail {
   const args = parseToolPayload(call.function.arguments)
   return {
@@ -70,6 +70,7 @@ export function buildDetailFromCall(
     arguments: Object.keys(args).length > 0 ? args : null,
     result: result ? readToolResult(result.content) : null,
     durationMs: result?.durationMs,
+    startedAt: result?.startedAt,
   }
 }
 
@@ -234,4 +235,31 @@ export function toolDurationTint(ms: number | undefined): number {
  */
 export function toolDurationTintStyle(detail: AggregatedToolDetail): CSSProperties {
   return { '--tool-dur-tint': `${toolDurationTint(detail.durationMs)}%` } as CSSProperties
+}
+
+/**
+ * 工具开始时间点 → 「时:分:秒」时钟文本(24 小时制,本地时区)。
+ * 用本地时区组件手动拼接,避免 toLocale* 的本地化差异(12 小时制 AM/PM 等),
+ * 与 TasksPanel.formatTaskTime 同口径;非法/缺失返回空串(视图据此不渲染时间点行)。
+ */
+export function formatToolStartTime(ms: number | undefined): string {
+  if (ms == null || !Number.isFinite(ms) || ms < 0) return ''
+  const date = new Date(ms)
+  if (Number.isNaN(date.getTime())) return ''
+  const pad = (num: number) => String(num).padStart(2, '0')
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+}
+
+/**
+ * 工具开始时间点 → 完整「年-月-日 时:分:秒」文本。
+ * 作时间点行的悬停提示(时钟文本省略日期,跨天任务由此补齐日期上下文);
+ * 非法/缺失返回空串。
+ */
+export function formatToolStartFullTime(ms: number | undefined): string {
+  if (ms == null || !Number.isFinite(ms) || ms < 0) return ''
+  const date = new Date(ms)
+  if (Number.isNaN(date.getTime())) return ''
+  const pad = (num: number) => String(num).padStart(2, '0')
+  const day = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+  return `${day} ${formatToolStartTime(ms)}`
 }

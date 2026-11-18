@@ -782,18 +782,51 @@
   background: color-mix(in srgb, var(--accent-blue) 20%, var(--accent-blue-dim));
 }
 
-/* 任务列表标题胶囊渲染:覆盖 user-replay 的 pre-wrap/word-break,
-   强制单行 + nowrap,配合父级 overflow:hidden + text-overflow:ellipsis
-   实现侧边栏宽度自适应截断(拉宽可见更多内容)。 */
+/* 任务列表标题胶囊渲染:单行展示(nowrap)、不换行、不省略截断——text-overflow
+   用 clip 而非 ellipsis,行内不出现「…」;行宽即侧边栏宽度,能显示多少就显示
+   多少,拖宽侧边栏即可看到更多,超出部分在行边界自然裁切。 */
 .nagent-task-title-replay {
   white-space: nowrap !important;
   word-break: normal !important;
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: clip;
 }
 
-/* TokenRichText 单行模式(任务列表标题/弹窗列表条目等窄条场景,组件 prop
-   singleLine 挂载):根块级容器 nowrap + ellipsis 自截断;单行约束逐层传导到
+/* 标题场景胶囊不封顶:去掉 300px 宽度上限,label 不内部省略,整行随侧边栏
+   宽度展示多少是多少(裁切统一归标题行边界)。pointer-events:none 维持原有
+   约束:点击语义归任务行打开。 */
+.nagent-task-title-replay .nagent-inline-chip--replay {
+  pointer-events: none;
+  max-width: none;
+}
+
+/* 嵌套小胶囊(胶囊 label 内再嵌胶囊)同样不封顶。 */
+.nagent-task-title-replay .nagent-inline-chip--nested {
+  max-width: none;
+}
+
+/* 后代逐层压回单行:标题不再走 TokenRichText 的 singleLine 模式(根上没有
+   --single-line class),而文本段(.nagent-msg__inline-text)与嵌套渲染容器
+   (.nagent-msg__content--user-replay,胶囊 label 内嵌小胶囊时的子根)都自带
+   显式 pre-wrap/word-break,显式声明优先于继承,必须在此逐层压回——否则标题
+   被文本段撑成多行。 */
+.nagent-task-title-replay .nagent-msg__inline-text,
+.nagent-task-title-replay .nagent-msg__content--user-replay {
+  white-space: nowrap;
+  word-break: normal;
+  overflow-wrap: normal;
+}
+
+/* 胶囊 label 同步单行 + clip(默认 ellipsis,超宽时会出「…」)。 */
+.nagent-task-title-replay .nagent-inline-chip__label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: clip;
+}
+
+/* TokenRichText 单行模式(弹窗列表条目等窄条场景,组件 prop
+   singleLine 挂载;任务列表标题不走本模式,由 nagent-task-title-replay
+   自定义「单行 + clip 无省略」展示):根块级容器 nowrap + ellipsis 自截断;单行约束逐层传导到
    后代——文本段(.nagent-msg__inline-text)与嵌套胶囊渲染容器
    (.nagent-msg__content--user-replay,胶囊 label 内嵌小胶囊时的子根)都自带
    显式 pre-wrap/word-break,显式声明优先于继承,必须用更高优先级选择器压回,
@@ -809,10 +842,6 @@
 .nagent-msg__content--single-line .nagent-msg__content--user-replay {
   white-space: nowrap;
   word-break: normal;
-}
-
-.nagent-task-title-replay .nagent-inline-chip--replay {
-  pointer-events: none;
 }
 
 /* 嵌套胶囊（胶囊 label 内再嵌胶囊，如「等待任务」胶囊内嵌目标任务标题的引用胶囊）：
@@ -1190,6 +1219,24 @@
      (trace 行展开详情同此口径),本块不再自带 margin——否则与壳的缩进叠加会
      把工具详情推到 42px。这里只承载工具详情自身的内容。 */
   margin: 0;
+}
+
+/* 展开态元信息行:工具开始执行时间点(「开始于 HH:mm:ss」,悬停提示完整年月日,
+   见 toolViews/ToolStartMeta)。老事件 startedAt 缺失时组件不渲染,不占位。
+   时间数字等宽 + tabular-nums,与摘要行耗时列同观感;文本 muted 不与参数/结果争视觉。 */
+.nagent-tool__meta {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  margin-bottom: var(--space-1, 4px);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+.nagent-tool__meta-time {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
 }
 
 /* 合并块内：每个调用 / 结果作为子项 */

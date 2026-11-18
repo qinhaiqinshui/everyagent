@@ -40,6 +40,32 @@ class ToolContextImplCommandGateTest {
         assertDoesNotThrow(() -> ctx(gate).commandGate().authorize("dir"));
     }
 
+    /**
+     * 回归(2026-11 修复):ToolContextImpl 必须把 ExecContext 的会话档案口/压缩种子口
+     * 委托给 exec——此前漏委托(接口 default 恒 null),插件经 createTools 拿到的 ctx
+     * 读档案恒空:subagent 轮内续跑回退低保真内存会话、跨轮续跑静默退化为同 id
+     * 全新会话(2026-12 档案重建在产线从未生效的根因)。
+     */
+    @Test
+    void forwardsConversationArchiveAndCompressionSeedSlots() {
+        ExecContext exec = mock(ExecContext.class);
+        dev.everyagent.plugin.api.agent.ConversationArchive archive =
+                id -> java.util.List.of();
+        dev.everyagent.plugin.api.agent.CompressionSeed seed =
+                new dev.everyagent.plugin.api.agent.CompressionSeed(100, 90, "m");
+        org.mockito.Mockito.when(exec.conversationArchive()).thenReturn(archive);
+        org.mockito.Mockito.when(exec.compressionSeed("a")).thenReturn(seed);
+        ModelConfig snap = new ModelConfig("c", "openai-compat", "http://x", "m", null);
+        org.mockito.Mockito.when(exec.snapshot()).thenReturn(snap);
+
+        ToolContextImpl c = new ToolContextImpl(exec, "main-agent", null,
+                mock(PermissionGate.class), mock(WorkspaceManager.class), null, null);
+        org.junit.jupiter.api.Assertions.assertSame(archive, c.conversationArchive(),
+                "conversationArchive 必须委托 exec(漏委托即 null→subagent 续跑读档恒空)");
+        org.junit.jupiter.api.Assertions.assertSame(seed, c.compressionSeed("a"),
+                "compressionSeed 必须委托 exec(同批补齐的 default 槽位)");
+    }
+
     @Test
     void propagatesDenialWithMessage() throws Exception {
         PermissionGate gate = mock(PermissionGate.class);

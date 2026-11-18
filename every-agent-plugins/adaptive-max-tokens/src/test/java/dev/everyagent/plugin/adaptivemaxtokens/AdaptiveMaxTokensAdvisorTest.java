@@ -55,7 +55,7 @@ class AdaptiveMaxTokensAdvisorTest {
                 .concatWith(Flux.error(new RuntimeException("Guard: length exhausted"))));
         sources.add(Flux.<ChatClientResponse>just(normalChunk("OK")).concatWith(Flux.empty()));
 
-        CountingChain chain = new CountingChain(sources);
+        OneShotChain chain = new OneShotChain(sources);
         AdaptiveMaxTokensAdvisor advisor = advisor(1000, 10000, 2, 2);
 
         StepVerifier.create(advisor.adviseStream(request(1000), chain))
@@ -75,7 +75,7 @@ class AdaptiveMaxTokensAdvisorTest {
         sources.add(Flux.<ChatClientResponse>just(lengthChunk()));
         sources.add(Flux.<ChatClientResponse>just(normalChunk("OK")).concatWith(Flux.empty()));
 
-        CountingChain chain = new CountingChain(sources);
+        OneShotChain chain = new OneShotChain(sources);
         AdaptiveMaxTokensAdvisor advisor = advisor(1000, 10000, 2, 2);
 
         StepVerifier.create(advisor.adviseStream(request(1000), chain))
@@ -92,7 +92,7 @@ class AdaptiveMaxTokensAdvisorTest {
         sources.add(Flux.<ChatClientResponse>just(lengthChunk()));
         sources.add(Flux.<ChatClientResponse>just(normalChunk("OK")).concatWith(Flux.empty()));
 
-        CountingChain chain = new CountingChain(sources);
+        OneShotChain chain = new OneShotChain(sources);
         AdaptiveMaxTokensAdvisor advisor = advisor(1000, 10000, 2, 2);
 
         StepVerifier.create(advisor.adviseStream(request(1000), chain))
@@ -116,7 +116,7 @@ class AdaptiveMaxTokensAdvisorTest {
         sources.add(Flux.<ChatClientResponse>just(lengthChunk()));
         sources.add(Flux.<ChatClientResponse>just(normalChunk("OK")).concatWith(Flux.empty()));
 
-        CountingChain chain = new CountingChain(sources);
+        OneShotChain chain = new OneShotChain(sources);
         AdaptiveMaxTokensAdvisor advisor = advisor(1000, 100000, 2.0, 2);
 
         StepVerifier.create(advisor.adviseStream(request(1000), chain))
@@ -140,7 +140,7 @@ class AdaptiveMaxTokensAdvisorTest {
         sources.add(Flux.<ChatClientResponse>just(lengthChunk()).concatWith(Flux.error(new RuntimeException("length2"))));
         sources.add(Flux.<ChatClientResponse>just(lengthChunk()).concatWith(Flux.error(new RuntimeException("length3"))));
 
-        CountingChain chain = new CountingChain(sources);
+        OneShotChain chain = new OneShotChain(sources);
         AdaptiveMaxTokensAdvisor advisor = advisor(1000, 2000, 2.0, 2);
 
         StepVerifier.create(advisor.adviseStream(request(1000), chain))
@@ -158,7 +158,7 @@ class AdaptiveMaxTokensAdvisorTest {
         sources.add(Flux.error(new Fake400Exception(400, "max_tokens too large")));
         sources.add(Flux.<ChatClientResponse>just(normalChunk("OK")).concatWith(Flux.empty()));
 
-        CountingChain chain = new CountingChain(sources);
+        OneShotChain chain = new OneShotChain(sources);
         AdaptiveMaxTokensAdvisor advisor = advisor(1000, 100000, 2.0, 2);
 
         StepVerifier.create(advisor.adviseStream(request(1000), chain))
@@ -194,7 +194,7 @@ class AdaptiveMaxTokensAdvisorTest {
         sources.add(Flux.<ChatClientResponse>just(lengthChunk()).concatWith(Flux.error(new RuntimeException("length4"))));
         sources.add(Flux.<ChatClientResponse>just(normalChunk("OK")).concatWith(Flux.empty()));
 
-        CountingChain chain = new CountingChain(sources);
+        OneShotChain chain = new OneShotChain(sources);
         AdaptiveMaxTokensAdvisor advisor = advisor(1000, 100000, 2.0, 5, 0.5, 3);
 
         StepVerifier.create(advisor.adviseStream(request(1000), chain))
@@ -216,7 +216,7 @@ class AdaptiveMaxTokensAdvisorTest {
         List<Flux<ChatClientResponse>> sources = new ArrayList<>();
         sources.add(Flux.<ChatClientResponse>just(normalChunk("OK")).concatWith(Flux.empty()));
 
-        CountingChain chain = new CountingChain(sources);
+        OneShotChain chain = new OneShotChain(sources);
         AdaptiveMaxTokensAdvisor advisor = advisor(1000, 10000, 2, 2);
 
         OpenAiChatOptions noMaxTokens = OpenAiChatOptions.builder().build();
@@ -233,7 +233,7 @@ class AdaptiveMaxTokensAdvisorTest {
         // 即使有 length 帧,disabled 时也应直通(不吞帧、不升级)。
         sources.add(Flux.<ChatClientResponse>just(lengthChunk()).concatWith(Flux.empty()));
 
-        CountingChain chain = new CountingChain(sources);
+        OneShotChain chain = new OneShotChain(sources);
         AdaptiveMaxTokensAdvisor advisor = advisorDisabled(1000, 10000, 2, 2);
 
         StepVerifier.create(advisor.adviseStream(request(1000), chain))
@@ -250,7 +250,7 @@ class AdaptiveMaxTokensAdvisorTest {
         List<Flux<ChatClientResponse>> sources = new ArrayList<>();
         sources.add(Flux.error(original));
 
-        CountingChain chain = new CountingChain(sources);
+        OneShotChain chain = new OneShotChain(sources);
         AdaptiveMaxTokensAdvisor advisor = advisor(1000, 10000, 2, 2);
 
         StepVerifier.create(advisor.adviseStream(request(1000), chain))
@@ -258,23 +258,84 @@ class AdaptiveMaxTokensAdvisorTest {
                 .verify();
     }
 
+    // ---- 场景 11: 升级重试必须走 fresh copy(一次性链语义回归,2026-11 生产 bug) ----
+
+    /**
+     * 回归:生产 DefaultAroundAdvisorChain 一次性消费,升级重试若复用已消费的 chain,
+     * 第一次 finish_reason=length 触发的重订即抛
+     * {@code IllegalStateException: No StreamAdvisors available to execute}
+     * (Linux 生产日志实锤:子 agent 100% 异常死亡)。重订必须经 original.copy(this)。
+     * 旧桩 copy 返回 this 且可无限 nextStream,掩盖了该 bug——本用例的一次性桩链下,
+     * 旧实现必炸、新实现正常完成。
+     */
+    @Test
+    void upgradeRetryMustResubscribeViaFreshChainCopy() {
+        List<Flux<ChatClientResponse>> sources = new ArrayList<>();
+        sources.add(Flux.<ChatClientResponse>just(lengthChunk())
+                .concatWith(Flux.error(new RuntimeException("length1"))));
+        sources.add(Flux.<ChatClientResponse>just(normalChunk("OK")).concatWith(Flux.empty()));
+
+        OneShotChain chain = new OneShotChain(sources);
+        AdaptiveMaxTokensAdvisor advisor = advisor(1000, 10000, 2, 2);
+
+        StepVerifier.create(advisor.adviseStream(request(1000), chain))
+                .expectNextMatches(r -> "OK".equals(r.chatResponse().getResult().getOutput().getText()))
+                .verifyComplete();
+    }
+
+    /** 回归(400 回退路径):回退重订同样必须走 fresh copy,复用已消费链同样必炸。 */
+    @Test
+    void rollbackRetryMustResubscribeViaFreshChainCopy() {
+        List<Flux<ChatClientResponse>> sources = new ArrayList<>();
+        sources.add(Flux.<ChatClientResponse>just(lengthChunk())
+                .concatWith(Flux.error(new RuntimeException("length1"))));
+        sources.add(Flux.error(new Fake400Exception(400, "max_tokens too large")));
+        sources.add(Flux.<ChatClientResponse>just(normalChunk("OK")).concatWith(Flux.empty()));
+
+        OneShotChain chain = new OneShotChain(sources);
+        AdaptiveMaxTokensAdvisor advisor = advisor(1000, 100000, 2.0, 2);
+
+        StepVerifier.create(advisor.adviseStream(request(1000), chain))
+                .expectNextMatches(r -> "OK".equals(r.chatResponse().getResult().getOutput().getText()))
+                .verifyComplete();
+    }
+
     // ---- 测试脚手架(§14.9:自建桩,不依赖 worker) ----
 
     /**
-     * 计数桩链:每次 nextStream 返回 sources 列表中下一个 Flux。
-     * 支持重订阅(copy 返回 this,因为测试中所有 source 已预置)。
+     * 一次性语义桩链(对齐生产 DefaultAroundAdvisorChain 的 Deque.pop() 行为):
+     * 同一链对象第二次 {@code nextStream} 必抛
+     * {@code IllegalStateException("No StreamAdvisors available to execute")};
+     * {@code copy(advisor)} 返回共享 sources/游标/lastRequest 的<b>新链对象</b>(fresh Deque)。
+     *
+     * <p>2026-11 生产 bug(升级重试复用已消费链,升级首轮即炸)正是被旧桩
+     * {@code copy 返回 this 且可无限 nextStream} 的可重入语义掩盖——单测全绿、生产必死。
+     * 桩链必须复刻生产一次性语义,此类 bug 才可被单测拦截。
      */
-    private static class CountingChain implements StreamAdvisorChain {
+    private static final class OneShotChain implements StreamAdvisorChain {
         private final List<Flux<ChatClientResponse>> sources;
-        private final AtomicInteger index = new AtomicInteger(0);
-        final AtomicReference<ChatClientRequest> lastRequest = new AtomicReference<>();
+        private final AtomicInteger index;
+        private final AtomicReference<ChatClientRequest> lastRequest;
+        private boolean consumed = false;
 
-        CountingChain(List<Flux<ChatClientResponse>> sources) {
+        OneShotChain(List<Flux<ChatClientResponse>> sources) {
+            this(sources, new AtomicInteger(0), new AtomicReference<>());
+        }
+
+        private OneShotChain(List<Flux<ChatClientResponse>> sources, AtomicInteger index,
+                AtomicReference<ChatClientRequest> lastRequest) {
             this.sources = sources;
+            this.index = index;
+            this.lastRequest = lastRequest;
         }
 
         @Override
         public Flux<ChatClientResponse> nextStream(ChatClientRequest request) {
+            if (consumed) {
+                return Flux.error(new IllegalStateException(
+                        "No StreamAdvisors available to execute"));
+            }
+            consumed = true;
             lastRequest.set(request);
             int i = index.getAndIncrement();
             if (i < sources.size()) {
@@ -290,7 +351,8 @@ class AdaptiveMaxTokensAdvisorTest {
 
         @Override
         public StreamAdvisorChain copy(StreamAdvisor advisor) {
-            return this;
+            // fresh 链对象:可再 nextStream 一次,但与旧链共享 sources 游标与 lastRequest
+            return new OneShotChain(sources, index, lastRequest);
         }
     }
 

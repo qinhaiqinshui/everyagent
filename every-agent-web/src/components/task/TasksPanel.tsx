@@ -12,9 +12,11 @@ import { useResponsiveViewport } from '@/hooks/useResponsiveViewport'
 import { useLongPress } from '@/hooks/useLongPress'
 import ContextBattery from '@/components/task/ContextBattery'
 import type { AgentListItem } from '@/components/task/AgentListPanel'
-import { ChevronDownIcon, MagnifierCheckIcon, MoreHorizontalIcon, PlusIcon } from '@/components/shared/AppGlyphs'
+import { ChevronDownIcon, CopyIcon, MagnifierCheckIcon, MoreHorizontalIcon, PlusIcon } from '@/components/shared/AppGlyphs'
 import { Button, IconButton } from '@/components/shared/ui'
 import ActionMenu from '@/components/shared/ui/ActionMenu'
+import { useAppUi } from '@/components/app/AppUiContext'
+import { copyText } from '@/utils/clipboard'
 import ConfirmDialog from '@/components/shared/ConfirmDialog'
 import PropertiesDialog from '@/components/shared/PropertiesDialog'
 import { buildWorkspacePropertyItems, getWorkspaceDisplayName } from '@/components/shared/workspacePropertyUtils'
@@ -375,6 +377,23 @@ export default function TasksPanel({
     })
   }, [onSelect])
 
+  const { showToast } = useAppUi()
+
+  /**
+   * 「复制任务路径」:向任务归属 worker 定向拉 task.dataDir(workspaces/<workspaceId>/tasks/
+   * <taskId>/ 在 worker 宿主上的完整绝对路径)并复制到剪贴板,成功/失败均 toast 反馈。
+   * 路径必须由 worker 提供——前端(可能远端经 hub)无从拼出 worker 宿主上的数据目录。
+   */
+  const handleCopyTaskPath = React.useCallback(async (task: TaskListItemSnapshot) => {
+    try {
+      const path = await taskQueryService.getTaskDataDir(task.taskId)
+      await copyText(path)
+      showToast('已复制任务路径', 'success')
+    } catch (copyError) {
+      showToast(copyError instanceof Error ? copyError.message : '复制任务路径失败', 'error')
+    }
+  }, [showToast])
+
   const { setActiveSidebarPanel } = useWorkspaceShell()
 
   /**
@@ -423,15 +442,14 @@ export default function TasksPanel({
 
   /**
    * 任务标题胶囊渲染:把 rawContent(含 opaque token 串,嵌套整体成段)交给公共组件
-   * TokenRichText 渲染(与用户消息视图/插件弹窗同一套渲染逻辑);singleLine 单行
-   * 截断(含嵌套胶囊逐层压回单行),侧边栏拉宽时可见更多内容;胶囊不可交互
-   * (点击语义归任务行打开)。
+   * TokenRichText 渲染(与用户消息视图/插件弹窗同一套渲染逻辑);标题单行展示、
+   * 不省略截断(不出现「…」)——行宽即侧边栏宽度,能显示多少就显示多少,拖宽
+   * 侧边栏即可看到更多;胶囊不可交互(点击语义归任务行打开)。
    */
   const renderTaskTitle = (task: TaskListItemSnapshot) => (
     <TokenRichText
       text={task.displayTitle}
       className="nagent-task-title-replay"
-      singleLine
       interactive={false}
     />
   )
@@ -462,6 +480,20 @@ export default function TasksPanel({
         if (e.detail > 1) e.preventDefault()
       }}
       {...longPressHandlers}
+      onContextMenu={(event) => {
+        // 移动端:沿用手势 hook 的处理(抑制系统原生长按菜单);菜单由长按手势触发。
+        longPressHandlers.onContextMenu(event)
+        if (isMobile || batchActive) {
+          return
+        }
+        // 桌面端:右键打开该行「任务更多操作」菜单(与 ⋯ 按钮/移动端长按同一份 items),
+        // 按鼠标点定位(ListRowActions 桌面端 anchorPointMode=top-start,左上角对齐鼠标点)。
+        event.preventDefault()
+        actionRefs.current.get(task.taskId)?.openMenu(
+          event.currentTarget as HTMLElement,
+          { x: event.clientX, y: event.clientY },
+        )
+      }}
       style={{
         ...taskCardStyle,
         ...(isHighlighted
@@ -508,6 +540,12 @@ export default function TasksPanel({
                 actionRefs.current.set(task.taskId, el)
               }}
               items={[
+                {
+                  key: 'copyDataDir',
+                  label: '复制任务路径',
+                  icon: <CopyIcon size={13} />,
+                  onSelect: () => void handleCopyTaskPath(task),
+                },
                 {
                   key: 'delete',
                   label: '删除',
@@ -981,8 +1019,10 @@ const taskTitleStyle: React.CSSProperties = {
   fontWeight: 700,
   minWidth: 0,
   flex: 1,
+  // 单行展示、不省略:nowrap + clip(无「…」),行宽即侧边栏宽度,拖宽可见更多;
+  // overflow:hidden 把溢出裁在行边界,不外溢到操作按钮/卡片外。
   overflow: 'hidden',
-  textOverflow: 'ellipsis',
+  textOverflow: 'clip',
   whiteSpace: 'nowrap',
 }
 

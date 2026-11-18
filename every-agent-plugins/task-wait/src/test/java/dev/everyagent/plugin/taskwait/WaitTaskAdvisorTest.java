@@ -13,6 +13,7 @@ import dev.everyagent.plugin.api.task.TaskService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.springframework.ai.chat.client.ChatClientRequest;
 import org.springframework.ai.chat.client.ChatClientResponse;
 import org.springframework.ai.chat.client.advisor.ToolCallingAdvisor;
@@ -242,6 +243,52 @@ class WaitTaskAdvisorTest {
                 () -> call(advisor()));
         assertTrue(e.getMessage().contains("循环等待"), "信息: " + e.getMessage());
         assertEquals(0, agent.events.size(), "循环等待在起始帧之前判定，零事件");
+    }
+
+    /**
+     * 回归（2026-11 生产 8 小时互等挂起）：并发互等竞态。
+     * 旧实现 take 即移除——B 已消费绑定（B→本任务）后本任务再绑定回指 B 时，
+     * detectCycle 查 activeOf 落空（B 的绑定已被移除），互等漏检；
+     * 目标存在且恒 running（对齐生产形态）→ 双方 while(true) 轮询永久挂起
+     * （@Timeout 兜底炸出）。修复后 B 的在席等待保持可见，本任务立即检出循环。
+     */
+    @Test
+    @Timeout(10)
+    void concurrentMutualWaitDetectedViaInFlightBinding() {
+        // 任务 B 已消费绑定（B → 本任务），处于在席等待;B 恒 running(生产形态:
+        // 旧实现漏检后对本任务轮询永不超时)
+        registry.bind("t-B", TASK_ID, "任务B");
+        assertNotNull(registry.take("t-B"));
+        taskService.putRunning("t-B", "running");
+        // 本任务绑定回指 B → 互等;旧实现此处漏检进入无限轮询
+        registry.bind(TASK_ID, "t-B", "任务A");
+
+        WaitTaskFailedException e = assertThrows(WaitTaskFailedException.class,
+                () -> call(advisor()));
+        assertTrue(e.getMessage().contains("循环等待"), "信息: " + e.getMessage());
+        assertEquals(0, agent.events.size(), "循环等待在起始帧之前判定，零事件");
+        // 抛出路径同样经 finally 收口：本任务的在席等待退场
+        assertNull(registry.activeOf(TASK_ID));
+    }
+
+    /** 等待收口（done 放行）后在席等待退场，不污染后续循环检测。 */
+    @Test
+    void inFlightWaitRetiredAfterDone() {
+        taskService.putDisk(TARGET_ID, "done");
+        registry.bind(TASK_ID, TARGET_ID, "写周报");
+
+        assertNotNull(call(advisor()), "快路径放行");
+        assertNull(registry.activeOf(TASK_ID), "放行后在席等待退场");
+    }
+
+    /** 等待失败收口（抛 WaitTaskFailedException）后在席等待同样退场。 */
+    @Test
+    void inFlightWaitRetiredAfterFailure() {
+        taskService.putDisk(TARGET_ID, "failed");
+        registry.bind(TASK_ID, TARGET_ID, "写周报");
+
+        assertThrows(WaitTaskFailedException.class, () -> call(advisor()));
+        assertNull(registry.activeOf(TASK_ID), "失败收口后在席等待退场");
     }
 
     @Test

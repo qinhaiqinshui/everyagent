@@ -25,8 +25,16 @@ import java.util.Optional;
  * worker.restart RPC(基础设施层,架构 §5.5):重启 worker 进程。
  *
  * <p>语义:应答 ok 后由独立非守护线程复走 {@code /admin/shutdown} 同款关闭路径
- * (优雅关闭 ApplicationContext:断开 hub 连接、销毁插件),随后以重建的启动命令
- * 把本进程重新拉起——<b>自重启,不依赖 desktop/任务计划等外部 supervisor</b>。
+ * (优雅关闭 ApplicationContext:断开 hub 连接、销毁插件),随后按运行环境二选一拉起新进程:
+ * <ul>
+ *   <li><b>systemd 管辖</b>(检测 {@code INVOCATION_ID} 环境变量,服务器 host 部署场景):
+ *       不自 fork——优雅关闭后以约定退出码 {@link #SYSTEMD_RESTART_EXIT_CODE} 退出,由
+ *       systemd 拉起新进程。原因:Type=simple 服务主进程退出时 systemd 按 KillMode=
+ *       control-group(默认)清理 cgroup 内剩余进程,自 fork 的新进程仍在原 cgroup 会被
+ *       SIGTERM 静默杀掉;交接 systemd 还保证新进程的 cgroup 归属/环境/JVM 参数与 unit 一致。</li>
+ *   <li><b>无 supervisor</b>(desktop/bat/nohup):以重建的启动命令把本进程重新拉起——
+ *       <b>自重启,不依赖 desktop/任务计划等外部 supervisor</b>。</li>
+ * </ul>
  *
  * <p>启动命令重建策略(重建失败时拒绝执行并应答 err,worker 不重启):
  * <ul>
@@ -39,15 +47,21 @@ import java.util.Optional;
  *       原 JVM {@code -D}/{@code -X} 选项不保留。</li>
  * </ul>
  *
- * <p>顺序保证:先 {@code context.close()} 返回(Tomcat 已停、6102 端口已释放)再 spawn
- * 新进程,无端口竞态;子进程继承 cwd(user.dir)、环境变量(EVERYAGENT_HOME 等)与
- * stdio({@code inheritIO},desktop/bat 启动时即继续写 worker.out.log)。
- * 进程级冷启动:运行中任务被中断,重启后 boot 扫描把非终态任务标 failed(架构 §7.7),任务数据不丢。
+ * <p>顺序保证:先 {@code context.close()} 返回(Tomcat 已停、6102 端口已释放)再拉起/退出,
+ * 无端口竞态。进程级冷启动:运行中任务被中断,重启后 boot 扫描把非终态任务标 failed(架构 §7.7),任务数据不丢。
  */
 @Component
 public class WorkerRestartRpcHandler {
 
     private static final Logger log = LoggerFactory.getLogger(WorkerRestartRpcHandler.class);
+
+    /**
+     * systemd 管辖下请求重启的约定退出码(EX_TEMPFAIL 惯例值):worker 优雅关闭后以此码退出,
+     * systemd({@code Restart=on-failure})拉起新进程;deploy.py 生成的 unit 另配
+     * {@code SuccessExitStatus=75} + {@code RestartForceExitStatus=75}(避免 journal 误报 failed)。
+     * 未配这两条的既有 unit 也兼容:75 非零 → on-failure 照常重启。
+     */
+    static final int SYSTEMD_RESTART_EXIT_CODE = 75;
 
     /** 应答发出后留给 Shipper 把 rpc.ok 帧刷到 hub 的等待时间(非阻塞出站队列,宽裕即可)。 */
     private static final long REPLY_FLUSH_MILLIS = 1000;
@@ -70,27 +84,73 @@ public class WorkerRestartRpcHandler {
     }
 
     private void rpcWorkerRestart(RpcContext ctx) {
-        // 先重建启动命令再应答:重建失败(找不到 exe/主命令)时拒绝重启并回 err,worker 保持运行。
-        List<String> command;
-        try {
-            command = buildRelaunchCommand(
-                    ProcessHandle.current().info().command().orElse(null),
-                    ProcessHandle.current().info().arguments().orElse(null),
-                    System.getProperty("sun.java.command", ""),
-                    System.getProperty("java.class.path", ""),
-                    System.getProperty("java.home", ""));
-            reinjectProgramDir(command);
-        } catch (IllegalStateException e) {
-            log.warn("worker.restart 被拒绝:{}", e.getMessage());
-            ctx.err("RESTART_UNSUPPORTED", e.getMessage());
-            return;
+        boolean systemdManaged = isSystemdManaged();
+        List<String> command = null;
+        if (!systemdManaged) {
+            // 先重建启动命令再应答:重建失败(找不到 exe/主命令)时拒绝重启并回 err,worker 保持运行。
+            try {
+                command = buildRelaunchCommand(
+                        ProcessHandle.current().info().command().orElse(null),
+                        ProcessHandle.current().info().arguments().orElse(null),
+                        System.getProperty("sun.java.command", ""),
+                        System.getProperty("java.class.path", ""),
+                        System.getProperty("java.home", ""));
+                reinjectProgramDir(command);
+            } catch (IllegalStateException e) {
+                log.warn("worker.restart 被拒绝:{}", e.getMessage());
+                ctx.err("RESTART_UNSUPPORTED", e.getMessage());
+                return;
+            }
         }
         ctx.ok(Json.obj().put("restarting", true));
-        // 独立非守护线程执行关闭+拉起:RpcDispatcher 的虚拟线程池在 context 关闭时被 shutdownNow,
+        // 独立非守护线程执行关闭+拉起/退出:RpcDispatcher 的虚拟线程池在 context 关闭时被 shutdownNow,
         // 不能在 RPC 线程里做(会被自己杀掉自己);非守护也保证 JVM 不会中途先退。
-        Thread restarter = new Thread(() -> doRestart(command), "worker-restart");
+        final List<String> relaunch = command;
+        Thread restarter = new Thread(
+                () -> {
+                    if (systemdManaged) {
+                        doSystemdHandoverRestart();
+                    } else {
+                        doRestart(relaunch);
+                    }
+                },
+                "worker-restart");
         restarter.setDaemon(false);
         restarter.start();
+    }
+
+    /**
+     * systemd 管辖下的重启(架构 §5.5):不自 fork。
+     *
+     * <p>Type=simple 服务主进程退出时,systemd 按 KillMode=control-group(默认)清理 cgroup
+     * 内剩余进程——自 fork 的新进程仍在原 cgroup,会被 SIGTERM 静默杀掉(表现为旧进程优雅
+     * 退出、新进程无任何日志消失、服务 Deactivated successfully)。故这里只优雅关闭并以
+     * 约定退出码退出,把拉起交给 systemd:新进程由 unit 描述符派生,cgroup 归属/环境/
+     * JVM 参数(ExecStart 的 -Xmx 等)与首次启动完全一致,且继续受 Restart= 监管。
+     */
+    private void doSystemdHandoverRestart() {
+        try {
+            Thread.sleep(REPLY_FLUSH_MILLIS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return;
+        }
+        log.info("worker.restart({}):systemd 管辖(INVOCATION_ID),优雅关闭后以退出码 {} 交接 systemd 拉起新进程",
+                props.getWorkerId(), SYSTEMD_RESTART_EXIT_CODE);
+        try {
+            // 优雅关闭:与 /admin/shutdown 同路径(断开 hub 连接、销毁插件、停止内嵌容器释放 6102)。
+            context.close();
+        } catch (Throwable t) {
+            log.error("worker.restart:优雅关闭异常(继续退出交接 systemd):{}", t.getMessage(), t);
+        } finally {
+            System.exit(SYSTEMD_RESTART_EXIT_CODE);
+        }
+    }
+
+    /** 是否运行在 systemd 服务管辖下:systemd 为每个服务进程注入 INVOCATION_ID(及 SYSTEMD_EXEC_PID)。 */
+    static boolean isSystemdManaged() {
+        String v = System.getenv("INVOCATION_ID");
+        return v != null && !v.isBlank();
     }
 
     /**

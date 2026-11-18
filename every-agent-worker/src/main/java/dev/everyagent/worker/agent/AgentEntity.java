@@ -112,6 +112,14 @@ public final class AgentEntity implements Agent {
      */
     public final EventEmitter emitter;
 
+    /**
+     * 最近一次活动时刻(ms):{@link #emitter} 每次发射自动刷新(delta/thinking/message/
+     * usage/tool.started/tool.result/retry 等任意 agent 事件都算活动),供
+     * {@link AgentRunner} 无活动看门狗判定——「模型流已结束但工具批调度续体丢失」类
+     * 静默挂起时,最后活动停在轮末事件,超过阈值即强制中断(2026-11 t_145g 防护真空兜底)。
+     */
+    private volatile long lastActivityMs;
+
     /** 最近活动快照(list_agents/wait_agents 契约;WorkerToolEventAdvisor 每轮合并写)。 */
     private final AtomicReference<AgentActivity> activity =
             new AtomicReference<>(new AgentActivity(null, null, null, null, null));
@@ -140,8 +148,11 @@ public final class AgentEntity implements Agent {
         this.execution = execution;
         this.creator = creator;
         this.agentMetadata = agentMetadata != null ? Map.copyOf(agentMetadata) : Map.of();
-        // 包装：添加本层信息（agentId），委托上游 emitter
+        // 包装：添加本层信息（agentId），委托上游 emitter。
+        // 首句顺带刷新活动时间戳:本 agent 发出的任意事件都视为链路仍在推进,
+        // 是无活动看门狗(AgentRunner)的活动打点单点。
         this.emitter = e -> {
+            touchActivity();
             EmitEvent filled = (e.agentId() == null || e.agentId().isEmpty())
                     ? e.withAgentId(this.agentId) : e;
             return upstreamEmitter.emit(filled);
@@ -225,6 +236,28 @@ public final class AgentEntity implements Agent {
             throw new IllegalStateException("AgentRunner 未注入,无法执行 run()");
         }
         runner.run(this);
+    }
+
+    // ── 无活动看门狗支撑(AgentRunner 消费,包级可见) ──
+
+    /** 刷新活动时间戳(ms)。agent 级 emitter 每次发射自动调用;waiting-user 豁免期由看门狗顺延刷新。 */
+    void touchActivity() {
+        lastActivityMs = System.currentTimeMillis();
+    }
+
+    /** 最近一次活动时刻(ms);0 = 尚无活动记录。 */
+    long lastActivityMs() {
+        return lastActivityMs;
+    }
+
+    /** 本轮是否挂在 ask 上等用户(waiting-user 态):看门狗豁免判据,由 ask-timeout-ms 兜底。 */
+    boolean isWaitingUser() {
+        return RUN_WAITING_USER.equals(runState.get());
+    }
+
+    /** 本轮微观运行状态(idle/running/waiting-user/terminal):无活动诊断日志输出用。 */
+    String runState() {
+        return runState.get();
     }
 
     // ── 以下为 worker 内部方法(非 AgentContext 契约) ──

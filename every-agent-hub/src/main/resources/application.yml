@@ -38,8 +38,11 @@ hub:
   # 并配合 hello-rate-per-minute 与 stale-read-ms。旧顶层 hub.pub-rate-per-second / pub-burst
   # 已迁移到 hub.limits.*(阈值亦从 100/100 提至上述默认)。
   limits:
-    pub-per-sec: 1000
-    pub-burst: 2000
+    # TODO(临时排障,事后恢复 1000/2000): 多任务并发时 worker 首挂回扫(2000/任务)+流式
+    # 洪峰打爆共享令牌桶,hub 拒帧只回 error 不转发,尾部丢帧前端跳号检测不可见 →
+    # tool 卡片长期灰显。临时置 0 关闭 pub 限流(可信内网环境)。
+    pub-per-sec: 0
+    pub-burst: 0
   outbound-queue-limit: 1000       # 慢消费者保护:出口队列上限,溢出断开
   ping-interval-ms: 15000          # WS 协议层 ping 间隔
   stale-read-ms: 0                 # >0 时启用"无入站流量判死"(需 pong 可观测,默认关)

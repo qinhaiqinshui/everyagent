@@ -1,6 +1,7 @@
 import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import { readFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { resolve } from 'path'
 
 /**
@@ -15,6 +16,21 @@ import { resolve } from 'path'
 function loadAppVersion(): string {
   const pkg = JSON.parse(readFileSync(resolve(__dirname, 'package.json'), 'utf-8')) as { version?: string }
   return pkg.version ?? '0.0.0'
+}
+
+/**
+ * 构建指纹注入 __APP_BUILD_ID__:构建时间 + git 短 hash。
+ * 页面加载时打到 console(F12 一眼可见),用于「部署是否生效」的即时判定——
+ * 浏览器缓存/部署链出问题时不必再猜。git 不可用时只有时间。
+ */
+function loadAppBuildId(): string {
+  const ts = new Date().toISOString().slice(0, 16).replace('T', ' ')
+  try {
+    const hash = execFileSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: __dirname }).toString().trim()
+    return `${ts} ${hash}`
+  } catch {
+    return ts
+  }
 }
 
 /**
@@ -54,6 +70,7 @@ function cspDevRelaxPlugin(): Plugin {
 export default defineConfig({
   define: {
     __APP_VERSION__: JSON.stringify(loadAppVersion()),
+    __APP_BUILD_ID__: JSON.stringify(loadAppBuildId()),
   },
   plugins: [
     cspDevRelaxPlugin(),

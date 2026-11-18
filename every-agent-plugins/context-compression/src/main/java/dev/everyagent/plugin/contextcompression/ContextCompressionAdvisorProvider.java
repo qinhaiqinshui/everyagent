@@ -28,10 +28,14 @@ public class ContextCompressionAdvisorProvider implements AdvisorProvider {
 
     private final WorkerConfig config;
     private final WorkerServices services;
+    /** 手动压缩请求注册表(与 CompressContextRequestNode 共享同一实例,activate 装配)。 */
+    private final ManualCompressRegistry manualRequests;
 
-    public ContextCompressionAdvisorProvider(WorkerConfig config, WorkerServices services) {
+    public ContextCompressionAdvisorProvider(WorkerConfig config, WorkerServices services,
+            ManualCompressRegistry manualRequests) {
         this.config = config;
         this.services = services; // 延迟解析的关键：不存 TokenEstimator 引用，存 WorkerServices
+        this.manualRequests = manualRequests;
     }
 
     @Override
@@ -58,6 +62,7 @@ public class ContextCompressionAdvisorProvider implements AdvisorProvider {
         ContextCompressor.TextTokens tokens = estimator == null
                 ? null
                 : text -> estimator.estimate(text, configId);
-        return new ContextCompressionAdvisor(a, limits, summarizer, tokens);
+        return new ContextCompressionAdvisor(a, limits, summarizer, tokens,
+                services.slashTokens(), manualRequests);
     }
 }

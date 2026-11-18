@@ -6,12 +6,14 @@ import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.hub.HubPool;
 import dev.everyagent.worker.os.OsReveal;
 import dev.everyagent.plugin.api.event.Channels;
+import dev.everyagent.plugin.api.util.AtomicFiles;
 import dev.everyagent.worker.proto.RpcMethods;
 import dev.everyagent.plugin.api.exception.BadParamsException;
 import dev.everyagent.plugin.api.exception.NotFoundException;
 import dev.everyagent.worker.rpc.RpcDispatcher;
 import dev.everyagent.worker.rpc.RpcContext;
 import dev.everyagent.worker.rpc.SandboxViolationException;
+import dev.everyagent.worker.tools.EolAgnosticText;
 import dev.everyagent.worker.tools.permission.GrantRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -83,11 +85,13 @@ public class FsService {
         dispatcher.register(RpcMethods.FS_MKDIR, this::mkdir);
         dispatcher.register(RpcMethods.FS_MOVE, this::move);
         dispatcher.register(RpcMethods.FS_DELETE, this::delete);
+        dispatcher.register(RpcMethods.FS_COPY, this::copy);
         dispatcher.register(RpcMethods.FS_BROWSE, this::browse);
         dispatcher.register(RpcMethods.FS_READ_RAW, this::readRaw);
         dispatcher.register(RpcMethods.FS_WRITE_RAW, this::writeRaw);
         dispatcher.register(RpcMethods.FS_STAT_RAW, this::statRaw);
         dispatcher.register(RpcMethods.FS_GRANT_RAW_ROOT, this::grantRawRoot);
+        dispatcher.register(RpcMethods.FS_REPLACE_RAW, this::replaceRaw);
     }
 
     /**
@@ -262,6 +266,59 @@ public class FsService {
     }
 
     /**
+     * 按机器绝对路径做「定位-替换」写(合法根校验见类注释,§5.5)。文件差异标签页「回滚」
+     * 专用:读全文 → 行尾宽容定位 {@code oldContent} 的<b>唯一</b>出现(与 update_file 工具
+     * 同语义:CRLF/LF 互认、未找到/出现多次一律 BAD_PARAMS,绝不盲改)→ 原位替换为按文件
+     * 主导行尾转写的 {@code newContent} → {@link AtomicFiles} 原子落盘,替换区间外逐字节保留。
+     * 前端语义 = 反向 update_file:oldContent=差异新文本、newContent=差异旧文本,差异生成后
+     * 文件被其他修改 → oldContent 不再命中 → 回滚失败。
+     * {@code deleteWhenEmpty=true} 且匹配段覆盖全文件、newContent 为空 → 删除文件而非写
+     * 空文件(回滚「新建文件」变更),应答携带 {@code deleted:true}。
+     */
+    private void replaceRaw(RpcContext ctx) throws IOException {
+        Path target = requireMachineAbsolute(ctx.strParam("path"));
+        requireRawAllowed(ctx, target);
+        String oldContent = ctx.strParam("oldContent");
+        String newContent = ctx.optStrParam("newContent", "");
+        // RPC 层暂无 optBoolParam,按 browse(includeFiles) 既有模式解析 JSON 布尔与字符串
+        boolean deleteWhenEmpty = "true".equalsIgnoreCase(ctx.optStrParam("deleteWhenEmpty", "false").trim());
+        if (oldContent.length() > MAX_WRITE || newContent.length() > MAX_WRITE) {
+            throw new BadParamsException("单次替换内容超过上限 " + MAX_WRITE + " 字符");
+        }
+        if (!Files.exists(target)) {
+            throw new NotFoundException("文件不存在: " + target);
+        }
+        if (!Files.isRegularFile(target)) {
+            throw new NotFoundException("不是文件: " + target);
+        }
+        String existing = Files.readString(target, java.nio.charset.StandardCharsets.UTF_8);
+        if (existing.indexOf('\0') >= 0) {
+            throw new BadParamsException("文件疑似二进制(含 NUL 字节),不支持文本替换");
+        }
+        int[] span;
+        try {
+            span = EolAgnosticText.findUniqueEolAgnostic(existing, oldContent);
+        } catch (IllegalArgumentException e) {
+            throw new BadParamsException(e.getMessage());
+        }
+        if (span == null) {
+            throw new BadParamsException("未找到要替换的内容(文件可能已被其他修改,已拒绝回滚)");
+        }
+        boolean wholeFile = span[0] == 0 && span[1] == existing.length();
+        if (deleteWhenEmpty && newContent.isEmpty() && wholeFile) {
+            deleteOne(target);
+            ctx.ok(Json.obj().put("path", target.toString()).put("deleted", true));
+            return;
+        }
+        String eol = span[2] == 1 ? "\r\n" : "\n";
+        String replaced = existing.substring(0, span[0])
+                + EolAgnosticText.fromLf(EolAgnosticText.toLf(newContent), eol)
+                + existing.substring(span[1]);
+        AtomicFiles.writeText(target, replaced);
+        ctx.ok(Json.obj().put("path", target.toString()).put("size", replaced.length()).put("deleted", false));
+    }
+
+    /**
      * 定位文件/目录(懒加载树的 reveal 模式):输入工作区内路径,
      * 返回从根到目标逐段 stat 的节点链(旁支零查找,不列任何子目录内容)。
      * 目标不存在抛 NotFoundException;路径畸形(中间段为文件)时链上如实标记。
@@ -365,6 +422,63 @@ public class FsService {
         deleteRecursively(target);
         changed(ctx, sb, sb.display(target), "delete");
         ctx.ok(Json.obj().put("path", sb.display(target)));
+    }
+
+    /**
+     * 递归复制文件/目录(资源树「复制/粘贴」,对标 VSCode explorer Copy/Paste):
+     * from 必须存在且非工作区根;to 为完整目标路径(含新名)——目标已存在时拒绝
+     * (FileAlreadyExistsException → BAD_PARAMS,前端负责探测同名并生成「- 副本」后缀);
+     * 目标位于源子树内拒绝(否则目录递归复制一边遍历一边在自身之下创建新文件,无限
+     * 递归直到路径超长/磁盘爆满);符号链接按链接自身复制(NOFOLLOW——不跟随,链接
+     * 指向祖先形成循环时也不会无限下钻,悬空链接同样可复制)。成功后广播 fs.changed
+     * (kind=write,前端刷新目标所在目录)。
+     */
+    private void copy(RpcContext ctx) throws IOException {
+        Sandbox sb = sandbox(ctx);
+        Path from = sb.resolveExisting(ctx.strParam("from"));
+        sb.requireNotRoot(from);
+        Path to = sb.resolveTarget(ctx.strParam("to"));
+        if (to.startsWith(from)) {
+            throw new BadParamsException("复制目标不能位于源目录内: " + sb.display(to));
+        }
+        if (Files.exists(to)) {
+            throw new BadParamsException("目标已存在: " + sb.display(to));
+        }
+        copyRecursively(from, to);
+        changed(ctx, sb, sb.display(to), "write");
+        ctx.ok(Json.obj().put("from", sb.display(from)).put("to", sb.display(to)));
+    }
+
+    /**
+     * 递归复制单棵子树。目录项判型用 NOFOLLOW(符号链接按链接自身属性 → 走文件
+     * 分支),链接以 {@link LinkOption#NOFOLLOW_LINKS} 复制链接本身(悬空链接可复制);
+     * 属性不可读的条目(Windows LX symlink 等 reparse 点)同样退化为按文件复制,
+     * 不拖垮整棵复制。
+     */
+    private static void copyRecursively(Path from, Path to) throws IOException {
+        boolean isDir;
+        try {
+            isDir = Files.readAttributes(from, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS).isDirectory();
+        } catch (IOException e) {
+            isDir = false;
+        }
+        if (isDir) {
+            Files.createDirectories(to);
+            try (DirectoryStream<Path> ds = Files.newDirectoryStream(from)) {
+                for (Path c : ds) {
+                    copyRecursively(c, to.resolve(c.getFileName()));
+                }
+            }
+            return;
+        }
+        if (to.getParent() != null) {
+            Files.createDirectories(to.getParent());
+        }
+        try {
+            Files.copy(from, to, LinkOption.NOFOLLOW_LINKS);
+        } catch (java.nio.file.FileAlreadyExistsException e) {
+            throw new BadParamsException("目标已存在: " + to);
+        }
     }
 
     // ---- 内部 ----

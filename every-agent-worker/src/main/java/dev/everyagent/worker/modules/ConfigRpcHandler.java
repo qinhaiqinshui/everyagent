@@ -9,6 +9,7 @@ import dev.everyagent.worker.proto.ConfigDtos.ModelConfig;
 import dev.everyagent.plugin.api.event.Events;
 import dev.everyagent.plugin.api.exception.BadParamsException;
 import dev.everyagent.plugin.api.exception.NotFoundException;
+import dev.everyagent.plugin.api.util.AtomicFiles;
 import dev.everyagent.worker.proto.RpcMethods;
 import dev.everyagent.worker.rpc.RpcContext;
 import dev.everyagent.worker.rpc.RpcDispatcher;
@@ -22,12 +23,18 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
 
+import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
+import java.util.Base64;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Stream;
 
 /**
  * 配置与技能 RPC（基础设施层）：config.get / config.reload /
@@ -77,6 +84,8 @@ public class ConfigRpcHandler {
         dispatcher.register(RpcMethods.CONFIG_MODEL_REMOVE, this::rpcConfigModelRemove);
         dispatcher.register(RpcMethods.SKILL_LIST, this::rpcSkillList);
         dispatcher.register(RpcMethods.SKILL_EXPOSURE_SET, this::rpcSkillExposureSet);
+        dispatcher.register(RpcMethods.SKILL_EXPORT, this::rpcSkillExport);
+        dispatcher.register(RpcMethods.SKILL_IMPORT, this::rpcSkillImport);
         dispatcher.register(RpcMethods.PREF_GET, this::rpcPrefGet);
         dispatcher.register(RpcMethods.PREF_SET, this::rpcPrefSet);
     }
@@ -362,6 +371,230 @@ public class ConfigRpcHandler {
             }
         }
         return roots;
+    }
+
+    // ---- skill.export / skill.import(设置页「Skill 列表」导入导出,§5.5/§7.17) ----
+
+    /** 导入 zip 解码后的字节上限(与 fs.writeRaw 的单次写入上限对齐;更大包受 hub 单帧上限自然拒绝)。 */
+    private static final int MAX_IMPORT_ZIP_BYTES = 16 * 1024 * 1024;
+
+    /** 导入 zip 的解压总量上限(zip 炸弹防御:16MB 压缩包解出数百 MB 即拒绝)。 */
+    private static final long MAX_IMPORT_UNCOMPRESSED = 256L * 1024 * 1024;
+
+    /**
+     * skill.export:把该 worker 的 skill 目录打包为临时 zip 回传给前端下载(§5.5)。
+     * 可选参数 {@code skillIds:[id,...]} = 导出清单(设置页弹选择框勾选,仅打包勾选的
+     * skill 目录,含附属 scripts/ 等文件):**缺省 = 全部**(全部一级 skill 子目录);
+     * 数组须非空(空数组/非数组 → BAD_PARAMS),每项须在目录扫描结果内且目录仍存在
+     * (否则 {@link NotFoundException},与 skill.exposure.set 同口径),重复项去重。
+     * 应答分批语义与 {@code fs.readRaw} 逐字节一致:≤{@code INLINE_MAX}(256KB)单帧 ok
+     * 内联 {@code base64};超限按 {@code CHUNK}(192KB)分批 {@code rpc.data}
+     * ({@code {offset,size,base64}})+ 末帧 ok 汇总。应答字段:
+     * {@code {skillCount(打包的 skill 目录数), fileCount, size[, base64]}}。
+     *
+     * <p>不含 {@code skill-exposure.json}(暴露配置的身份键是本机工作区根路径,跨机无意义);
+     * 临时 zip 流式回传完毕即删。skillsDir 不存在(全新安装未物化,理论不可达)降级为空 zip。
+     */
+    void rpcSkillExport(RpcContext ctx) throws IOException {
+        Path dir = skillCatalog.skillsDir();
+        List<Path> roots = exportRoots(ctx, dir);
+        Path zip = Files.createTempFile("everyagent-skills-", ".zip");
+        try {
+            int fileCount = 0;
+            try (java.util.zip.ZipOutputStream zos =
+                         new java.util.zip.ZipOutputStream(Files.newOutputStream(zip))) {
+                for (Path root : roots) {
+                    List<Path> paths;
+                    try (Stream<Path> walk = Files.walk(root)) {
+                        paths = walk.sorted(Comparator.naturalOrder()).toList();
+                    }
+                    for (Path p : paths) {
+                        String rel = dir.relativize(p).toString().replace('\\', '/');
+                        if (rel.isEmpty()) {
+                            continue; // 根自身(理论上不命中:rel 至少含 skill id 段)
+                        }
+                        java.util.zip.ZipEntry entry = new java.util.zip.ZipEntry(
+                                Files.isDirectory(p) ? rel + "/" : rel);
+                        try {
+                            entry.setTime(Files.getLastModifiedTime(p).toMillis());
+                        } catch (IOException ignore) {
+                            // 时间戳缺失不阻断打包
+                        }
+                        zos.putNextEntry(entry);
+                        if (!Files.isDirectory(p)) {
+                            Files.copy(p, zos);
+                            fileCount++;
+                        }
+                        zos.closeEntry();
+                    }
+                }
+            }
+            long size = Files.size(zip);
+            if (size <= FsService.INLINE_MAX) {
+                ctx.ok(Json.obj()
+                        .put("skillCount", roots.size())
+                        .put("fileCount", fileCount)
+                        .put("size", size)
+                        .put("base64", Base64.getEncoder().encodeToString(Files.readAllBytes(zip))));
+                return;
+            }
+            // 大包:流式按 CHUNK 分批 base64 rpc.data,末帧 ok 汇总(同 readRaw)
+            Base64.Encoder enc = Base64.getEncoder();
+            try (java.io.InputStream in = Files.newInputStream(zip)) {
+                byte[] buf = new byte[FsService.CHUNK];
+                long off = 0;
+                int n;
+                while ((n = in.readNBytes(buf, 0, FsService.CHUNK)) > 0) {
+                    byte[] slice = n == buf.length ? buf : java.util.Arrays.copyOf(buf, n);
+                    ObjectNode part = Json.obj()
+                            .put("offset", off)
+                            .put("size", n)
+                            .put("base64", enc.encodeToString(slice));
+                    ctx.data(List.of(part), off + n < size);
+                    off += n;
+                }
+            }
+            ctx.ok(Json.obj()
+                    .put("skillCount", roots.size())
+                    .put("fileCount", fileCount)
+                    .put("size", size));
+            log.info("skill.export 完成: {} 个 skill 目录 / {} 个文件 / {} 字节(zip 分批回传)",
+                    roots.size(), fileCount, size);
+        } finally {
+            try {
+                Files.deleteIfExists(zip);
+            } catch (IOException ignore) {
+                // 临时文件删除失败无害(系统 temp 目录)
+            }
+        }
+    }
+
+    /**
+     * 解析导出清单为待打包的 skill 目录根列表(排序去重,zip 条目序确定)。
+     * 参数缺省/null = 全部(skillsDir 下全部一级子目录);数组须非空、每项须为
+     * catalog 内合法 skill id 且目录仍存在。
+     */
+    private List<Path> exportRoots(RpcContext ctx, Path dir) throws IOException {
+        JsonNode node = ctx.params().path("skillIds");
+        if (node.isMissingNode() || node.isNull()) {
+            if (!Files.isDirectory(dir)) {
+                return List.of(); // 全新安装未物化:降级为空 zip
+            }
+            try (Stream<Path> s = Files.list(dir)) {
+                return s.filter(Files::isDirectory).sorted().toList();
+            }
+        }
+        if (!node.isArray() || node.isEmpty()) {
+            throw new BadParamsException("参数 skillIds 须为非空的 skill id 数组(缺省 = 全部)");
+        }
+        Set<String> known = new HashSet<>();
+        for (Skill s : skillCatalog.scan()) {
+            known.add(s.id());
+        }
+        List<Path> roots = new ArrayList<>();
+        for (JsonNode n : node) {
+            if (!n.isTextual() || n.asString().isBlank()) {
+                throw new BadParamsException("skillIds 每项须为非空 skill id 字符串: " + n);
+            }
+            String id = n.asString().trim();
+            if (!known.contains(id)) {
+                throw new NotFoundException("skill 不存在: " + id);
+            }
+            Path sub = dir.resolve(id);
+            if (!Files.isDirectory(sub)) {
+                throw new NotFoundException("skill 目录不存在: " + id);
+            }
+            roots.add(sub);
+        }
+        return roots.stream().distinct().sorted().toList();
+    }
+
+    /**
+     * skill.import:把前端上传的 skill zip(参数 {@code contentBase64})解压进
+     * {@code skillsDir}(§5.5)。解压规则:跳过 {@code __MACOSX}/.DS_Store;zip-slip
+     * 防护(条目 normalize 后必须仍落在 skillsDir 内,越界条目 BAD_PARAMS 整包拒绝);
+     * 同名条目覆盖(单文件 temp + AtomicFiles 原子 move,杜绝扫描读到半截文件);
+     * 解压总量上限 {@link #MAX_IMPORT_UNCOMPRESSED}(zip 炸弹防御)。
+     *
+     * <p>成功后失效 {@link SkillCatalog} 缓存并重扫(导入的 skill 无需重启 worker 即进
+     * skill.list / {@code /} 菜单 / prompt 注入集合)+ 广播
+     * {@code config.changed{keys:["skills"]}};应答 {@code {fileCount, skillCount}}。
+     * 注意同 id 的内置/插件包 skill 被覆盖后,重启 worker/插件重载时仍会按源内容重物化。
+     */
+    void rpcSkillImport(RpcContext ctx) throws IOException {
+        String contentBase64 = ctx.optStrParam("contentBase64", "");
+        if (contentBase64.isEmpty()) {
+            throw new BadParamsException("缺少参数 contentBase64");
+        }
+        byte[] zipBytes;
+        try {
+            zipBytes = Base64.getDecoder().decode(contentBase64);
+        } catch (IllegalArgumentException e) {
+            throw new BadParamsException("contentBase64 不是合法的 base64: " + e.getMessage());
+        }
+        if (zipBytes.length > MAX_IMPORT_ZIP_BYTES) {
+            throw new BadParamsException("导入 zip 超过上限 " + MAX_IMPORT_ZIP_BYTES
+                    + " 字节(解码后 " + zipBytes.length + " 字节)");
+        }
+        Path dir = skillCatalog.skillsDir();
+        Files.createDirectories(dir);
+        int fileCount = 0;
+        long totalUncompressed = 0;
+        try (java.util.zip.ZipInputStream zis =
+                     new java.util.zip.ZipInputStream(new java.io.ByteArrayInputStream(zipBytes))) {
+            java.util.zip.ZipEntry entry;
+            while ((entry = zis.getNextEntry()) != null) {
+                String name = entry.getName();
+                if (name.startsWith("__MACOSX") || name.contains(".DS_Store")) {
+                    continue; // macOS 打包垃圾
+                }
+                Path target = dir.resolve(name).normalize();
+                if (!target.startsWith(dir)) {
+                    throw new BadParamsException("zip 条目越界(zip-slip),整包拒绝: " + name);
+                }
+                if (entry.isDirectory()) {
+                    Files.createDirectories(target);
+                    continue;
+                }
+                if (target.getParent() != null) {
+                    Files.createDirectories(target.getParent());
+                }
+                Path tmp = Files.createTempFile(dir, "import-", ".tmp");
+                long written;
+                try {
+                    written = Files.copy(zis, tmp, StandardCopyOption.REPLACE_EXISTING);
+                } catch (IOException e) {
+                    deleteQuietly(tmp);
+                    throw e;
+                }
+                totalUncompressed += written;
+                if (totalUncompressed > MAX_IMPORT_UNCOMPRESSED) {
+                    deleteQuietly(tmp);
+                    throw new BadParamsException("解压总量超过上限 " + MAX_IMPORT_UNCOMPRESSED
+                            + " 字节(zip 炸弹防御),整包拒绝");
+                }
+                AtomicFiles.replace(tmp, target);
+                fileCount++;
+            }
+        } catch (java.util.zip.ZipException e) {
+            throw new BadParamsException("不是合法的 zip 文件: " + e.getMessage());
+        }
+        skillCatalog.invalidate();
+        int skillCount = skillCatalog.scan().size();
+        pool.broadcastEvt(Events.CONFIG_CHANGED,
+                Json.toJson(new Events.ConfigChanged(List.of("skills"))));
+        log.info("skill.import 完成:解压 {} 个文件,目录现有 {} 个 skill(已失效 catalog 缓存并重扫)",
+                fileCount, skillCount);
+        ctx.ok(Json.obj().put("fileCount", fileCount).put("skillCount", skillCount));
+    }
+
+    /** 尽力删除临时文件(清理失败不掩盖原始异常)。 */
+    private static void deleteQuietly(Path path) {
+        try {
+            Files.deleteIfExists(path);
+        } catch (IOException ignore) {
+            // 忽略:temp 残留无害
+        }
     }
 
     /**

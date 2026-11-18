@@ -338,6 +338,9 @@ export interface PluginToolCallDetail {
   rowState?: 'queued' | 'running' | 'done' | 'error' | 'interrupted' | 'skipped'
   /** 调用耗时（ms）：结果载荷的权威 durationMs；运行中由宿主灌入实时读秒值。 */
   durationMs?: number
+  /** 调用开始时间点（毫秒，宿主时钟）：结果载荷的权威 startedAt；运行中由宿主
+   *  灌入瞬态 tool.started 值；老事件缺失（视图据此不渲染时间点行）。 */
+  startedAt?: number
 }
 
 /** 插件工具视图组件的 props（与核心 ToolViewProps 最小化对齐）。 */
@@ -1025,6 +1028,8 @@ export interface UiRegistry {
   /**
    * 结构化插入一枚胶囊：宿主单点编码 opaque token 后追加进当前激活任务草稿
    * （未绑定草稿时静默降级）。`kind`/`label` 为空时抛错。
+   * `atCaret: true` 时改为在输入框**光标处**插入（不补空格、聚焦编辑器），
+   * 供「引用到AI对话框」等需要落位光标位置、不打断当前输入上下文的动作使用。
    */
   appendComposerToken(input: {
     kind: string
@@ -1033,6 +1038,8 @@ export interface UiRegistry {
     payload?: Record<string, unknown>
     /** 追加前是否补空格分隔（默认 true）。 */
     spaced?: boolean
+    /** true = 插入到输入框光标处（聚焦编辑器，不补空格）；缺省 false = 追加到草稿末尾。 */
+    atCaret?: boolean
   }): void
   /**
    * 构造一枚胶囊的 opaque token 串并返回（与 `appendComposerToken` 同源单点编码，

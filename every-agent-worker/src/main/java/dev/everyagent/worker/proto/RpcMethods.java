@@ -18,6 +18,11 @@ public final class RpcMethods {
     public static final String TASK_AGENTS = "task.agents";
     public static final String TASK_CANCEL = "task.cancel";
     public static final String TASK_DELETE = "task.delete";
+    /**
+     * 任务数据目录路径拉取(前端任务列表右键「复制任务路径」):
+     * 返回 workspaces/&lt;workspaceId&gt;/tasks/&lt;taskId&gt;/ 在 worker 宿主上的绝对路径,按需随取随发。
+     */
+    public static final String TASK_DATA_DIR = "task.dataDir";
     /** 队列快照拉取：返回当前排队中的任务列表及位置。 */
     public static final String TASK_QUEUE_LIST = "task.queueList";
     /** 删除某条队列输入(参数 taskId, index)。 */
@@ -37,6 +42,10 @@ public final class RpcMethods {
     public static final String SKILL_LIST = "skill.list";
     /** 覆盖式设置某 skill 的暴露配置(参数 skillId + blacklist:[root,...] + whitelist:[root,...])。 */
     public static final String SKILL_EXPOSURE_SET = "skill.exposure.set";
+    /** 导出整个 skill 目录为 zip(按 fs.readRaw 同款分批语义回传;设置页「Skill 列表」导出按钮)。 */
+    public static final String SKILL_EXPORT = "skill.export";
+    /** 导入 skill zip(参数 contentBase64;解压进 skillsDir 后失效 SkillCatalog 缓存并广播 config.changed{keys:["skills"]})。 */
+    public static final String SKILL_IMPORT = "skill.import";
     public static final String WORKSPACES_LIST = "workspaces.list";
     public static final String WORKSPACES_ADD = "workspaces.add";
     public static final String WORKSPACES_REMOVE = "workspaces.remove";
@@ -54,6 +63,12 @@ public final class RpcMethods {
     public static final String FS_MKDIR = "fs.mkdir";
     public static final String FS_MOVE = "fs.move";
     public static final String FS_DELETE = "fs.delete";
+    /**
+     * 递归复制文件/目录(参数 from/to,工作区内相对路径;资源树「复制/粘贴」对标
+     * VSCode explorer 的 Copy/Paste):目标已存在拒绝(前端生成「- 副本」后缀重试),
+     * 目标位于源子树内拒绝(防递归复制爆盘),符号链接按链接自身复制(NOFOLLOW)。
+     */
+    public static final String FS_COPY = "fs.copy";
     /** 浏览目录(方案 B:列盘符/根,再逐层列子目录;不经 workspace 沙箱,依赖 worker 进程权限)。 */
     public static final String FS_BROWSE = "fs.browse";
     /** 按机器绝对路径读取文件(Raw 系列合法根校验,§5.5;文件标签页用户操作,非 AI 工具调用)。 */
@@ -62,6 +77,15 @@ public final class RpcMethods {
     public static final String FS_WRITE_RAW = "fs.writeRaw";
     /** 按机器绝对路径获取文件属性(Raw 系列合法根校验,§5.5;文件标签页用户操作专用)。 */
     public static final String FS_STAT_RAW = "fs.statRaw";
+    /**
+     * 按机器绝对路径做「定位-替换」写(Raw 系列合法根校验,§5.5;文件差异标签页「回滚」专用):
+     * 参数 {path, oldContent, newContent, deleteWhenEmpty?}。行尾宽容定位 oldContent 的唯一出现
+     * (与 update_file 工具同语义,未找到/出现多次一律 BAD_PARAMS),原位替换为按文件主导行尾
+     * 转写的 newContent 后 AtomicFiles 原子落盘;deleteWhenEmpty=true 且匹配段覆盖全文件、
+     * newContent 为空时删除文件(回滚「新建文件」)。前端语义 = 反向 update_file:oldContent=差异
+     * 新文本、newContent=差异旧文本,目标内容已被其他修改时不再命中 → 回滚失败,绝不按行号盲改。
+     */
+    public static final String FS_REPLACE_RAW = "fs.replaceRaw";
     /**
      * 注册 Raw 系列会话级用户放行目录(§5.5):前端收到 SANDBOX_DENIED 弹确认框、
      * 用户显式确认后调用;文件→取所在目录,放行粒度=目录 realpath,会话级内存态。

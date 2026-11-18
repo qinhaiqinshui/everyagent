@@ -3,6 +3,10 @@
 本目录是**唯一的程序附属文件目录**（仓库根 `runtime/`），随安装包分发到**程序根**下：
 
 - **IDE 开发态**：程序根 = 仓库根，worker 以 `./runtime` 按 `user.dir` 直接命中本目录。
+- **服务器部署态**：`deploy.py` 把本目录整体搬到 release 的 `worker/runtime/`（systemd
+  `WorkingDirectory`/compose `working_dir` 均为 worker 目录，同样按 `./runtime` 命中）；
+  本机缺 `bin/rg` 时按钉死版本自动下载 musl 静态版（见 `ensure_runtime_rg`），解包脚本
+  在服务端 `chmod 755` 钉回执行位（Windows 打包机 NTFS 无 POSIX 执行位）。
 - **desktop 打包态**：`electron-builder.yml` 的 `extraResources`（`from: ../runtime`）
   把本目录原样搬到 `<resourcesPath>/runtime`，与 web/backend/jre 同层；worker 的 cwd =
   `process.resourcesPath`，读 `./runtime` 命中同一落点。

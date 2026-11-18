@@ -240,6 +240,7 @@ public class TaskManager implements TaskInputHandler, InteractionServiceImpl.Sta
         dispatcher.register(RpcMethods.TASK_RUN, this::rpcTaskRun);
         dispatcher.register(RpcMethods.TASK_CANCEL, this::rpcTaskCancel);
         dispatcher.register(RpcMethods.TASK_DELETE, this::rpcTaskDelete);
+        dispatcher.register(RpcMethods.TASK_DATA_DIR, this::rpcTaskDataDir);
         // config.get / config.reload 已迁 ConfigRpcHandler(基础设施·配置面,自行注册)。
     }
 
@@ -1037,6 +1038,22 @@ public class TaskManager implements TaskInputHandler, InteractionServiceImpl.Sta
             case NOT_FOUND -> ctx.err(Rpc.ERR_NOT_FOUND, "任务不存在");
             case OK -> ctx.ok(Json.obj().put("taskId", taskId).put("deleted", true));
         }
+    }
+
+    /**
+     * task.dataDir:任务数据目录(workspaces/&lt;workspaceId&gt;/tasks/&lt;taskId&gt;/)在 worker 宿主上的
+     * 绝对路径。前端任务列表「复制任务路径」按需拉取——不进 TaskSummary wire,路径随取随发,
+     * worker 数据目录迁移后不会留下陈旧值。参数:taskId 必填;应答:{path}。
+     * 任务不存在 → NOT_FOUND(存在性口径与 task.agents 一致:目录在盘 或 内存任务/磁盘索引可见任一即存在)。
+     */
+    private void rpcTaskDataDir(RpcContext ctx) {
+        String taskId = ctx.strParam("taskId");
+        boolean known = store.taskDirExists(taskId) || tasks.containsKey(taskId) || diskTasks.containsKey(taskId);
+        if (!known) {
+            ctx.err(Rpc.ERR_NOT_FOUND, "task 不存在: " + taskId);
+            return;
+        }
+        ctx.ok(Json.obj().put("path", store.dirOf(taskId).toAbsolutePath().toString()));
     }
 
 

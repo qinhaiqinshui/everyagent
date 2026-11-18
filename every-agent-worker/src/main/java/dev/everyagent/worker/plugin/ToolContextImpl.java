@@ -117,6 +117,20 @@ public class ToolContextImpl implements ToolContext {
         return exec.agents();
     }
 
+    // 2026-11 修复:此二槽位曾漏委托(接口 default 返回 null),subagent 插件经
+    // createTools 拿到的 ctx 读档案恒空——轮内续跑回退低保真内存会话、跨轮续跑
+    // 静默退化为同 id 全新会话(2026-12 档案重建在产线从未生效的根因;
+    // PerCallToolCallingManager.PerCallToolExecutionContext 同款漏委托同批已补)。
+    @Override
+    public dev.everyagent.plugin.api.agent.ConversationArchive conversationArchive() {
+        return exec.conversationArchive();
+    }
+
+    @Override
+    public dev.everyagent.plugin.api.agent.CompressionSeed compressionSeed(String agentId) {
+        return exec.compressionSeed(agentId);
+    }
+
     // ── ToolContext 专属槽位 ──────────────────────────────────
 
     @Override

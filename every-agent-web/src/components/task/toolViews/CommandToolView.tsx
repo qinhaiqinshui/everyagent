@@ -23,6 +23,7 @@
 
 import { TerminalIcon } from '@/components/shared/AppGlyphs'
 import { EntryShell } from '@/components/task/entryViews/EntryShell'
+import { ToolStartMeta } from './ToolStartMeta'
 import { splitLeadingComment, toolStateClass, toolDurationText, toolDurationTintStyle } from './helpers'
 import type { AggregatedToolDetail, ToolViewDefinition, ToolViewProps } from './types'
 
@@ -94,6 +95,7 @@ function ExecEntry({ detail }: { detail: AggregatedToolDetail }) {
       }
     >
       <div className="nagent-tool__detail">
+          <ToolStartMeta startedAt={detail.startedAt} />
           {argLines.length ? (
             <div className="nagent-tool__result-block">
               <div className="nagent-tool__result-head">

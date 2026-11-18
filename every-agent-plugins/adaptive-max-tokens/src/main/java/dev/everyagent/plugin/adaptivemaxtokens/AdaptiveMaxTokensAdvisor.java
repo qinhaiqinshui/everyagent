@@ -38,9 +38,13 @@ import java.util.concurrent.atomic.AtomicLong;
  * agent 各自隔离;per-subscription 状态(lengthFlag)在 {@code Flux.defer} 闭包中创建,
  * 多任务并发安全。
  *
- * <p>重试自包装:重试 Flux 通过 {@link #doRetry} 方法创建,自带完整的 doOnNext /
- * filter / switchIfEmpty / onErrorResume 链,不依赖 {@code chain.copy(this)} 的重入行为
- * ——无论测试桩还是生产链,重试流都被正确包装。
+ * <p>重试链语义(2026-11 生产 bug 修复):Spring AI 2 的 DefaultAroundAdvisorChain 是
+ * Deque.pop() 一次性消费——同一 chain 对象第二次 nextStream 必抛
+ * {@code No StreamAdvisors available to execute}。升级重试必须经
+ * {@code original.copy(this)} 取 fresh 链(铁律与 TransientErrorRetryAdvisor /
+ * EmptyResponseRetryAdvisor 一致:copy 基底 = 本 advisor 收到的原始链,每次重试
+ * fresh copy)。重试 Flux 由 {@link #doRetry} 自包装(完整 doOnNext / filter /
+ * switchIfEmpty / onErrorResume 链),对生产链与一次性语义测试桩同样成立。
  */
 public class AdaptiveMaxTokensAdvisor implements StreamAdvisor {
 
@@ -100,7 +104,7 @@ public class AdaptiveMaxTokensAdvisor implements StreamAdvisor {
             currentBudget = baseMt;
         }
 
-        return doRetry(request, chain);
+        return doRetry(request, chain, chain);
     }
 
     /**
@@ -109,8 +113,12 @@ public class AdaptiveMaxTokensAdvisor implements StreamAdvisor {
      *
      * <p>per-subscription 状态(lengthFlag / lastCompletionTokens)在 {@code Flux.defer}
      * 闭包中创建,每次(重)订阅独立,多任务并发安全。
+     *
+     * @param chain    本次要执行的链(首次 = 原始链;重试 = {@code original.copy(this)} 出的 fresh 链)
+     * @param original copy 的基底,始终为本 advisor 收到的原始链(重订链铁律见类 javadoc)
      */
-    private Flux<ChatClientResponse> doRetry(ChatClientRequest request, StreamAdvisorChain chain) {
+    private Flux<ChatClientResponse> doRetry(ChatClientRequest request, StreamAdvisorChain chain,
+            StreamAdvisorChain original) {
         return Flux.defer(() -> {
             AtomicBoolean lengthFlag = new AtomicBoolean(false);
             AtomicLong lastCompletionTokens = new AtomicLong(0);
@@ -140,7 +148,7 @@ public class AdaptiveMaxTokensAdvisor implements StreamAdvisor {
                     .switchIfEmpty(Flux.defer(() -> {
                         if (lengthFlag.get()) {
                             // complete 路径触发升级。
-                            return upgradeAndRetry(request, chain, null);
+                            return upgradeAndRetry(request, original, null);
                         }
                         return Flux.empty();
                     }))
@@ -153,12 +161,12 @@ public class AdaptiveMaxTokensAdvisor implements StreamAdvisor {
                         checkLowWatermark(lastCompletionTokens.get());
                         if (lengthFlag.get()) {
                             // error 路径触发升级(Guard 的帧先到,flag 已置位)。
-                            return upgradeAndRetry(request, chain, error);
+                            return upgradeAndRetry(request, original, error);
                         }
                         // 400 路径:无 length 帧但 provider 返回 400(拒绝超出模型真实上限),
                         // 触发回退重试。
                         if (is400Error(error) && attempt > 0) {
-                            return upgradeAndRetry(request, chain, error);
+                            return upgradeAndRetry(request, original, error);
                         }
                         // 非 length 错误原样透传。
                         return Flux.error(error);
@@ -176,13 +184,14 @@ public class AdaptiveMaxTokensAdvisor implements StreamAdvisor {
      *   <li>newBudget = min(base × multiplier^attempt, ceiling)</li>
      *   <li>若超限或已达 ceiling → 抛 AdaptiveBudgetExhaustedException</li>
      *   <li>改写 prompt options 的 maxTokens</li>
-     *   <li>通过 {@link #doRetry} 自包装重试 Flux</li>
+     *   <li>经 {@code original.copy(this)} 取 fresh 链重订({@link #doRetry} 自包装)</li>
      * </ol>
      *
+     * @param original copy 的基底,始终为本 advisor 收到的原始链(重订链铁律见类 javadoc)
      * @param error complete 路径为 null,error 路径为触发异常
      */
     private Flux<ChatClientResponse> upgradeAndRetry(ChatClientRequest request,
-            StreamAdvisorChain chain, Throwable error) {
+            StreamAdvisorChain original, Throwable error) {
         ExecContext exec = a.execution();
         // 400 回退:重试轮收到 400 类错误(provider 拒绝超出模型真实上限),
         // 一次性回退到触发升级前的上一个 budget 并停止继续上调。
@@ -195,7 +204,7 @@ public class AdaptiveMaxTokensAdvisor implements StreamAdvisor {
                     exec.subjectId(), a.agentId(), error.getMessage(), currentBudget);
             // 用回退后的 budget 重试一次。
             ChatClientRequest newRequest = rewriteMaxTokens(request, currentBudget);
-            return doRetry(newRequest, chain);
+            return doRetry(newRequest, original.copy(this), original);
         }
 
         // 已因 400 回退,不再上调。
@@ -226,9 +235,10 @@ public class AdaptiveMaxTokensAdvisor implements StreamAdvisor {
                 exec.subjectId(), a.agentId(), currentBudget, attempt, cfg.maxRetries());
 
         ChatClientRequest newRequest = rewriteMaxTokens(request, currentBudget);
-        // 自包装重试:doRetry 自带完整 doOnNext / filter / switchIfEmpty / onErrorResume 链,
-        // 不依赖 chain.copy(this) 的重入行为。
-        return doRetry(newRequest, chain);
+        // 重订链铁律(2026-11 生产 bug 修复):DefaultAroundAdvisorChain 一次性消费,
+        // 重试必须经 original.copy(this) 取 fresh 链——旧实现复用已消费的 chain,
+        // 升级首轮即抛 No StreamAdvisors available to execute。
+        return doRetry(newRequest, original.copy(this), original);
     }
 
     /**

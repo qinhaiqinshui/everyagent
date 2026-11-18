@@ -1,6 +1,6 @@
 /* Markdown 渲染（react-markdown）的结构性修正。
  * 基础样式走 buildMarkdownComponents 内联；此处仅处理内联样式难以表达的
- * 后代选择器场景。根容器需带 .md-root 类名。 */
+ * 后代/伪类选择器场景。根容器需带 .md-root 类名。 */
 
 /* 嵌套列表：li 内的 ul/ol 收紧上下间距 */
 .md-root li > ul,
@@ -12,4 +12,82 @@
  * 去掉段落 margin，避免与 li 自身间距叠加。 */
 .md-root li > p {
   margin: 0;
+}
+
+/* 表格列分隔线：除末列外单元格画右竖线（末列右缘紧贴 wrap 边框，重复画会双线）。
+ * 带边框的表头/吸顶克隆表共用 .md-table 类——克隆经 portal 挂在 body 下
+ * （不在 .md-root 内），故选择器直接锚定 .md-table。border-collapse:collapse
+ * 下相邻单元格共享同一条竖线，不会加倍。 */
+.md-table th:not(:last-child),
+.md-table td:not(:last-child) {
+  border-right: 1px solid var(--border-light);
+}
+
+/* 表格外把手栏(TableBlock 渲染的顶栏/左栏,经 markdown 渲染流全局生效):
+ * 列宽 ↔ 在顶栏每列右缘,行高 ⇕ 在左栏每行底缘;悬停高亮,双击重置。
+ * 把手图标仅为抓手提示,拖动几何与图标解耦(原点/边界由布局引擎实测)。 */
+.md-table-gutter-handle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  line-height: 1;
+  border-radius: 4px;
+  color: color-mix(in srgb, var(--text-muted, #888) 78%, transparent);
+  user-select: none;
+  touch-action: none;
+  z-index: 3;
+}
+
+.md-table-gutter-handle:hover {
+  background: var(--bg-tertiary);
+  color: var(--accent-blue, #3b82f6);
+}
+
+.md-table-gutter-handle--col {
+  cursor: col-resize;
+}
+
+.md-table-gutter-handle--row {
+  cursor: row-resize;
+}
+
+/* 表格外浮动工具栏(TableBlock 绝对定位于表格框右上,不占布局):
+ * 「复制内容」写剪贴板,「调整表格」切换把手栏;显隐由布局引擎驱动
+ * (表头单击固定 + 桌面端悬停)。容器视觉走内联样式,此处仅悬停/激活态。 */
+.md-table-toolbar-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+
+.md-table-toolbar-button:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+/* 「调整表格」激活态(把手栏可见):按钮高亮,aria-pressed 同步。 */
+.md-table-toolbar-button--active,
+.md-table-toolbar-button--active:hover {
+  background: color-mix(in srgb, var(--accent-blue, #3b82f6) 16%, transparent);
+  color: var(--accent-blue, #3b82f6);
+}
+
+/* 单击单元格/把手:浏览器默认 :focus-visible outline 偏粗(移动端尤显),
+ * 收紧为 2px 细环;键盘导航(Tab)仍保留可见焦点。 */
+.md-table th:focus-visible,
+.md-table td:focus-visible,
+.md-table-gutter-handle:focus-visible {
+  outline: 2px solid var(--accent-blue, #3b82f6);
+  outline-offset: -2px;
 }

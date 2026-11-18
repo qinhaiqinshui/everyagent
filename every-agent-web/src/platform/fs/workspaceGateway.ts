@@ -293,6 +293,21 @@ export const workspaceGateway = {
     await this.writeBytes(workspaceRoot, targetPath, content)
   },
 
+  /**
+   * 递归复制文件/目录(fs.copy 原语,资源树「复制/粘贴」对标 VSCode explorer):
+   * from/to 均为工作区相对路径,to 为完整目标路径(含新名)。目标已存在、目标位于
+   * 源子树内 → RPC 错误(前端生成「- 副本」后缀后重试);符号链接按链接自身复制。
+   */
+  async copy(workspaceRoot: string, from: string, to: string): Promise<void> {
+    wireFsChanged()
+    const src = normalizeWorkspaceRelativePath(from)
+    const dst = normalizeWorkspaceRelativePath(to)
+    await rpcForWorkspace(workspaceRoot, 'fs.copy', { from: src, to: dst }, {
+      timeoutMs: 120_000,
+    })
+    emitFileChanged(workspaceRoot, dst, 'modify', false)
+  },
+
   async rename(workspaceRoot: string, oldPath: string, newPath: string): Promise<void> {
     wireFsChanged()
     const from = normalizeWorkspaceRelativePath(oldPath)
@@ -499,6 +514,47 @@ export const workspaceGateway = {
    */
   async writeTextFileRaw(workspaceRoot: string, path: string, content: string): Promise<void> {
     await this.writeBytesRaw(workspaceRoot, path, textToBytes(content))
+  },
+
+  /**
+   * 按机器绝对路径做「定位-替换」写(文件差异标签页「回滚」专用;worker fs.replaceRaw,
+   * Raw 系列合法根校验 §5.5,越界经确认放行重试同 writeBytesRaw)。
+   *
+   * 语义 = 反向 update_file:在文件全文中行尾宽容地定位 oldContent 的**唯一**出现,
+   * 原位替换为按文件主导行尾转写的 newContent(替换区间外逐字节保留,原子落盘);
+   * 未找到(=该处已被其他修改)或出现多次均抛 RPC 错误,绝不按行号盲改。
+   *
+   * @param opts.deleteWhenEmpty 替换结果为「整个文件被替换为空」时删除文件
+   *   (回滚「新建文件」变更),应答 deleted=true。
+   * @returns {deleted} 是否以删除文件收尾。
+   */
+  async replaceTextRaw(
+    workspaceRoot: string,
+    path: string,
+    oldContent: string,
+    newContent: string,
+    opts?: { deleteWhenEmpty?: boolean },
+  ): Promise<{ deleted: boolean }> {
+    wireFsChanged()
+    const absPath = resolveMachinePath(workspaceRoot, path)
+    const workerId = workspaceRegistry.workerIdOfRoot(workspaceRoot) ?? workspaceRegistry.primaryWorkerId()
+    if (!workerId) throw new Error('无法确定该文件所属 worker(工作区未注册或 worker 离线)')
+    const normalized = normalizeWorkspaceRelativePath(path)
+    const doReplace = async (): Promise<{ deleted: boolean }> => {
+      const result = await hubSession.rpcTo(workerId, 'fs.replaceRaw', {
+        path: absPath,
+        oldContent,
+        newContent,
+        ...(opts?.deleteWhenEmpty ? { deleteWhenEmpty: 'true' } : {}),
+      }, {
+        timeoutMs: 120_000,
+      }) as { deleted?: boolean }
+      const deleted = result.deleted === true
+      // 回滚成功即磁盘事实变更:发领域事件让打开中的文件标签页/文件树刷新
+      emitFileChanged(workspaceRoot, normalized, deleted ? 'delete' : 'modify', false)
+      return { deleted }
+    }
+    return withRawAccessAuthorization({ workerId, path: absPath, op: 'write' }, grantRawRoot, doReplace)
   },
 
   /**

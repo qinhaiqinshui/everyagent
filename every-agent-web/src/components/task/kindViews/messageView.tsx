@@ -86,7 +86,9 @@ function ToolCallsBlock({
     const state = rowStateOf(results[idx], startedByCall[idx], interrupted)
     const durationMs = results[idx]?.durationMs
       ?? (state === 'running' && startedByCall[idx] ? Math.max(0, now - startedByCall[idx].startedAt) : undefined)
-    return { ...detailOfCall(toolCalls[idx], results[idx]), rowState: state, durationMs }
+    // 开始时间点:结果载荷权威 startedAt;运行中(结果未到)回退瞬态 tool.started 记录值。
+    const startedAt = results[idx]?.startedAt ?? startedByCall[idx]?.startedAt
+    return { ...detailOfCall(toolCalls[idx], results[idx]), rowState: state, durationMs, startedAt }
   }
 
   // 单调用:无包装,直接渲染视图。

@@ -24,4 +24,17 @@ public interface SlashTokenService {
 
     /** 该任务是否挂了指定 kind 的任务级 token（kind 见各插件的 token 常量，如 ai.review）。 */
     boolean hasKind(String taskId, String kind);
+
+    /**
+     * 移除该任务中所有指定 kind 的任务级 token（消费式一次性命令用，如「压缩上下文」）。
+     *
+     * <p>默认实现返回 false（不支持移除），实现方按需覆写。
+     *
+     * @param taskId 任务 ID
+     * @param kind   要移除的 token kind
+     * @return true = 有 token 被移除；false = 无匹配 token 或不支持
+     */
+    default boolean removeKind(String taskId, String kind) {
+        return false;
+    }
 }

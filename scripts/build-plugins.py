@@ -162,11 +162,20 @@ def filter_plugins(plugins: list, only: list, exclude: list, java_only: bool, we
 # 工具链定位
 # ---------------------------------------------------------------------------
 def resolve_maven(explicit: str | None) -> str:
+    def _resolve_by_which(candidate: str) -> str:
+        # 裸命令名(如 deploy.py 透传的默认 "mvn")须经 PATHEXT 解析:Windows 上 maven 是
+        # mvn.cmd,run() 用 list + CreateProcess(非 shell)只补 .exe 不认 .cmd,裸名会
+        # WinError 2「系统找不到指定的文件」;shutil.which 按 PATHEXT 命中 mvn.cmd,
+        # Unix/Linux 上 which 对真名原样返回;已是存在的文件路径(绝对/显式指定)则直接用。
+        if Path(candidate).is_file():
+            return candidate
+        return shutil.which(candidate) or candidate
+
     if explicit:
-        return explicit
+        return _resolve_by_which(explicit)
     env = os.environ.get("DEPLOY_MVN")
     if env:
-        return env
+        return _resolve_by_which(env)
     maven_home = os.environ.get("MAVEN_HOME")
     if maven_home:
         for name in ("mvn.cmd", "mvn"):

@@ -22,6 +22,9 @@
  *      资源管理器文件节点右键「引用到AI对话框」：复用宿主 `@` 文件引用的
  *      kind=system.workspace_file 生成等价胶囊（提交解析、胶囊点击打开文件均由宿主
  *      核心内置，本插件零重复实现；仅文件节点显示，与 `@` 引用主用途一致）；
+ *      落位策略与 ①) 不同——①) 恒开新任务草稿标签页追加，②) 优先写入**当前激活的
+ *      任务标签页**（atCaret=true：插入到输入框光标所在位置，不新开标签），
+ *      没有激活任务标签页时才打开新任务草稿标签页（与 ①) 同范式带 workspace 预设）；
  *   3) ui.composer_chip_actions → ctx.ui.registerComposerChipAction()（file.selection）
  *      点击选区引用胶囊：切回原文件标签并定位选区起始行（经 ctx.ui.openFileTab）。
  */
@@ -87,21 +90,33 @@ const selectionReferencePlugin: PluginModule = {
     //    - 提交时宿主内置解析器把它还原为「 工作区相对路径 」明文交给 AI（不注入文件内容）；
     //    - 点击胶囊时宿主核心注册的激活行为打开该文件标签（先注册者胜，插件无需也不应注册）。
     //    payload 口径见 token.ts buildWorkspaceFileTokenInput（节点路径 → @ 引用三字段）。
+    //    落位策略（与 ①) 编辑器选区右键**刻意不同**）：①) 恒打开新任务草稿标签页追加到
+    //    草稿末尾；本项优先写入「当前激活的任务标签页」，atCaret=true 插入到输入框
+    //    **光标所在位置**（不是文本末尾），不打断用户正在组织的输入；仅当当前激活
+    //    标签不是任务标签（没有正在对话的任务页）时，才打开新任务草稿标签页承接。
     const fileExplorerAction: FileExplorerAction = {
       id: 'selection-reference.file-reference-to-ai',
       label: '引用到AI对话框',
       isVisible: (c) => c.type === 'file',
       invoke: (c) => {
         const tokenInput = buildWorkspaceFileTokenInput(c.path, c.name)
-        // 先打开新草稿任务标签页，再把文件引用胶囊写入该标签页草稿。
-        // workspace 预设 = 节点所属工作区根（与编辑器右键同范式，见 ① 内注释）。
-        ctx.ui.openTab('task', { taskId: '__draft__', workspace: c.workspaceRoot }, '新任务')
-        ctx.ui.appendComposerToken({
+        const appendToken = (atCaret: boolean) => ctx.ui.appendComposerToken({
           kind: WORKSPACE_FILE_KIND,
           label: tokenInput.label,
           summary: tokenInput.summary,
           payload: { ...tokenInput.payload },
+          atCaret,
         })
+        if (ctx.ui.getActiveTab()?.tabType === 'task') {
+          // 当前激活的就是任务标签页：光标处插入，不新开标签。
+          appendToken(true)
+          return
+        }
+        // 没有激活的任务标签页：先打开新草稿任务标签页，再把文件引用胶囊写入
+        // 该标签页草稿（新页 TaskChat 可能尚未挂载，由宿主队列兜底，bridge 注入时
+        // 自动 flush）。workspace 预设 = 节点所属工作区根（与编辑器右键同范式，见 ①）。
+        ctx.ui.openTab('task', { taskId: '__draft__', workspace: c.workspaceRoot }, '新任务')
+        appendToken(true)
       },
     }
     disposables.push(ctx.ui.registerFileExplorerAction(fileExplorerAction))

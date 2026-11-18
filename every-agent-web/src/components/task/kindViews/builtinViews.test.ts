@@ -26,12 +26,16 @@ import { UserMessageView, buildUserMessageReplaySegments } from './userMessageVi
 import { ToolResultView } from './toolResultView'
 
 // 工具视图直挂载(FileToolEntry 等)消费壳层 context;测试环境无真实 Provider,
-// hook 级 mock 最小桩(openGlobalFileTab/showToast 均 no-op)。
+// hook 级 mock 最小桩(openGlobalFileTab/showToast 均 no-op)。消息正文链接导航
+// (MarkdownDisplay → useMarkdownLinkNav)消费可选版本,无壳层时降级为不接管,
+// mock 返回 null 保持该降级路径。
 vi.mock('@/components/app/WorkspaceShellContext', () => ({
   useWorkspaceShell: () => ({ openGlobalFileTab: () => {} }),
+  useWorkspaceShellOptional: () => null,
 }))
 vi.mock('@/components/app/AppUiContext', () => ({
   useAppUi: () => ({ toasts: [], showToast: () => {}, removeToast: () => {} }),
+  useAppUiOptional: () => null,
 }))
 import { FallbackView, getKindView } from './registry'
 

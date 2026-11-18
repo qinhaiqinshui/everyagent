@@ -79,6 +79,15 @@ public class WorkerProperties implements WorkerConfig {
      * 不被执行,2026-10 t_6342)。首帧后 chunk 间隔上限取 model-timeout-ms。≤0 关闭。
      */
     private long modelFirstChunkTimeoutMs = 120_000;
+    /**
+     * agent 链路无活动诊断阈值(ms):一次 run() 期间超过该时长无任何 agent 事件
+     * (delta/thinking/message/usage/tool.started/tool.result/retry...即 {@link dev.everyagent.worker.agent.AgentEntity}
+     * 的 agent 级 emitter 发射的任意事件),打 WARN 诊断日志(实体状态 + 现场抓取指引)。
+     * <b>纯诊断不打断</b>(2026-11 t_145g 静默挂起复现排障:续体丢失类缺陷一旦兜底中断,
+     * 现场即被销毁,根因永远查不到;故意保留挂起现场等 jcmd 抓转储)。
+     * waiting-user 态(挂 ask 等用户)豁免,由 ask-timeout-ms 兜底。≤0 关闭。默认 15 分钟。
+     */
+    private long agentInactivityTimeoutMs = 900_000;
     /** 进程沙箱配置(原生 Windows:Job Object + Restricted Token;其他平台安全降级)。 */
     private Sandbox sandbox = new Sandbox();
     /** 原生 git 执行配置(git.* RPC 由宿主原生 git argv 直传执行,架构 §7.12)。 */
@@ -1267,6 +1276,14 @@ public class WorkerProperties implements WorkerConfig {
 
     public void setModelFirstChunkTimeoutMs(long modelFirstChunkTimeoutMs) {
         this.modelFirstChunkTimeoutMs = modelFirstChunkTimeoutMs;
+    }
+
+    public long getAgentInactivityTimeoutMs() {
+        return agentInactivityTimeoutMs;
+    }
+
+    public void setAgentInactivityTimeoutMs(long agentInactivityTimeoutMs) {
+        this.agentInactivityTimeoutMs = agentInactivityTimeoutMs;
     }
 
     /** 进程沙箱配置。 */

@@ -32,6 +32,12 @@ export interface ShellBridge {
 export interface ComposerBridge {
   appendText(text: string): void
   setRawContent(rawContent: string): void
+  /**
+   * 在输入框**光标处**插入一段草稿内容（opaque token 串或纯文本），聚焦编辑器；
+   * 编辑器尚未挂载时退化为末尾追加。与 appendText（恒定末尾追加）相对，
+   * 供「引用到AI对话框」等需要落位光标位置的宿主动作使用。
+   */
+  insertAtCaret(rawContent: string): void
 }
 
 let shellBridge: ShellBridge | null = null
@@ -42,8 +48,15 @@ export function setShellBridge(bridge: ShellBridge | null): void {
   shellBridge = bridge
 }
 
-/** 待写入的草稿文本队列：bridge 尚未注入时（新标签页刚打开、TaskChat 未挂载）暂存，待注入时按序 flush。 */
-const pendingComposerTexts: string[] = []
+/** 待写入的草稿队列项：bridge 尚未注入时（新标签页刚打开、TaskChat 未挂载）暂存，待注入时按序 flush。 */
+interface PendingComposerEntry {
+  /** 草稿文本（可含 opaque token 串）。 */
+  text: string
+  /** true = 注入后经 insertAtCaret 落位光标处；false = appendText 追加到末尾。 */
+  atCaret: boolean
+}
+
+const pendingComposerTexts: PendingComposerEntry[] = []
 
 /**
  * 追加草稿文本：桥接就绪直接写入；未就绪则排队，待 setComposerBridge 注入时按序 flush。
@@ -56,21 +69,45 @@ const pendingComposerTexts: string[] = []
  * 此刻新任务页尚未激活，bridge 仍指旧任务页 → 引用落进旧草稿、新标签页为空）。
  * 因此仅当「当前激活标签是任务标签」（bridge 必属该激活页）时才直写，否则一律排队，
  * 待目标任务页激活注入 bridge 时 flush。
+ *
+ * 激活切换守卫（invalidateComposerBridge）：上面「镜像仍是 task」的判据在
+ * openTab 切换标签的**同一同步调用栈**内是过时的——镜像由 Layout 的 effect 在
+ * React commit 后才更新，此刻它还指向切换前的旧任务标签，直写仍会落进旧草稿。
+ * 故宿主壳层在激活标签真正切换（openTab/点选/关闭）的同步路径上先作废桥，
+ * 让紧跟其后的 append 一律排队，待新激活任务页注入桥时 flush。
  */
-export function appendComposerTextQueued(text: string): void {
+export function appendComposerTextQueued(text: string, options?: { atCaret?: boolean }): void {
+  const atCaret = options?.atCaret === true
   if (composerBridge && activeTabMirror.current?.tabType === 'task') {
-    composerBridge.appendText(text)
+    if (atCaret) {
+      composerBridge.insertAtCaret(text)
+    } else {
+      composerBridge.appendText(text)
+    }
     return
   }
-  pendingComposerTexts.push(text)
+  pendingComposerTexts.push({ text, atCaret })
+}
+
+/**
+ * 作废当前草稿桥引用（不清待写队列）：宿主壳层在激活标签切换/关闭的同步路径上调用。
+ * 桥此后由新激活任务页的 TaskChat 重新注入（注入即 flush 队列），窗口期内 append
+ * 一律走排队路径，杜绝「桥仍指向已隐藏/已卸载旧任务页」的陈旧直写。
+ */
+export function invalidateComposerBridge(): void {
+  composerBridge = null
 }
 
 /** 由宿主 TaskChat 在挂载时注入草稿桥接能力；传 null 卸载。注入时 flush 已排队的草稿文本。 */
 export function setComposerBridge(bridge: ComposerBridge | null): void {
   composerBridge = bridge
   if (bridge && pendingComposerTexts.length > 0) {
-    for (const text of pendingComposerTexts.splice(0)) {
-      bridge.appendText(text)
+    for (const entry of pendingComposerTexts.splice(0)) {
+      if (entry.atCaret) {
+        bridge.insertAtCaret(entry.text)
+      } else {
+        bridge.appendText(entry.text)
+      }
     }
   }
 }

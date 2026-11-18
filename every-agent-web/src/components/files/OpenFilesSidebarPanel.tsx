@@ -17,6 +17,8 @@ import { copyText } from '@/utils/clipboard'
 import { normalizeWorkspaceRelativePath, toBusinessAbsolutePath } from '@/platform/fs/pathUtils'
 import { workspaceGateway } from '@/platform/fs/workspaceGateway'
 import { workspaceExplorerCommandService } from '@/services/workspaceExplorerCommandService'
+import { workspaceClipboardService, type WorkspaceClipboardMode } from '@/services/workspaceClipboardService'
+import { allocatePasteName } from '@/utils/duplicateName'
 import {
   countPlainTextChars,
   countTotalChars,
@@ -29,7 +31,7 @@ import ConfirmDialog from '../shared/ConfirmDialog'
 import PropertiesDialog, { type PropertyItem } from '../shared/PropertiesDialog'
 import { buildWorkspacePropertyItems, getWorkspaceDisplayName } from '../shared/workspacePropertyUtils'
 import MoreActionsButton, { type MoreActionItem } from '../shared/MoreActionsButton'
-import { CopyIcon, DownloadIcon, FilePlusIcon, FileTextIcon, FolderArrowOutIcon, FolderPlusIcon, MagnifierCheckIcon, UploadIcon, ChevronDownIcon, TerminalIcon } from '../shared/AppGlyphs'
+import { CopyIcon, DownloadIcon, FilePlusIcon, FileTextIcon, FolderArrowOutIcon, FolderPlusIcon, MagnifierCheckIcon, PasteIcon, ScissorsIcon, UploadIcon, ChevronDownIcon, TerminalIcon } from '../shared/AppGlyphs'
 import SidebarScrollArea from '../shared/SidebarScrollArea'
 import WorkspaceExplorerTree from './WorkspaceExplorerTree'
 import WorkspacePathPicker from '@/components/shared/ui/WorkspacePathPicker'
@@ -43,15 +45,84 @@ import type {
 } from '@/types/workspaceExplorer'
 
 /**
+ * 工作区分组的快捷键处理句柄(OpenFilesSidebarPanel 顶层统一持有注册表,
+ * 全局 keydown 路由到「最近活跃分组」——多工作区分组并存时避免重复响应)。
+ */
+type ExplorerGroupHandlers = {
+  /** 复制/剪切当前选中集合;返回 false = 无选中(快捷键放行浏览器默认行为)。 */
+  copySelection: (mode: WorkspaceClipboardMode) => boolean
+  /** 粘贴到当前选中锚点(目录→目录内、文件→所在目录、无选中→工作区根);
+   * 返回 false = 文件剪贴板空(快捷键放行)。 */
+  pasteIntoSelection: () => boolean
+}
+
+/**
  * 打开的文件侧栏面板(多工作区分组版,架构 §5.9/D16)。
  * 面板只负责:跟踪工作区注册表 → 按注册工作区逐组渲染资源管理器;
  * 每组(WorkspaceGroupPanel)独立持有树/搜索/对话框状态,文件操作全部落本组工作区。
+ *
+ * 顶层另持 explorer 快捷键路由(对标 VSCode explorer 焦点时的 Ctrl+C/X/V):
+ * files 面板激活时,复制/剪切路由到最近被操作的分组,粘贴路由到剪贴板源工作区分组。
  */
 export default function OpenFilesSidebarPanel() {
-  const { workspaceFileLocateRequest } = useWorkspaceShell()
+  const { workspaceFileLocateRequest, activeSidebarPanelId } = useWorkspaceShell()
   const [registry, setRegistry] = React.useState(workspaceRegistry.current)
 
   React.useEffect(() => workspaceRegistry.subscribe(setRegistry), [])
+
+  // 分组处理器注册表(root → handlers ref,ref 保证子组件回调始终最新)与最近活跃分组。
+  const groupHandlersRef = React.useRef(new Map<string, React.MutableRefObject<ExplorerGroupHandlers>>())
+  const lastActiveRootRef = React.useRef<string | null>(null)
+
+  const registerGroup = React.useCallback((root: string, handlerRef: React.MutableRefObject<ExplorerGroupHandlers>) => {
+    groupHandlersRef.current.set(root, handlerRef)
+  }, [])
+  const unregisterGroup = React.useCallback((root: string) => {
+    groupHandlersRef.current.delete(root)
+    if (lastActiveRootRef.current === root) lastActiveRootRef.current = null
+  }, [])
+  const markActiveRoot = React.useCallback((root: string) => {
+    lastActiveRootRef.current = root
+  }, [])
+
+  /**
+   * explorer 快捷键(对标 VSCode 资源管理器聚焦时的行为,仅 files 面板激活时生效):
+   * - Ctrl+C / Ctrl+X:把当前分组选中集合放入文件剪贴板(复制/剪切);
+   * - Ctrl+V:粘贴到选中锚点(目录→目录内、文件→所在目录、无选中→工作区根)。
+   * 让路规则(不抢系统行为):焦点在输入框/编辑区一律放行;页面存在文本选区时
+   * Ctrl+C/X 放行(复制文本优先);无文件选中/剪贴板空时放行默认行为。
+   */
+  React.useEffect(() => {
+    const isEditableTarget = (el: Element | null): boolean => {
+      if (!el) return false
+      const tag = el.tagName
+      return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (el as HTMLElement).isContentEditable
+    }
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (activeSidebarPanelId !== 'files') return
+      if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return
+      const key = e.key.toLowerCase()
+      if (key !== 'c' && key !== 'x' && key !== 'v') return
+      if (isEditableTarget(document.activeElement)) return
+      if ((key === 'c' || key === 'x') && (window.getSelection()?.toString() ?? '') !== '') return
+      const groups = groupHandlersRef.current
+      if (groups.size === 0) return
+      const routeRoot = lastActiveRootRef.current != null && groups.has(lastActiveRootRef.current)
+        ? lastActiveRootRef.current
+        : Array.from(groups.keys())[0]
+      const handlers = groups.get(routeRoot)?.current
+      if (!handlers) return
+      if (key === 'v') {
+        if (!handlers.pasteIntoSelection()) return
+      } else if (!handlers.copySelection(key === 'c' ? 'copy' : 'cut')) {
+        return
+      }
+      e.preventDefault()
+      e.stopPropagation()
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [activeSidebarPanelId])
 
   const entries = registry?.workspaces ?? []
   // 定位请求按工作区分发;请求未带工作区时落首个分组(单工作区场景行为不变)。
@@ -69,6 +140,9 @@ export default function OpenFilesSidebarPanel() {
               entry={entry}
               isDefault={entry.root === registry?.defaultRoot}
               locateRequest={locateRoot === entry.root ? workspaceFileLocateRequest : null}
+              registerGroup={registerGroup}
+              unregisterGroup={unregisterGroup}
+              markActiveRoot={markActiveRoot}
             />
           ))}
         </div>
@@ -82,10 +156,19 @@ function WorkspaceGroupPanel({
   entry,
   isDefault,
   locateRequest,
+  registerGroup,
+  unregisterGroup,
+  markActiveRoot,
 }: {
   entry: WorkspaceEntry
   isDefault: boolean
   locateRequest: { filePath: string; requestedAt: number } | null
+  /** 向面板顶层注册本分组快捷键句柄(顶层 keydown 路由用;ref 直通最新回调)。 */
+  registerGroup: (root: string, handlerRef: React.MutableRefObject<ExplorerGroupHandlers>) => void
+  /** 注销本分组(工作区从注册表移除/卸载时)。 */
+  unregisterGroup: (root: string) => void
+  /** 标记本分组为最近活跃(选中变化时上报,快捷键路由目标)。 */
+  markActiveRoot: (root: string) => void
 }) {
   const workspaceRoot = entry.root
   const {
@@ -118,6 +201,14 @@ function WorkspaceGroupPanel({
   const applySelection = React.useCallback((paths: Set<string>) => {
     setSelectedPaths(paths)
   }, [])
+  /**
+   * 带活跃标记的选中更新:选中变化即把本分组上报为最近活跃分组(快捷键路由目标,
+   * 多工作区分组并存时 Ctrl+C/X/V 只命中用户正在操作的那个分组)。
+   */
+  const applySelectionTracked = React.useCallback((paths: Set<string>) => {
+    markActiveRoot(workspaceRoot)
+    applySelection(paths)
+  }, [applySelection, markActiveRoot, workspaceRoot])
   const [expandedPaths, setExpandedPaths] = React.useState<Set<string>>(new Set([WORKSPACE_EXPLORER_ROOT_LABEL]))
   const expandedPathsRef = React.useRef(expandedPaths)
   expandedPathsRef.current = expandedPaths
@@ -163,6 +254,15 @@ function WorkspaceGroupPanel({
   const textStatsRequestKeyRef = React.useRef<string | null>(null)
   /** 工作区属性弹窗:当前查看属性的工作区条目;null = 关闭。 */
   const [workspacePropertiesTarget, setWorkspacePropertiesTarget] = React.useState<WorkspaceEntry | null>(null)
+  /** 文件剪贴板订阅态(复制/剪切/粘贴按钮可用态与剪切行半透明视觉的驱动源)。 */
+  const [clipboard, setClipboard] = React.useState(workspaceClipboardService.get())
+  React.useEffect(() => workspaceClipboardService.subscribe(setClipboard), [])
+  /** 粘贴可用:剪贴板非空且与本工作区同源(跨工作区文件系统不在同一 worker,不支持直接粘贴)。 */
+  const pasteEnabled = Boolean(clipboard && clipboard.workspaceRoot === workspaceRoot && clipboard.paths.length > 0)
+  /** 剪切中的路径集合(仅本工作区;对标 VSCode:剪切项半透明,粘贴/清空后恢复)。 */
+  const cutPaths = clipboard?.mode === 'cut' && clipboard.workspaceRoot === workspaceRoot ? clipboard.paths : null
+  /** 粘贴执行中标记:防按钮/快捷键重复触发并发复制。 */
+  const [pasting, setPasting] = React.useState(false)
 
   const reloadTree = React.useCallback(async (includeInternalFiles: boolean, keepExpanded = false) => {
     setReloading(true)
@@ -655,9 +755,144 @@ function WorkspaceGroupPanel({
     return moved.length
   }, [expandDirChildren, reloadTree, renameFileTabs, showInternalFiles, workspaceRoot])
 
+  /**
+   * 复制/剪切(对标 VSCode explorer Copy/Cut,作用于选中集合):
+   * 被操作行不在当前选中集合内时,选中先归一为该行(右键集合外行/行内按钮点击场景);
+   * 落入应用内文件剪贴板(不碰系统剪贴板),剪切项在树中半透明显示。
+   */
+  const copyNodesFromTarget = React.useCallback((mode: WorkspaceClipboardMode, target: WorkspaceExplorerContextTarget) => {
+    let paths = Array.from(selectionRef.current)
+    if (!(paths.length > 0 && selectionRef.current.has(target.path))) {
+      paths = [target.path]
+      selectionRef.current = new Set(paths)
+      applySelection(new Set(paths))
+    }
+    workspaceClipboardService.set(mode, workspaceRoot, dedupeWorkspacePaths(paths))
+    showToast(mode === 'copy' ? `已复制 ${paths.length} 项` : `已剪切 ${paths.length} 项`, 'success')
+  }, [applySelection, showToast, workspaceRoot])
+
+  /**
+   * 粘贴剪贴板内容到目标目录(对标 VSCode explorer Paste):
+   * - 剪切 = 移动(复用 movePathsToDirectory 落盘+收尾路径),粘贴后清空剪贴板;
+   * - 复制 = 逐项探测目标名:同名自动生成「名称 - 副本.ext」递增后缀(VSCode 中文包
+   *   同款文案),探测-落盘竞态冲突时换名重试一次,仍失败计失败项继续后续条目;
+   * - 粘贴后展开目标目录并选中粘贴产物(新副本即时定位)。
+   * 返回实际粘贴数;剪贴板空/跨工作区时直接提示并返回(不抛错)。
+   */
+  const pasteIntoDirectory = React.useCallback(async (targetDir: string): Promise<void> => {
+    if (pasting) return
+    const clip = workspaceClipboardService.get()
+    if (!clip || clip.paths.length === 0) {
+      showToast('剪贴板为空,请先复制或剪切文件', 'info')
+      return
+    }
+    if (clip.workspaceRoot !== workspaceRoot) {
+      showToast('暂不支持跨工作区粘贴(源与目标须在同一工作区)', 'error')
+      return
+    }
+    const targetRel = normalizeWorkspaceRelativePath(targetDir)
+    const paths = dedupeWorkspacePaths(clip.paths)
+    setPasting(true)
+    try {
+      if (clip.mode === 'cut') {
+        const moved = await movePathsToDirectory(paths, targetRel)
+        workspaceClipboardService.clear()
+        showToast(moved > 0 ? `已粘贴(移动) ${moved} 项` : '所选项已在目标位置', 'success')
+        return
+      }
+      let pasted = 0
+      let failed = 0
+      const pastedPaths: string[] = []
+      for (const path of paths) {
+        const rel = normalizeWorkspaceRelativePath(path)
+        const name = rel.split('/').pop() ?? ''
+        if (!name) {
+          failed += 1
+          continue
+        }
+        let done = false
+        for (let attempt = 0; attempt < 2 && !done; attempt += 1) {
+          try {
+            const candidate = await allocatePasteName(
+              name,
+              (n) => workspaceGateway.existsRaw(workspaceRoot, targetRel ? `${targetRel}/${n}` : n),
+            )
+            const to = targetRel ? `${targetRel}/${candidate}` : candidate
+            await workspaceExplorerCommandService.copyPath(workspaceRoot, rel, to)
+            pastedPaths.push(toBusinessAbsolutePath(to))
+            done = true
+            pasted += 1
+          } catch {
+            // 首试失败多为探测-落盘间目标被占用(竞态):重试会重新探测生成新副本名
+          }
+        }
+        if (!done) failed += 1
+      }
+      if (pastedPaths.length > 0) {
+        const targetBusiness = targetRel ? toBusinessAbsolutePath(targetRel) : WORKSPACE_EXPLORER_ROOT_LABEL
+        expandDirChildren(targetBusiness)
+        setExpandedPaths((prev) => new Set(prev).add(targetBusiness))
+        applySelection(new Set(pastedPaths))
+      }
+      showToast(failed > 0 ? `已粘贴 ${pasted} 项,${failed} 项失败` : `已粘贴 ${pasted} 项`, failed > 0 ? 'info' : 'success')
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : String(error), 'error')
+    } finally {
+      setPasting(false)
+    }
+  }, [applySelection, expandDirChildren, movePathsToDirectory, pasting, showToast, workspaceRoot])
+
+  /** 解析粘贴目标目录(工作区相对路径,''=根):目录→自身;文件→所在目录(VSCode 同语义)。 */
+  const resolvePasteDir = React.useCallback((target: WorkspaceExplorerContextTarget): string => {
+    const rel = normalizeWorkspaceRelativePath(target.path)
+    if (target.type === 'directory') return rel
+    return rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : ''
+  }, [])
+
+  /**
+   * 快捷键句柄注册(顶层 keydown 路由):ref 直通最新回调,注册一次、随渲染刷新。
+   * - copySelection:作用于选中集合;空集合返回 false(快捷键放行默认行为);
+   * - pasteIntoSelection:锚点取选中集合最后点击项(目录→目录内、文件→所在目录),
+   *   无选中落工作区根;剪贴板空返回 false,跨工作区提示后返回 true(拦截)。
+   */
+  const groupHandlerRef = React.useRef<ExplorerGroupHandlers>(null as unknown as ExplorerGroupHandlers)
+  groupHandlerRef.current = {
+    copySelection: (mode) => {
+      const paths = Array.from(selectionRef.current)
+      if (paths.length === 0) return false
+      markActiveRoot(workspaceRoot)
+      workspaceClipboardService.set(mode, workspaceRoot, dedupeWorkspacePaths(paths))
+      showToast(mode === 'copy' ? `已复制 ${paths.length} 项` : `已剪切 ${paths.length} 项`, 'success')
+      return true
+    },
+    pasteIntoSelection: () => {
+      const clip = workspaceClipboardService.get()
+      if (!clip || clip.paths.length === 0) return false
+      if (pasting) return true
+      if (clip.workspaceRoot !== workspaceRoot) {
+        showToast('暂不支持跨工作区粘贴(源与目标须在同一工作区)', 'error')
+        return true
+      }
+      markActiveRoot(workspaceRoot)
+      const last = Array.from(selectionRef.current).pop() ?? null
+      let dir = ''
+      if (last) {
+        const node = findExplorerNode(treeNodesRef.current, last)
+        dir = node && node.type === 'directory'
+          ? normalizeWorkspaceRelativePath(last)
+          : dirnameOfBusinessPath(last)
+      }
+      void pasteIntoDirectory(dir)
+      return true
+    },
+  }
+  React.useEffect(() => {
+    registerGroup(workspaceRoot, groupHandlerRef)
+    return () => unregisterGroup(workspaceRoot)
+  }, [registerGroup, unregisterGroup, workspaceRoot])
+
   /** 批量移动:对已选路径按前缀去重后移动到同一目标目录,并更新打开的标签页路径。 */
-  const handleBatchMove = React.useCallback(async () => {
-    if (batchMoving || selectedPaths.size === 0) return
+  const handleBatchMove = React.useCallback(async () => {    if (batchMoving || selectedPaths.size === 0) return
     setBatchMoving(true)
     try {
       const movedCount = await movePathsToDirectory(Array.from(selectedPaths), batchMoveDir)
@@ -900,6 +1135,32 @@ function WorkspaceGroupPanel({
         },
       })
     }
+    // 剪切/复制/粘贴(对标 VSCode explorer 菜单顺序:Open → Cut/Copy/Paste → New...):
+    // 复制/剪切作用于选中集合(右键集合外行已被归一为该行);粘贴落到被右键行
+    // (目录→目录内、文件→所在目录),剪贴板空或跨工作区时禁用。
+    items.push(
+      {
+        key: 'cut',
+        label: '剪切',
+        icon: <ScissorsIcon size={13} />,
+        onSelect: () => copyNodesFromTarget('cut', target),
+      },
+      {
+        key: 'copy',
+        label: '复制',
+        icon: <CopyIcon size={13} />,
+        onSelect: () => copyNodesFromTarget('copy', target),
+      },
+      {
+        key: 'paste',
+        label: '粘贴',
+        icon: <PasteIcon size={13} />,
+        disabled: !pasteEnabled,
+        onSelect: () => {
+          void pasteIntoDirectory(resolvePasteDir(target))
+        },
+      },
+    )
     if (target.type === 'directory') {
       // 新建/上传的父目录语义:取选中集合的第一个节点,首项不是目录时退回被右键 target,保证目标恒为目录。
       const resolveDirTarget = (): WorkspaceExplorerContextTarget => {
@@ -1038,7 +1299,7 @@ function WorkspaceGroupPanel({
       }
     }
   return items
-  }, [handleBatchDownload, handleOpenFile, handleRequestBatchMove, handleRequestCreate, handleRequestDownload, handleRequestMove, handleRequestOpenTerminal, handleRequestProperties, handleRequestRenameTarget, handleRequestRevealInOs, handleRequestSearch, handleRequestUpload, resolveActionTarget, showToast])
+  }, [copyNodesFromTarget, handleBatchDownload, handleOpenFile, handleRequestBatchMove, handleRequestCreate, handleRequestDownload, handleRequestMove, handleRequestOpenTerminal, handleRequestProperties, handleRequestRenameTarget, handleRequestRevealInOs, handleRequestSearch, handleRequestUpload, pasteEnabled, pasteIntoDirectory, resolveActionTarget, resolvePasteDir, showToast])
 
   const rootMoreActionItems = React.useMemo<MoreActionItem[]>(() => [
     {
@@ -1144,8 +1405,14 @@ function WorkspaceGroupPanel({
           locateRequestedAt={locateRequest?.requestedAt ?? null}
           metaMode={metaMode}
           selectedPaths={selectedPaths}
-          onMultiSelectChange={applySelection}
+          onMultiSelectChange={applySelectionTracked}
           onMoveToDirectory={handleDragMoveToDirectory}
+          onCopyNode={(nodeTarget) => copyNodesFromTarget('copy', nodeTarget)}
+          onPasteNode={(nodeTarget) => {
+            void pasteIntoDirectory(resolvePasteDir(nodeTarget))
+          }}
+          pasteEnabled={pasteEnabled}
+          cutPaths={cutPaths}
           onToggleDirectory={(path) => {
             setExpandedPaths((prev) => {
               const next = new Set(prev)
@@ -1387,6 +1654,12 @@ function dedupeWorkspacePaths(paths: string[]): string[] {
     result.push(path)
   }
   return result
+}
+
+/** 业务绝对路径 → 所在目录的工作区相对路径('' = 工作区根)。 */
+function dirnameOfBusinessPath(businessPath: string): string {
+  const rel = normalizeWorkspaceRelativePath(businessPath)
+  return rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : ''
 }
 
 function getDeleteDialogTitle(target: WorkspaceExplorerContextTarget | null): string {

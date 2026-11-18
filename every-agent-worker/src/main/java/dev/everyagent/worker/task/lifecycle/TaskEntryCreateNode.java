@@ -202,7 +202,7 @@ public final class TaskEntryCreateNode implements TaskLifecycleNode {
                 mainAgentId, props.getLimits().getMaxEventsPerTask());
         t.taskDir(store.dirOf(taskId, impl.workspaceId()));
         t.bindExecPorts(agentFactory, asks);
-        t.conversationArchive(agentId -> store.loadConversation(t.taskDir(), agentId));
+        t.conversationArchive(archivePort(store, t));
         tasks.put(taskId, t);
         // 预登记 workspace 映射:RPC 应答(order=70)发出后,track(order=100,VT 异步)执行前,
         // slash.taskTokens.apply 等竞态 RPC 可经 dirOf(taskId) 定位任务目录。
@@ -252,7 +252,28 @@ public final class TaskEntryCreateNode implements TaskLifecycleNode {
                 props.getLimits().getMaxEventsPerTask());
         t.taskDir(st.dir());
         t.bindExecPorts(agentFactory, asks);
-        t.conversationArchive(agentId -> store.loadConversation(t.taskDir(), agentId));
+        t.conversationArchive(archivePort(store, t));
         return t;
+    }
+
+    /**
+     * 会话档案口:读档前先 {@link TaskStore#flush} 等异步落盘追平内存游标。
+     *
+     * <p>时序前提(2026-11 轮内续跑统一档案重建):已落定子 agent 的复用续跑在收口后
+     * 立即读档,而 TaskStore 落盘是异步 sink(≤1s 批量排水),不 flush 可能读到缺尾档案
+     * (丢最终回答轮,退化为孤立 user 占位)。冷启动路径 finish 已 flush,此处天然零等待;
+     * flush 超时/未 track 由 store 内部降级放行,读档照常(尾部缺时由重建侧占位守卫兜底),
+     * 中断只恢复标记不抛(档案口契约:永不抛异常)。
+     */
+    private static dev.everyagent.plugin.api.agent.ConversationArchive archivePort(
+            TaskStore store, TaskEntry t) {
+        return agentId -> {
+            try {
+                store.flush(t.taskId());
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            return store.loadConversation(t.taskDir(), agentId);
+        };
     }
 }

@@ -176,7 +176,8 @@ public class CommandExecutor {
      * 造成的行为分叉。
      *
      * <p><b>脚本文件编码</b>:UTF-8 <b>BOM</b>。PowerShell 5.1 读无 BOM 文件时按系统 ACP
-     *（如 GBK）解码,命令串里的中文会被错解成另一个字。
+     *（如 GBK）解码,命令串里的中文会被错解成另一个字;pwsh 7 对 BOM 同样接受(有 BOM
+     * 即按 UTF-8),该兼容层两种宿主通用。
      *
      * <p><b>退出码</b>:{@link ExecResults#POWERSHELL_EXIT_TAIL} 已在尾部把
      * {@code $LASTEXITCODE}(最后一个原生子进程)转成 powershell.exe 的进程退出码,
@@ -195,7 +196,10 @@ public class CommandExecutor {
             System.arraycopy(content, 0, full, bom.length, content.length);
             java.nio.file.Files.write(tempScript, full);
 
-            String psExe = win ? "powershell.exe" : "pwsh";
+            // Windows 宿主可执行文件解析:PATH 探测 pwsh.exe(PowerShell 7+)优先,未装回退
+            // 出厂 powershell.exe(5.1)——与 codex 后端 detectShell 同策略,核心不依赖插件
+            // (三层解耦)自带最小实现;非 Windows 恒 pwsh(跨平台 PowerShell 常态名)。
+            String psExe = win ? resolveWindowsPowerShellExe() : "pwsh";
             String[] fullCmd = {psExe, "-NoProfile", "-ExecutionPolicy", "Bypass",
                     "-File", tempScript.toString()};
             return sandbox.spawnToFileRedirected(fullCmd, cwd, env, sandbox.execTimeoutMs());
@@ -215,6 +219,58 @@ public class CommandExecutor {
     }
 
     /**
+     * Windows 宿主 PowerShell 可执行文件解析:PATH 探测 {@code pwsh.exe}(PowerShell 7+)
+     * 优先,未安装回退出厂 {@code powershell.exe}(5.1,任何 Windows 必带)。进程级缓存
+     * (volatile 双检锁,全进程只探测一次)——与 codex 后端
+     * {@code CodexCommandExecutor#detectShell} 同策略;worker 核心不依赖插件(三层解耦),
+     * 此处自带最小实现。
+     *
+     * <p>整条执行管线对两种宿主均兼容(见 {@link ExecResults#buildPowerShellScript}
+     * 「两种宿主实测」与 ARCHITECTURE §7.10):UTF-8 BOM 双宿主通用、CLIXML 还原对无
+     * CLIXML 的 pwsh 输出是 no-op、错误流 ANSI 着色由 {@code ExecResults} 剥离;
+     * pwsh 7 下 5.1 的 OEM 码页类怪癖(GBK 转码/CLIXML 包装)天然消失。
+     */
+    static String resolveWindowsPowerShellExe() {
+        String cached = cachedWinPsExe;
+        if (cached != null) {
+            return cached;
+        }
+        synchronized (CommandExecutor.class) {
+            if (cachedWinPsExe == null) {
+                String pwsh = findInPath("pwsh.exe");
+                cachedWinPsExe = pwsh != null ? pwsh : "powershell.exe";
+                log.info("[direct-shell] Windows PowerShell 宿主: {}{}",
+                        cachedWinPsExe, pwsh != null ? "(pwsh 7+)" : "(未装 pwsh,回退内置 5.1)");
+            }
+            return cachedWinPsExe;
+        }
+    }
+
+    /** PATH 中查找可执行文件;找到返回绝对路径,未找到返回 null(与 codex findInPath 同实现)。 */
+    static String findInPath(String name) {
+        String pathEnv = System.getenv("Path");
+        if (pathEnv == null || pathEnv.isBlank()) {
+            pathEnv = System.getenv("PATH");
+        }
+        if (pathEnv == null || pathEnv.isBlank()) {
+            return null;
+        }
+        for (String dir : pathEnv.split(java.util.regex.Pattern.quote(java.io.File.pathSeparator))) {
+            if (dir.isBlank()) {
+                continue;
+            }
+            Path candidate = Path.of(dir, name);
+            if (java.nio.file.Files.isRegularFile(candidate)) {
+                return candidate.toAbsolutePath().toString();
+            }
+        }
+        return null;
+    }
+
+    /** Windows PowerShell 宿主解析缓存(volatile 双检锁;static 全进程只探测一次)。 */
+    private static volatile String cachedWinPsExe;
+
+    /**
      * 还原 stderr 里的 PowerShell CLIXML 流记录为真实错误文本（兜底路径）。
      *
      * <p>PowerShell 5.1 在 stderr 被<b>重定向</b>(管道或文件——它只看是否控制台)时,把
@@ -225,10 +281,16 @@ public class CommandExecutor {
      * 现委托 {@link ExecResults#decodeClixml}:段内 {@code <S S="Error">} 文本抽出来留在
      * stderr,段外原生命令纯文本原样保留。CLIXML 与承载形态无关(2026-10 codex 后端文件
      * 承载下实测同样产生,codex 执行器聚合处已同样接入),此处覆盖本执行路径的残余。
+     *
+     * <p><b>pwsh 7 直通(2026-12 DIRECT 宿主 pwsh 化)</b>:pwsh 7.x 错误流<b>直出</b>、
+     * 不产生 CLIXML,但携带 {@code ESC[31;1m} 等 ANSI/VT 着色——故 stderr 非空即
+     * <b>无条件</b>过 {@code decodeClixml}(它是 stderr 解码链统一出口:无 CLIXML 时
+     * 退化为 {@code stripAnsi},ISSUES 四.8),不得因「没有 CLIXML」早退绕过剥离
+     * (早退分支在 5.1 下不可达,在 pwsh 7 下会把着色残留漏给模型)。
      */
     private static ExecResult restoreClixml(ExecResult r) {
         String err = r.stderr();
-        if (err == null || err.isEmpty() || err.indexOf("CLIXML") < 0) {
+        if (err == null || err.isEmpty()) {
             return r;
         }
         return new ExecResult(r.stdout(), ExecResults.decodeClixml(err), r.exitCode(),
