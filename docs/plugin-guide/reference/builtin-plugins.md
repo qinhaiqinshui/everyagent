@@ -28,7 +28,6 @@ has_children: false
 | agents-md | agents.md 约束注入 | java | AdvisorProvider | — | HP+60 | 入口 19 行 |
 | ask-user | 用户提问 | java | ToolProvider | — | — | 入口 ≈20 行 |
 | ai-review | AI 审议 | both | AuthorizationHandler + SlashProvider + SlashTokenResolver | `ui.trace_types` | — | 入口 33 行 + web 40 行 |
-| browser | 浏览器操控 | 声明式（无 Java 无 web） | —（仅 `skills` 物化；零核心改动） | — | — | skill 资产 18 文件（CLI+守护+MV3 扩展，内嵌 skill.md 分发） |
 | context-compression | 上下文压缩 | java | AdvisorProvider | — | DO+400 | 入口 21 行 |
 | empty-response-retry | 空响应重试 | java | AdvisorProvider | — | DO+100 | 入口 21 行 |
 | file-change | 文件变更跟踪 | both | AdvisorProvider + `addRoundClosedListener`；RPC `task.fileChanges` | `ui.round_tail_panels` | HP+301 | 入口 132 行 + web 35 行 |
@@ -58,8 +57,8 @@ has_children: false
 
 ### 2.1 全体共性（读任何一个插件前先知道）
 
-- 形态分布：java-only 19 / both 7 / web-only 5 / **纯声明式 1**（browser，2026-11 新形态：plugin.json 只声明 `skills`，无 Java 无 web，见 §5 browser 条目）。
-- 清单字段全体一致：`id/name/version/description/author` + `enabled`，version 除 image-vision（`0.2.0`，read_file 接管切换）外一律 `0.1.0`、author 一律 `everyagent`；含 Java 的 26 个另有 `main`，含前端的 12 个另有 `webMain`（值全部写 `web/index.ts`，宿主实际加载的是构建产物 `web/index.js`，见 [plugin.json 字段参考](../plugin-manifest.md) §5）；browser 另有 `skills`（其余带技能包的是 subagent）。
+- 形态分布：java-only 19 / both 7 / web-only 5。
+- 清单字段全体一致：`id/name/version/description/author` + `enabled`，version 除 image-vision（`0.2.0`，read_file 接管切换）外一律 `0.1.0`、author 一律 `everyagent`；含 Java 的 26 个另有 `main`，含前端的 12 个另有 `webMain`（值全部写 `web/index.ts`，宿主实际加载的是构建产物 `web/index.js`，见 [plugin.json 字段参考](../plugin-manifest.md) §5）；带技能包的只有 subagent。
 - 用 `contributes.config` 的只有 2 个：image-vision（3 键）、sandbox-windows-codex（6 键）。
 - `enabled:false` 的有 3 个：ripgrep-tool、sandbox-wsl-ubuntu、secret-redaction（内置扫描期整目录跳过；sandbox-windows-mic 已移除）。
 - 依赖红线干净：全部 26 个 pom **零 `every-agent-worker` 依赖**；`task-edit-resend`、`task-input-queue` 额外依赖 `every-agent-contract` 属共享契约层，合规（[架构文档](../../ARCHITECTURE.md) §14.9）。
@@ -209,13 +208,6 @@ has_children: false
 - 关键文件：`~plugins/ai-review/src/main/java/dev/everyagent/plugin/aireview/AiReviewPlugin.java:24-31`；`~plugins/ai-review/web/index.ts:36`。
 - ⚠️ `web/index.ts:4` 注释引用已删除的 `builtInPlugins.ts`（陈旧注释，全文共 4 处，见下）。
 - 值得看：AuthorizationHandler + slash 全家桶 + `ui.trace_types` 三合一。
-
-### browser（浏览器操控）
-
-**纯声明式插件**（零 Java、零 web、零 worker 核心改动）：plugin.json 只声明 `skills`，物化出 skill `browser-automation`。AI 用内置 powershell 工具执行 skill 自带 CLI（`open/goto/back/forward/click/fill/query/aria/screenshot/tabs/close`，语义对齐用户的 playwright-browser skill），命令经「CLI → 本机守护进程（Node http，127.0.0.1+token，120s 闲置自动退出）→ MV3 浏览器扩展」链路操控**用户真实浏览器**的标签页做网页自动化测试。
-- 关键文件：`~plugins/browser/skill/browser-automation/skill.md`（**由 `build/pack.mjs` 组装生成**：`build/skill-body.md` 正文 + 尾部 `<<<EA-ASSETS … EA-ASSETS>>>` base64 资产清单）；源码 `~plugins/browser/src/scripts/`（CLI+守护+lib+`node --test` ×5）、`~plugins/browser/src/extension/`（MV3 通用执行器：hello→poll→result 长轮询循环）。
-- 一次性安装：AI 按 skill 安装节用 PowerShell 解码资产落盘 + chrome://extensions 加载 `<skillsDir>/browser-automation/extension` 并在 options 配 runtime.json 的 port/token。
-- 值得看：**「skill 内嵌资产」分发形态**——绕过「物化只搬 skill.md 单文件」的现状实现自包含分发；扩展是纯通用执行器（7 种 op），选择器/aria DSL 生成等业务全在 Node 侧可单测。
 
 ### context-compression（上下文压缩）
 
