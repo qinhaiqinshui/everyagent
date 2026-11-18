@@ -185,28 +185,29 @@ public class MyFirstPlugin implements EveryAgentPlugin {
 
 ## 6. 扩展点总表（导航枢纽）
 
-`WorkerPluginContext` 自身 14 个注册方法（`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/WorkerPluginContext.java:43-109`：11 个 SPI + 3 个通用）+ 父接口 `TaskPluginContext` 2 个（`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/task/TaskPluginContext.java:17,24`）= **16 个注册方法**。每个注册在 worker 侧的实现都只是往对应注册表 `add` 一行（`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/WorkerPluginContextImpl.java:140-238`），注册即生效、无过滤、无校验。skill 贡献**不是注册方法**——代码注册通道已删除，插件 skill 经 `SkillMaterializer` 物化落盘（[advisors.md](advisors.md) §5）。
+`WorkerPluginContext` 自身 15 个注册方法（`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/WorkerPluginContext.java:44-116`：12 个 SPI + 3 个通用）+ 父接口 `TaskPluginContext` 2 个（`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/task/TaskPluginContext.java:17,24`）= **17 个注册方法**。每个注册在 worker 侧的实现都只是往对应注册表 `add` 一行（`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/WorkerPluginContextImpl.java:140-238`），注册即生效、无过滤、无校验。skill 贡献**不是注册方法**——代码注册通道已删除，插件 skill 经 `SkillMaterializer` 物化落盘（[advisors.md](advisors.md) §5）。
 
-### 6.1 注册方法（16 个）
+### 6.1 注册方法（17 个）
 
 | # | 注册方法（接口行号） | SPI / 接口 | 一句话用途 | 详解 | 内置范例（activate 行号） |
 |---|---|---|---|---|---|
-| 1 | `registerToolProvider`（`WorkerPluginContext.java:43`） | `ToolProvider` | 给 AI 注入工具（Spring AI ToolCallback） | [tools-and-sandbox.md](tools-and-sandbox.md) | subagent（`SubAgentPlugin.java:41`）、sandbox-windows-codex（`:51`） |
-| 2 | `registerToolExecutionInterceptor`（`:58`） | `ToolExecutionInterceptor` | 拦截每轮工具执行：短路 / 改写结果 | [tools-and-sandbox.md](tools-and-sandbox.md) | secret-redaction（`SecretRedactionPlugin.java:22`）、unattended（`:20`） |
-| 3 | `registerSandboxProvider`（`:49`） | `SandboxProvider` | 提供沙箱后端（挂载 / 清理 / 探测） | [tools-and-sandbox.md](tools-and-sandbox.md) | sandbox-windows-mic（`:25`）、sandbox-windows-codex（`:47`）、sandbox-wsl-ubuntu（`:37`） |
-| 4 | `registerFileReferenceHandler`（`:67`） | `FileReferenceHandler` | 按扩展名处理输入里的 `@` 文件引用 | [tools-and-sandbox.md](tools-and-sandbox.md) | image-vision（`ImageVisionPlugin.java:30`，唯一） |
-| 5 | `registerAdvisorProvider`（`:46`） | `AdvisorProvider` | 向模型调用链贡献 Advisor | [advisors.md](advisors.md) | system-info（`SystemInfoPlugin.java:16`）、git（`:33`）、context-compression（`:18`）等 |
-| 6 | `registerSearchProvider`（`:52`） | `SearchProvider` | 搜索后端（统一 `search` 聚合；内置 `file-content`/`file-name`/`task` 为内置 provider，与插件 provider 同权） | [advisors.md](advisors.md) | 已接线、零插件使用（无内置范例；聚合行为由 worker 测试钉住） |
-| 7 | `registerAuthorizationHandler`（`:55`） | `AuthorizationHandler` | 授权决议链节点（无人值守 / AI 审议） | [advisors.md](advisors.md) | unattended（`UnattendedPlugin.java:23`）、ai-review（`:24`） |
-| 8 | `registerEventEgressFilter`（`:76`） | `EventEgressFilter` | 事件级出网过滤（可丢弃/改写 payload，事件仍落盘；出网投影单点 `EgressProjector`） | [架构 §8.5](../../ARCHITECTURE.md#85-插件系统统一加载架构)（暂无专篇） | ai-review（`AiReviewPlugin.java:37`） |
-| 9 | `registerRoundEgressFilter`（`:84`） | `RoundEgressFilter` | 轮次级出网过滤（裁剪/丢弃轮次 JSON 视图） | 同上 | ai-review（`AiReviewPlugin.java:38`） |
-| 10 | `registerTokenEstimator`（`:61`） | `TokenEstimator` | 替换内置 Token 估算器 | [advisors.md](advisors.md) | token-estimator（`TokenEstimatorPlugin.java:44`） |
-| 11 | `registerChatModelEnhancer`（`:64`） | `ChatModelEnhancer` | 模型构建增强（如模型池容灾） | [advisors.md](advisors.md) | model-pool（`ModelPoolPlugin.java:26`） |
-| 12 | `registerRpcMethod`（`:94`） | `RpcMethod` | 自定义 RPC 方法（`域.动作` 命名） | [task-and-rpc.md](task-and-rpc.md) | git（`GitPlugin.java:42-54`，13 个）、task-queue（`:29`）、file-change（`:35`） |
-| 13 | `registerSlashProvider`（`:102`） | `SlashProvider` | `/` 菜单命令提供者 | [task-and-rpc.md](task-and-rpc.md) | unattended（`:26`）、git（`:36`）、ai-review（`:27`）、sandbox-wsl-ubuntu（`:44`） |
-| 14 | `registerSlashTokenResolver`（`:109`） | `SlashTokenResolver` | slash token 提交解析 | [task-and-rpc.md](task-and-rpc.md) | 同上四者（unattended `:30` / git `:39` / ai-review `:31` / wsl `:45`） |
-| 15 | `registerTaskAdmissionPolicy`（`TaskPluginContext.java:17`） | `TaskAdmissionPolicy` | task.run RPC 边缘预检（如放行排队代替 ERR_BUSY） | [task-and-rpc.md](task-and-rpc.md) | task-queue（`TaskQueuePlugin.java:25`） |
-| 16 | `registerTaskLifecycleNode`（`TaskPluginContext.java:24`） | `TaskLifecycleNode` | 任务生命周期洋葱链节点 | [task-and-rpc.md](task-and-rpc.md) | task-queue（`:24`）、task-input-queue（`:27-28`）、subagent（`:45`）、task-edit-resend（`:25`） |
+| 1 | `registerToolProvider`（`WorkerPluginContext.java:44`） | `ToolProvider` | 给 AI 注入工具（Spring AI ToolCallback） | [tools-and-sandbox.md](tools-and-sandbox.md) | subagent（`SubAgentPlugin.java:41`）、sandbox-windows-codex（`:51`） |
+| 2 | `registerToolExecutionInterceptor`（`:59`） | `ToolExecutionInterceptor` | 拦截每轮工具执行：短路 / 改写结果 | [tools-and-sandbox.md](tools-and-sandbox.md) | secret-redaction（`SecretRedactionPlugin.java:22`）、unattended（`:20`） |
+| 3 | `registerSandboxProvider`（`:50`） | `SandboxProvider` | 提供沙箱后端（挂载 / 清理 / 探测） | [tools-and-sandbox.md](tools-and-sandbox.md) | sandbox-windows-mic（`:25`）、sandbox-windows-codex（`:47`）、sandbox-wsl-ubuntu（`:37`） |
+| 4 | `registerFileReferenceHandler`（`:68`） | `FileReferenceHandler` | 按扩展名处理输入里的 `@` 文件引用 | [tools-and-sandbox.md](tools-and-sandbox.md) | image-vision（`ImageVisionPlugin.java:30`，唯一） |
+| 5 | `registerFileReadHandler`（`:74`） | `FileReadHandler` | 按扩展名接管 `read_file`（图片等非文本类型，未命中回落默认文本读取） | [tools-and-sandbox.md](tools-and-sandbox.md) | —（暂无） |
+| 6 | `registerAdvisorProvider`（`:47`） | `AdvisorProvider` | 向模型调用链贡献 Advisor | [advisors.md](advisors.md) | system-info（`SystemInfoPlugin.java:16`）、git（`:33`）、context-compression（`:18`）等 |
+| 7 | `registerSearchProvider`（`:53`） | `SearchProvider` | 搜索后端（统一 `search` 聚合；内置 `file-content`/`file-name`/`task` 为内置 provider，与插件 provider 同权） | [advisors.md](advisors.md) | 已接线、零插件使用（无内置范例；聚合行为由 worker 测试钉住） |
+| 8 | `registerAuthorizationHandler`（`:56`） | `AuthorizationHandler` | 授权决议链节点（无人值守 / AI 审议） | [advisors.md](advisors.md) | unattended（`UnattendedPlugin.java:23`）、ai-review（`:24`） |
+| 9 | `registerEventEgressFilter`（`:83`） | `EventEgressFilter` | 事件级出网过滤（可丢弃/改写 payload，事件仍落盘；出网投影单点 `EgressProjector`） | [架构 §8.5](../../ARCHITECTURE.md#85-插件系统统一加载架构)（暂无专篇） | ai-review（`AiReviewPlugin.java:37`） |
+| 10 | `registerRoundEgressFilter`（`:91`） | `RoundEgressFilter` | 轮次级出网过滤（裁剪/丢弃轮次 JSON 视图） | 同上 | ai-review（`AiReviewPlugin.java:38`） |
+| 11 | `registerTokenEstimator`（`:62`） | `TokenEstimator` | 替换内置 Token 估算器 | [advisors.md](advisors.md) | token-estimator（`TokenEstimatorPlugin.java:44`） |
+| 12 | `registerChatModelEnhancer`（`:65`） | `ChatModelEnhancer` | 模型构建增强（如模型池容灾） | [advisors.md](advisors.md) | model-pool（`ModelPoolPlugin.java:26`） |
+| 13 | `registerRpcMethod`（`:101`） | `RpcMethod` | 自定义 RPC 方法（`域.动作` 命名） | [task-and-rpc.md](task-and-rpc.md) | git（`GitPlugin.java:42-54`，13 个）、task-queue（`:29`）、file-change（`:35`） |
+| 14 | `registerSlashProvider`（`:109`） | `SlashProvider` | `/` 菜单命令提供者 | [task-and-rpc.md](task-and-rpc.md) | unattended（`:26`）、git（`:36`）、ai-review（`:27`）、sandbox-wsl-ubuntu（`:44`） |
+| 15 | `registerSlashTokenResolver`（`:116`） | `SlashTokenResolver` | slash token 提交解析 | [task-and-rpc.md](task-and-rpc.md) | 同上四者（unattended `:30` / git `:39` / ai-review `:31` / wsl `:45`） |
+| 16 | `registerTaskAdmissionPolicy`（`TaskPluginContext.java:17`） | `TaskAdmissionPolicy` | task.run RPC 边缘预检（如放行排队代替 ERR_BUSY） | [task-and-rpc.md](task-and-rpc.md) | task-queue（`TaskQueuePlugin.java:25`） |
+| 17 | `registerTaskLifecycleNode`（`TaskPluginContext.java:24`） | `TaskLifecycleNode` | 任务生命周期洋葱链节点 | [task-and-rpc.md](task-and-rpc.md) | task-queue（`:24`）、task-input-queue（`:27-28`）、subagent（`:45`）、task-edit-resend（`:25`） |
 
 > skill 不走注册方法：插件把 `skill/<id>/skill.md` 打进 jar、`activate()` 里调 `SkillMaterializer.materializeAllFromClasspath(...)` 物化落盘（唯一方式，[advisors.md](advisors.md) §5）。
 

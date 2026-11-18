@@ -81,7 +81,7 @@ class WorkerPluginContextSlashIconTest {
     private static WorkerPluginContextImpl newContext(SlashCommandRegistry slashRegistry) {
         return new WorkerPluginContextImpl("icon-test", null,
                 null, null, null, null, null, null,
-                null, null, null, null, null, null, null,
+                null, null, null, null, null, null, null, null,
                 slashRegistry, null, null, null, null);
     }
 }

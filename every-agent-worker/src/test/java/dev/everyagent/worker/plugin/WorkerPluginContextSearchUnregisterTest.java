@@ -51,7 +51,7 @@ class WorkerPluginContextSearchUnregisterTest {
         return new WorkerPluginContextImpl(pluginId, null,
                 null, null, null, registry,
                 null, null, null, null, null,
-                null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null);
     }
 
     /** 最小 stub:只关心 id/order(kinds/search 用接口缺省空实现)。 */

@@ -169,6 +169,16 @@ public class FsToolSupport {
     }
 
     /**
+     * 授权解析已存在路径,供 read_file 插件接管处理器({@code FileReadHandler})读取:
+     * 授权 + 沙箱 jail 语义与 {@link #readText(ExecContext, String, String)} 完全一致
+     * (READ 档授权 → 沙箱 resolveExisting),处理器拿到的已是宿主真实绝对路径,
+     * 不得另行自行解析路径(防绕过授权)。
+     */
+    public Path resolveExistingRead(ExecContext t, String agentId, String rel) throws IOException {
+        return resolveExistingAuthorized(t, agentId, rel, PermissionGate.Op.READ);
+    }
+
+    /**
      * 取某路径对应的进程内写锁(供 read-modify-write 使用:读取→修改→写回需整体串行)。
      * 键取规范化后的沙箱→宿主翻译路径,同一文件的不同书写形式(如 ./a.md 与 a.md)也收敛到同一把锁。
      */

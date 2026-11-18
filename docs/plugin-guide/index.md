@@ -103,11 +103,11 @@ worker 侧的判定规则（`every-agent-worker/src/main/java/dev/everyagent/wor
 | 前端 | `ctx` 能力域（`ui` / `sdk` / `events` / `fs` / `storage` / `commands`） | 6 | [PluginContext API](web/context-api.md) |
 | 前端 | `PluginDomainEvent` 具名事件（其余靠 `(string & {})` 兜底） | 9 | [事件](web/events.md) |
 
-后端 16 个注册点的分组与归属篇（方法名逐条取自 `every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/WorkerPluginContext.java` 与 `.../api/task/TaskPluginContext.java`）。注意 skill **不在**注册点里——代码注册通道已删除，插件技能包经 `SkillMaterializer` 物化落盘（[Advisor 扩展](backend/advisors.md) §5）：
+后端 17 个注册点的分组与归属篇（方法名逐条取自 `every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/WorkerPluginContext.java` 与 `.../api/task/TaskPluginContext.java`）。注意 skill **不在**注册点里——代码注册通道已删除，插件技能包经 `SkillMaterializer` 物化落盘（[Advisor 扩展](backend/advisors.md) §5）：
 
 | 分组 | 方法 | 详解篇 |
 |---|---|---|
-| 工具与沙箱 | `registerToolProvider` `registerToolExecutionInterceptor` `registerSandboxProvider` `registerFileReferenceHandler` | [工具与沙箱](backend/tools-and-sandbox.md) |
+| 工具与沙箱 | `registerToolProvider` `registerToolExecutionInterceptor` `registerSandboxProvider` `registerFileReferenceHandler` `registerFileReadHandler` | [工具与沙箱](backend/tools-and-sandbox.md) |
 | Agent 增强 | `registerAdvisorProvider` `registerChatModelEnhancer` `registerTokenEstimator` `registerSearchProvider` `registerAuthorizationHandler` | [Advisor 扩展](backend/advisors.md) |
 | 事件出网 | `registerEventEgressFilter` `registerRoundEgressFilter`（暂无专篇，契约见[架构 §8.5](../ARCHITECTURE.md#85-插件系统统一加载架构)） | [架构说明](../ARCHITECTURE.md) |
 | 任务编排 | `registerTaskAdmissionPolicy` `registerTaskLifecycleNode` | [任务生命周期与 RPC](backend/task-and-rpc.md) |

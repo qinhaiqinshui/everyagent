@@ -3,16 +3,24 @@ package dev.everyagent.worker.tools;
 
 import dev.everyagent.plugin.api.execution.ExecContext;
 import dev.everyagent.plugin.api.exception.NotFoundException;
+import dev.everyagent.plugin.api.spi.FileReadHandler;
+import dev.everyagent.plugin.api.spi.FileReadResult;
 import dev.everyagent.plugin.api.spi.FileWriteListener;
 import dev.everyagent.plugin.api.tool.PlainTextToolCallResultConverter;
+import dev.everyagent.worker.plugin.registry.FileReadHandlerRegistry;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.locks.ReentrantLock;
 
 /**
@@ -26,6 +34,8 @@ import java.util.concurrent.locks.ReentrantLock;
  */
 public class FileTools {
 
+    private static final Logger log = LoggerFactory.getLogger(FileTools.class);
+
     /** 无参全量读取时的字符上限(约 30k 字符);超过则截断到完整行并附带提示。 */
     static final int READ_FILE_AUTO_TRUNCATE_CHARS = 30_000;
 
@@ -33,10 +43,37 @@ public class FileTools {
     private final ExecContext task;
     private final String agentId;
 
+    /**
+     * read_file 按扩展名接管处理器注册表(可 null = 无接管,行为与机制引入前完全一致;
+     * 旧 3 参构造器即走此形态,供既有测试/装配兼容)。
+     */
+    private final FileReadHandlerRegistry readHandlers;
+
     public FileTools(FsToolSupport fs, ExecContext task, String agentId) {
+        this(fs, task, agentId, null);
+    }
+
+    public FileTools(FsToolSupport fs, ExecContext task, String agentId,
+            FileReadHandlerRegistry readHandlers) {
         this.fs = fs;
         this.task = task;
         this.agentId = agentId;
+        this.readHandlers = readHandlers;
+    }
+
+    /**
+     * 文件名扩展名(小写含点);无扩展名/以点开头/末尾即点返回空串
+     * (口径与 UserInputMaterializerImpl.extensionOf 一致,查不到 handler)。
+     */
+    private static String extensionOf(String path) {
+        if (path == null) {
+            return "";
+        }
+        int idx = path.lastIndexOf('.');
+        if (idx <= 0 || idx == path.length() - 1) {
+            return "";
+        }
+        return path.substring(idx).toLowerCase(Locale.ROOT);
     }
 
     /** 把文本按 \r?\n 切行,丢弃末尾换行切出的空元素,保持行号与视觉一致。 */
@@ -48,9 +85,46 @@ public class FileTools {
         return lines;
     }
 
+    /**
+     * 把 read_file 接管处理器返回的附件合并进任务 metadata.attachments(整体替换为新 List,
+     * 避免并发写共享引用;写法对齐 UserInputMaterializerImpl.mergeAttachments)。额外做
+     * 全等去重:已存在的相同附件(equals)跳过——同一图片被 read_file 读两次时不重复注入。
+     */
+    @SuppressWarnings("unchecked")
+    private void mergeReadAttachments(List<Map<String, Object>> collected) {
+        Map<String, Object> metadata = task.metadata();
+        if (metadata == null) {
+            log.warn("[read-file] 任务 metadata 不可用,{} 个附件未落盘", collected.size());
+            return;
+        }
+        List<Map<String, Object>> merged = new ArrayList<>();
+        Object existing = metadata.get(ExecContext.METADATA_ATTACHMENTS_KEY);
+        if (existing instanceof List<?> list) {
+            for (Object item : list) {
+                if (item instanceof Map<?, ?> map) {
+                    merged.add((Map<String, Object>) map);
+                }
+            }
+        }
+        for (Map<String, Object> attachment : collected) {
+            boolean duplicate = false;
+            for (Map<String, Object> present : merged) {
+                if (present.equals(attachment)) {
+                    duplicate = true;
+                    break;
+                }
+            }
+            if (!duplicate) {
+                merged.add(attachment);
+            }
+        }
+        metadata.put(ExecContext.METADATA_ATTACHMENTS_KEY, merged);
+    }
+
     @Tool(description = "读取文件的内容。支持可选 line_start / line_end 按 1-based 行区间读取(省略则全量返回),"
             + "直接返回文件文本内容(纯文本),不附加行号等元信息包装。"
-            + "当未指定 line_start/line_end 且文件内容超过阈值时,自动截断到完整行并返回提示。",
+            + "当未指定 line_start/line_end 且文件内容超过阈值时,自动截断到完整行并返回提示。"
+            + "图片等非文本类型文件可由插件处理器按扩展名接管(直接返回处理结果,图片会注入为图像附件)。",
             resultConverter = PlainTextToolCallResultConverter.class)
     public String read_file(
             @ToolParam(description = "文件路径(相对任务工作区根)") String path,
@@ -59,6 +133,22 @@ public class FileTools {
             throws IOException {
         if (path == null || path.trim().isEmpty()) {
             throw new IllegalArgumentException("path 不能为空");
+        }
+        // 插件按扩展名接管 read_file(图片等非文本类型):核心先行授权解析(READ 档 + 沙箱 jail)
+        // 再把宿主绝对路径交处理器,插件无法绕过授权;处理器返回 null(放弃接管)则继续走
+        // 下方默认文本路径,行为与机制引入前完全一致。处理器抛异常按工具执行失败回灌。
+        if (readHandlers != null) {
+            FileReadHandler handler = readHandlers.find(extensionOf(path));
+            if (handler != null) {
+                Path file = fs.resolveExistingRead(task, agentId, path);
+                FileReadResult result = handler.read(task, path, file);
+                if (result != null) {
+                    if (!result.attachments().isEmpty()) {
+                        mergeReadAttachments(result.attachments());
+                    }
+                    return result.text();
+                }
+            }
         }
         String content = fs.readText(task, agentId, path);
         if (content.isEmpty()) {

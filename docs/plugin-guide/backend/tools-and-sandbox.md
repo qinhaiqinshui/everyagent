@@ -7,14 +7,15 @@ has_children: false
 
 # 工具与沙箱扩展点
 
-**一句话定位**：本篇讲后端四类「贴近执行」的扩展点——给 AI 注入工具（`ToolProvider`）、拦截每一次工具执行（`ToolExecutionInterceptor`）、提供命令沙箱后端（`SandboxProvider`）、处理用户输入里的文件引用（`FileReferenceHandler`），外加它们共同取数的统一执行上下文 `ExecContext`。四个 SPI 全部住在 plugin-api 的 `spi/` 包下，注册入口都是 `activate(ctx)` 里的 `ctx.register*`（注册方法全集见 [后端模型总览](overview.md)，本篇只展开这 4 个 + ExecContext）。
+**一句话定位**：本篇讲后端五类「贴近执行」的扩展点——给 AI 注入工具（`ToolProvider`）、拦截每一次工具执行（`ToolExecutionInterceptor`）、提供命令沙箱后端（`SandboxProvider`）、处理用户输入里的文件引用（`FileReferenceHandler`）、按扩展名接管 `read_file`（`FileReadHandler`），外加它们共同取数的统一执行上下文 `ExecContext`。五个 SPI 全部住在 plugin-api 的 `spi/` 包下，注册入口都是 `activate(ctx)` 里的 `ctx.register*`（注册方法全集见 [后端模型总览](overview.md)，本篇只展开这 5 个 + ExecContext）。
 
 | SPI | 注册方法 | worker 侧注册表 | 消费点（详见各节） | 内置范例插件 |
 |---|---|---|---|---|
-| `ToolProvider` | `registerToolProvider`（`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/WorkerPluginContext.java:43`） | `ToolProviderRegistry` | `AgentBuilder` 装配期聚合 | subagent、sandbox-windows-mic、sandbox-wsl-ubuntu、sandbox-windows-codex |
-| `ToolExecutionInterceptor` | `registerToolExecutionInterceptor`（`WorkerPluginContext.java:58`） | `ToolExecutionInterceptorRegistry` | per-run `InterceptingToolCallingManager` | secret-redaction、unattended |
-| `SandboxProvider` | `registerSandboxProvider`（`WorkerPluginContext.java:49`） | `SandboxProviderRegistry` | `OsSandbox` 惰性解析 + `SandboxPathRegistry` | sandbox-windows-mic、sandbox-wsl-ubuntu、sandbox-windows-codex |
-| `FileReferenceHandler` | `registerFileReferenceHandler`（`WorkerPluginContext.java:67`） | `FileReferenceHandlerRegistry` | 用户输入物化服务 `UserInputMaterializer`（轮次节点 `FileReferenceProcessNode`(875) 与队列「插入到当前对话」共用） | image-vision（唯一） |
+| `ToolProvider` | `registerToolProvider`（`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/WorkerPluginContext.java:44`） | `ToolProviderRegistry` | `AgentBuilder` 装配期聚合 | subagent、sandbox-windows-mic、sandbox-wsl-ubuntu、sandbox-windows-codex |
+| `ToolExecutionInterceptor` | `registerToolExecutionInterceptor`（`WorkerPluginContext.java:59`） | `ToolExecutionInterceptorRegistry` | per-run `InterceptingToolCallingManager` | secret-redaction、unattended |
+| `SandboxProvider` | `registerSandboxProvider`（`WorkerPluginContext.java:50`） | `SandboxProviderRegistry` | `OsSandbox` 惰性解析 + `SandboxPathRegistry` | sandbox-windows-mic、sandbox-wsl-ubuntu、sandbox-windows-codex |
+| `FileReferenceHandler` | `registerFileReferenceHandler`（`WorkerPluginContext.java:68`） | `FileReferenceHandlerRegistry` | 用户输入物化服务 `UserInputMaterializer`（轮次节点 `FileReferenceProcessNode`(875) 与队列「插入到当前对话」共用） | image-vision（唯一） |
+| `FileReadHandler` | `registerFileReadHandler`（`WorkerPluginContext.java:74`） | `FileReadHandlerRegistry` | `FileTools.read_file`（核心授权解析后按扩展名分发，未命中/返回 null 回落默认文本读取） | —（暂无） |
 
 所有注册方法的 worker 实现(`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/WorkerPluginContextImpl.java:140,150,179,205`)都只是往对应注册表 `add` 一行——**注册即生效、无过滤、无校验**。
 
@@ -365,9 +366,67 @@ return new FileReferenceResult("（附图：" + displayPath(ref) + "）", List.o
 | 以为早期槽位都有值 | `FileReferenceContext` 是早期节点：任务未创建时 `snapshot()/emitter()/interaction()/dataDir()` 等可为 null，`subjectId()/workspaceId()/workspaceRoot()` 由早期回退字段供给（`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/spi/FileReferenceContext.java:14-20`） |
 | 自己改写 input / 拼持久化 | 核心已做 input 改写与 metadata 合并，handler 只返回结果；别的持久化走 `pluginDir()` + 自注册 RPC（[持久化与插件私有状态](persistence-and-state.md)） |
 
-## 5. ExecContext —— 槽位判据与字段表
+## 5. FileReadHandler —— read_file 按扩展名接管
 
-### 5.1 §14.11 红线原文（口径出处）
+**一句话定位**：`FileReferenceHandler` 管用户输入侧的 `@` 引用，`FileReadHandler` 管 AI 主动调用 `read_file` 的读取侧——同一个 .png，用户 `@` 挂进来走前者，AI 自己 `read_file` 走后者。核心 `read_file` 对文本文件提供默认支持，本 SPI 让插件按扩展名接管非文本类型的读取（图片 → 图像附件注入；未来 PDF → 提取文本回灌）。
+
+### 5.1 接口定义（原码摘录）
+
+```java
+// every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/spi/FileReadHandler.java
+public interface FileReadHandler {
+
+    /** 插件 id。 */
+    String pluginId();
+
+    /** 支持的扩展名集合（小写含点，如 {".png", ".jpg"}）。 */
+    Set<String> extensions();
+
+    /**
+     * 读取一个文件。
+     * line_start / line_end 等行区间参数对接管处理器无意义，核心不会传递。
+     *
+     * @param ctx  任务上下文
+     * @param path AI 调 read_file 时传入的原始路径参数
+     * @param file 核心授权解析后的宿主绝对路径
+     * @return 读取结果；返回 null 等价于「放弃接管」（回落核心默认文本读取）
+     * @throws RuntimeException 处理失败时抛出，异常信息按工具执行失败文本回灌 AI
+     *         （fail-fast，不降级为乱码文本）
+     */
+    FileReadResult read(ExecContext ctx, String path, Path file);
+}
+```
+
+返回值 `FileReadResult(text, attachments)`（`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/spi/FileReadResult.java`）的结果契约：
+
+| 结果 | 契约 |
+|---|---|
+| `text` | 作为 read_file 的工具结果串**直接回灌 AI** |
+| `attachments` | 项结构 `{type:"image", dataUrl, fileName, mimeType}`（dataUrl 为 base64 data URL），合并进 `TaskEntry.metadata.attachments` 持久化（跨轮可读），由核心 `FileAttachmentAdvisor` 注入模型——AI 在工具结果后的**下一次**模型调用即可看到图片；核心做全等去重，同一图片读两次不重复注入；空列表 = 无附件 |
+| 返回 `null` | 放弃接管：回落核心默认文本读取，行为与无插件时一致 |
+| 抛异常 | 异常信息按工具执行失败文本回灌 AI（fail-fast，不降级为乱码文本） |
+
+### 5.2 注册方式
+
+```java
+// activate() 里的一行；扩展名约定小写含点（注册侧自动小写归一），
+// 同扩展名后注册覆盖先注册并打 WARN（与 FileReferenceHandler 同款注册表模式）
+ctx.registerFileReadHandler(new MyImageReadHandler(ctx.services(), settings));
+```
+
+worker 侧消费点：`FileTools.read_file`——扩展名命中 handler 时，核心**先行授权解析**（`PermissionGate` READ 档授权 + 工作区沙箱 jail + realpath 校验）再把宿主绝对路径交给处理器；未命中任何 handler 或处理器返回 null，走核心默认文本路径。`read_file` 工具描述已声明「图片等非文本类型文件可由插件处理器按扩展名接管」。
+
+### 5.3 安全模型：路径由核心授权解析后传入
+
+`read` 的 `file` 参数是核心授权解析后的宿主真实绝对路径——**实现方直接读 `file` 即可，不得另行自行解析路径**（防绕过授权）。与 `FileReferenceHandler`「用户 @ 引用即视为已授权」不同：read_file 是 AI 发起的访问，必须走完整授权链（工作区外路径先弹授权 ask，拒绝/超时回灌错误文本）。
+
+### 5.4 与 FileReferenceHandler 的分工
+
+一句话：**@ 引用（用户输入侧）归 `FileReferenceHandler`，`read_file`（AI 工具调用侧）归 `FileReadHandler`**——两个 SPI 注册表独立、扩展名键口径相同（小写含点）。未来 PDF 等类型复用本 SPI：接管处理器返回提取后的文本内容（attachments 为空列表）即可。
+
+## 6. ExecContext —— 槽位判据与字段表
+
+### 6.1 §14.11 红线原文（口径出处）
 
 [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §14.11（执行上下文管道）：
 
@@ -375,9 +434,9 @@ return new FileReferenceResult("（附图：" + displayPath(ref) + "）", List.o
 
 > **禁止**：横切层 import `TaskEntry/TaskRuntime/TaskInfo`;绕过 `ctx.agentFactory()` 手工组装四件套 map;绕过 `ctx.interaction()` 手动填 taskId context;worker 侧新增 properties 透传通道。工作流层实现 `WorkflowRuntime implements ExecContext` 后,同一条授权链、同一批 advisor、同一工具链零改动复用。
 
-本篇四个 SPI 的上下文全部 `extends ExecContext`（`ToolContext` / `ToolExecutionContext` / `FileReferenceContext`，§14.11 明文列举），插件代码**只准**从这些槽位取执行数据。
+本篇五个 SPI 的上下文全部 `extends ExecContext`（`ToolContext` / `ToolExecutionContext` / `FileReferenceContext`；`FileReadHandler.read` 直接收 `ExecContext`；§14.11 明文列举），插件代码**只准**从这些槽位取执行数据。
 
-### 5.2 逐字段表
+### 6.2 逐字段表
 
 源码：`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/execution/ExecContext.java:25-91`。
 
@@ -396,7 +455,7 @@ return new FileReferenceResult("（附图：" + displayPath(ref) + "）", List.o
 | `agents()` | `Map<String,AgentContext>` | 本主体活动 agent 注册表（主 agent + 各插件派生） | `AgentBuilder.build()` 自动 put（`:333`，不发事件） | §14.11「插件不再手动 put/emit」 |
 | `METADATA_ATTACHMENTS_KEY` | 常量 `"attachments"` | metadata 中附件列表键名 | `UserInputMaterializerImpl`/`FileAttachmentAdvisor` | — |
 
-### 5.3 「命令跑在哪个环境/目录」到底由什么决定
+### 6.3 「命令跑在哪个环境/目录」到底由什么决定
 
 | 问题 | 答案 | 证据 |
 |---|---|---|
@@ -405,15 +464,15 @@ return new FileReferenceResult("（附图：" + displayPath(ref) + "）", List.o
 | 工作区**只读还是可写** | 工作区根按 `READ_WRITE` 登记挂载意图（§7.16 externalRoots 同为读写）；系统技能目录也读写挂入（§7.17），另有一次面向 prompt 路径翻译的 `READ_ONLY` 登记 | `AgentBuilder.java:158-171`、`WorkerBeanConfiguration.java:63-70` |
 | **jail 校验在谁那边** | worker 侧：文件路径责任链（`WorkspaceAllowCheck`→…→`AuthorizeCheck`，先 realpath 再校验前缀）+ `WorkspaceSandbox.resolveExisting`（词法 + realpath 双校验）。插件**复用**这些通道（经 `ctx.workspaces()`），不得自造越界放行 | 架构 §7.8；`ImageReferenceHandler.java:107-115`；红线：不得绕过 gate 放行越界 IO（根 `AGENTS.md`） |
 
-## 6. 工具红线速查
+## 7. 工具红线速查
 
 写工具/沙箱类插件前，三条架构红线必须过一遍（原文见 [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md)）：
 
-| 红线 | 出处 | 与本篇四个 SPI 的关系 |
+| 红线 | 出处 | 与本篇五个 SPI 的关系 |
 |---|---|---|
 | **PermissionGate**：危险操作必须经用户授权——AI 工具的工作区外路径访问先弹 `kind=authorization` 的 ask（拒绝/本轮运行/本任务三档）；命令中的危险动词**仅当命令引用可能落在工作区外**时才需授权，工作区内增删改查直接放行（cwd 锁定 + 沙箱可写性契约兜底）；**用户 `@` 显式选择的工作区外部授权根 = 已授权**（完全读写 READ+WRITE+EXEC），文件工具与命令串中引用其内的路径都不再弹窗（§7.17）；拒绝抛异常回灌模型 | §7.8 / §7.17 | 用 `ctx.shellExecutor()` 就自动带上；自己碰文件系统要走 `ctx.workspaces()` 的 jailed 解析；**不得绕过 gate 直接放行越界 IO** |
 | **沙箱契约（codex）**：沙箱进程 WRITE_RESTRICTED 受限令牌 + capability SID，工作区树可写、区外物理只读；越界写拦截由 PermissionGate 责任链兜底 | §7.10 | SandboxProvider 实现者不要试图靠改 ACL/打标记做隔离；隔离做不到的部分交给授权链 |
-| **ExecContext 管道**：横切层只见 ExecContext 槽位，不见 `TaskEntry/TaskRuntime/TaskInfo`；禁止 properties 黑盒 map 与强转再现；插件功能与主体特有槽位不进核心接口 | §14.11 | 四个 SPI 的 ctx 全部 `extends ExecContext`；插件代码 import 任务域类型即违红线 |
+| **ExecContext 管道**：横切层只见 ExecContext 槽位，不见 `TaskEntry/TaskRuntime/TaskInfo`；禁止 properties 黑盒 map 与强转再现；插件功能与主体特有槽位不进核心接口 | §14.11 | 五个 SPI 的 ctx 全部 `extends ExecContext`；插件代码 import 任务域类型即违红线 |
 
 ## 下一步读
 

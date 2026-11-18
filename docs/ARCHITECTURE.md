@@ -769,6 +769,8 @@ worker(进程)
 
 **文件引用物化单点实现(`UserInputMaterializer`,核心服务,插件经 `WorkerServices.userInputMaterializer()` 取用)**:把一轮「正文 + rawContent」物化成投喂模型就绪的 `UserMessage`——解析文件引用 token → 按扩展名分发插件注册的 `FileReferenceHandler` → 用 replacementText 改写正文 → 附件合并进任务 `metadata.attachments`(随 meta.json 持久化,跨轮可读)→ 附件转 Spring AI `Media`。**凡「把一条用户输入投给模型」的入口都必须经本服务**(红线 §14.8):轮次路径由薄壳节点 `file.reference.process`(875) 调用,「插入到当前对话」路径由 `DialogInsertAdvisor` 直接调用——两条路径各写一份会让插入路径的 @ 图片退化成裸路径文本(图片不进模型)。
 
+**read_file 扩展名接管(`FileReadHandler`,插件 SPI)**:核心 `read_file` 对文本文件提供默认支持;插件可按扩展名注册处理器接管 `read_file`(如 image-vision 接管 .png/.jpg 等图片类型)。核心**先行授权解析**——按 read_file 既有安全模型(`PermissionGate` READ 档授权 + 工作区沙箱 jail + realpath 校验)把 AI 传入路径解析为宿主绝对路径后才交给处理器,插件无法绕过授权;处理器返回工具结果文本 + 附件(`{type:"image", dataUrl, fileName, mimeType}`):文本直接回灌模型,附件合并进任务 `metadata.attachments`(随 meta.json 持久化、跨轮注入),由 `FileAttachmentAdvisor` 注入模型——AI 在工具结果后的下一次模型调用即可看到图片(附件按全等去重,同一图片读两次不重复注入);处理器返回 null 回落核心默认文本读取(行为与接管机制引入前一致);未来 PDF 等类型复用同一 SPI。
+
 **队列输入与「插入到当前对话」**:任务运行中输入入队(pendingInputs 经 `task.updated` 广播外显、`task.queueSnapshot` RPC 拉取——插件自持数据源,公共类型不携带插件专有字段;可 `task.queueRemove`/`task.queueMove` 管理,消费一项即广播刷新);悬空队列(终态未消费项)随 queue.jsonl 持久化、再运行时恢复。「插入到当前对话」走 `task.run{taskId, input, metadata:{insert:true, index}}`(队列插件在消费该 metadata 时**先按 index 从输入队列摘掉该项**——插入即消费,不摘则面板原地不动且会被当新一轮输入重复提交;摘到的队列项带 rawContent,非前端回传裸文本),`DialogInsertAdvisor` 随下一轮工具结果以 role=user 提交给 AI(先经 UserInputMaterializer 物化)+ 发 user.message(payload 形状与 consumeInput 同构)并进 agent conversation;advisor **按 taskId 现取插入队列**,不在构造期缓存引用;本 run 再无工具循环下行时机而未 drain 的插入项由 `queue.loop` 回收进输入队列、随 queue.jsonl 落盘为悬空队列,下次运行作普通轮次消费——**用户输入不丢**。队列项「编辑」= 回填输入框 + 摘除该项**两步都必须发生**(只摘不回填等于删掉这条输入)。
 
 **不变式**:
