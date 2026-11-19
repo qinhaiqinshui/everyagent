@@ -121,8 +121,11 @@ const listStyle: React.CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
   gap: 10,
-  width: 480,
-  maxWidth: '100%',
+  // 宽度语义是「至多 480,窄屏(移动端)随容器收窄」:不能写死 width: 480——
+  // 定宽会让父级 flex item 的 min-width(auto)被撑到 480+padding,窄视口下
+  // 容器横向溢出被裁,整个空态内容(logo/快捷入口)看起来整体偏右不居中。
+  width: '100%',
+  maxWidth: 480,
 }
 
 const cardStyle: React.CSSProperties = {

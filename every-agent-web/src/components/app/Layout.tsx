@@ -1180,6 +1180,9 @@ const emptyWorkspaceStyle: React.CSSProperties = {
   justifyContent: 'center',
   gap: 18,
   padding: 28,
+  // 本容器是行向 flex(body 容器)的 flex item,默认 min-width:auto 会被
+  // 子内容的固有宽度撑破窄视口(移动端),显式允许收缩保证始终被夹在视口内。
+  minWidth: 0,
 }
 
 const emptyWorkspaceBrandMarkHitStyle: React.CSSProperties = {
