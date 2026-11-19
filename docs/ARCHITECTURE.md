@@ -721,7 +721,7 @@ worker 的运行期责任链统一为 filter 形态（`result = next(ctx)`）：
 
 #### 7.15.2 文件变更(file changes)
 
-每一轮 agent 执行中对工作区的文件写操作由插件自管(task 核心零 fileChanges 概念,§14.11)。worker 文件工具(`FileTools`)在写盘成功后回调 `FileWriteListener`(plugin-api SPI;插件经 `WorkerServices.addFileWriteListener` 注册),回调点在写锁内、落盘之后。落盘按 roundId 写 `file-changes/<roundId>.json`,读侧走插件自注册的 `task.fileChanges` RPC。直推走 `plugin.*` 前缀瞬态事件,宿主 `taskStream` 一律透传 `plugin-task-event` 通用领域事件,不折入线程。
+每一轮 agent 执行中对工作区的文件写操作由插件自管(task 核心零 fileChanges 概念,§14.11)。worker 文件工具(`FileTools`)在写盘成功后回调 `FileWriteListener`(plugin-api SPI;插件经 `WorkerServices.addFileWriteListener` 注册),回调点在写锁内、落盘之后。落盘按 roundId 写 `file-changes/<roundId>.json`,读侧走插件自注册的 `task.fileChanges` RPC。直推走 `plugin.*` 前缀瞬态事件,宿主 `taskStream` 一律透传 `plugin-task-event` 通用领域事件,不折入线程。**降级不变式:直推是瞬态帧、允许错过,但错过的轮不允许在会话内永久缺失**——插件 web 端缓存首拉(`task.fileChanges` 全量)兜底之外,已闭合轮的面板挂载发现缺数据时必须节流强制重拉自愈(磁盘分片是事实源),不得把找回寄托于整页刷新。
 
 轮末「文件变更」行打开的核心 diff 标签(FileDiffPanel)在轮快照之上提供**回滚**:整体回滚 = `fs.replaceRaw(oldContent=afterContent, newContent=beforeContent)`(created 变更加 `deleteWhenEmpty` 回滚为删除文件);单块回滚 = 该变更块新文本→旧文本,定位不唯一时前端自动带上下文行扩位重试(§5.4 fs.replaceRaw 行)。回滚是**内容定位替换**,不依赖行号;文件在差异生成后被其他修改 → 定位不再命中 → 回滚失败。
 

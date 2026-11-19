@@ -55,6 +55,15 @@ const inflight = new Map<string, Promise<void>>()
 const fullCaches = new Map<string, Promise<RoundFileChangeFull[]>>()
 const listeners = new Set<() => void>()
 
+/**
+ * 「闭合轮数据缺失」自愈重拉节流窗口(ms):同任务短窗口内多个面板同时挂载(或 version
+ * bump 连环重渲染)只强制重拉一次;重拉后该轮仍缺失(= 真无变更)也不会连环触发
+ * (下一次触发须等新一次渲染且已出窗口)。
+ */
+const FORCE_REFRESH_THROTTLE_MS = 5000
+/** 每任务最近一次自愈重拉时刻(节流用)。 */
+const lastForceRefreshAt = new Map<string, number>()
+
 /** 快照版本号：任一任务缓存变化即自增,组件据此重渲染。 */
 let version = 0
 
@@ -86,6 +95,15 @@ export function ensureRoundChanges(taskId: string, workerId?: string): void {
   if (!taskId) return
   const existing = entries.get(taskId)
   if (existing?.loaded) return
+  pullAllRounds(taskId, workerId, 'ensure')
+}
+
+/**
+ * 拉全任务各轮轻量摘要并 REPLACE 内存缓存(ensure 与自愈重拉共用):
+ * ensure 语义 = 受 loaded 门幂等;force 语义 = 绕过 loaded 门(磁盘分片是事实源,
+ * 整体重拉覆盖内存,漏掉的轮随拉取补齐)。失败时 force 回滚节流时间戳,允许下次挂载立刻重试。
+ */
+function pullAllRounds(taskId: string, workerId: string | undefined, mode: 'ensure' | 'force'): void {
   if (inflight.has(taskId)) return
   const ctx = getPluginContext()
   const targetWorker = workerId || ctx.sdk.workerId
@@ -103,17 +121,40 @@ export function ensureRoundChanges(taskId: string, workerId?: string): void {
         byRound.set(item.roundId, item.changes)
       }
       entries.set(taskId, { byRound, loaded: true })
-      console.debug(`[file-change] 摘要已拉取 task=${taskId} 有变更轮数=${byRound.size}`)
+      console.debug(`[file-change] 摘要已拉取(${mode}) task=${taskId} 有变更轮数=${byRound.size}`)
       bump()
     })
     .catch((error) => {
-      // 失败不写死缓存:下次 ensure（重渲染/新一轮闭合）仍会重试
-      console.warn(`[file-change] 拉取轮次文件变更摘要失败(${taskId}):`, error)
+      // 失败不写死缓存:下次 ensure（重渲染/新一轮闭合）仍会重试;
+      // force 失败同时回滚节流时间戳,自愈路径下次挂载即可立刻再试。
+      console.warn(`[file-change] 拉取轮次文件变更摘要失败(${mode} ${taskId}):`, error)
+      if (mode === 'force') {
+        lastForceRefreshAt.delete(taskId)
+      }
     })
     .finally(() => {
       inflight.delete(taskId)
     })
   inflight.set(taskId, task)
+}
+
+/**
+ * 「闭合轮数据缺失」自愈重拉:轮末摘要的增量只来自瞬态直推(不落盘),错过
+ * (重连间隙/后台冻结标签/会话内丢帧)后旧实现只能整页刷新找回——ensure 的 loaded 门
+ * 在首次成功拉取后永不再拉,直推一旦错过,该轮面板在本次会话内恒为空。
+ * 本入口在「已 loaded 且该轮仍缺数据」时绕过 loaded 门强制重拉一次(节流见上):
+ * 面板挂载(轮闭合渲染)即触发,数据从磁盘分片反推,秒级自愈且无须刷新页面。
+ */
+export function maybeRefreshMissingRound(taskId: string, roundId: string, workerId?: string): void {
+  if (!taskId || !roundId) return
+  const existing = entries.get(taskId)
+  if (!existing?.loaded) return // 未加载/首拉失败:ensure 常规路径会拉,不自愈
+  if (existing.byRound.has(roundId)) return // 该轮已有数据(或直推已合入):无须自愈
+  const now = Date.now()
+  const last = lastForceRefreshAt.get(taskId) ?? 0
+  if (now - last < FORCE_REFRESH_THROTTLE_MS) return
+  lastForceRefreshAt.set(taskId, now)
+  pullAllRounds(taskId, workerId, 'force')
 }
 
 /** 取某轮轻量摘要；未拉取/该轮无变更返回 undefined。 */
@@ -159,6 +200,7 @@ export function upsertRoundChanges(
 export function invalidateRoundChanges(taskId: string): void {
   if (!taskId) return
   if (!entries.delete(taskId)) return
+  lastForceRefreshAt.delete(taskId)
   for (const key of [...fullCaches.keys()]) {
     if (key.startsWith(`${taskId}#`)) {
       fullCaches.delete(key)

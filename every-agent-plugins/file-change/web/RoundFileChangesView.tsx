@@ -9,6 +9,7 @@ import {
   getRoundChanges,
   getRoundChangesVersion,
   loadRoundFullChanges,
+  maybeRefreshMissingRound,
   subscribeRoundChanges,
   type RoundFileChangeSummary,
 } from './roundChangesStore'
@@ -68,13 +69,16 @@ function toDisplayPath(filePath: string): string {
  * 真相源是本插件落盘的 `file-changes/<roundId>.json`,初次打开一次 RPC 拉全任务各轮轻量摘要
  * 按 taskId 缓存;运行中轮闭合的增量由 worker 直推 `plugin.file-change.roundChanges`(经宿主
  * `plugin-task-event` 领域事件透传,在 index.ts activate 里订阅 upsert,§7.15.2);
- * 全文按 roundId 缓存,同轮多次点击不重复 RPC。
+ * 全文按 roundId 缓存,同轮多次点击不重复 RPC。直推是瞬态帧,错过(重连间隙/后台冻结标签/
+ * 会话内丢帧)时由挂载期自愈重拉兜底(maybeRefreshMissingRound,已闭合轮缺数据即节流重拉),
+ * 不再依赖整页刷新找回。
  */
 export default function RoundFileChangesView({
   taskId,
   roundId,
   workerId,
   workspaceRoot,
+  round,
 }: RoundTailPanelProps) {
   // 订阅插件缓存版本:摘要拉取完成 / 直推合入时重渲染本面板。
   // version 同时进 effect 依赖:直推合入只建未加载条目时,靠下一次 effect 触发全量补拉
@@ -86,7 +90,15 @@ export default function RoundFileChangesView({
   // (refreshRounds)到达,本面板挂载时缓存必已含本轮,无需过期缓存自愈补丁(§7.15.2)。
   useEffect(() => {
     ensureRoundChanges(taskId, workerId)
-  }, [taskId, workerId, cacheVersion])
+    // 直推是瞬态的(不落盘),重连间隙/后台冻结标签/会话内丢帧错过即永缺——ensure 的
+    // loaded 门首拉成功后不再拉,该轮面板在本次会话内会恒为空。已闭合轮(round.endSeq
+    // 非空,分片必已落盘)缺数据时触发节流强制重拉自愈(见 maybeRefreshMissingRound);
+    // 未闭合轮不走此路径(轮未收口,分片尚未写,拉了也是空)。
+    const r = round as { endSeq?: string | null } | null | undefined
+    if (r && r.endSeq) {
+      maybeRefreshMissingRound(taskId, roundId, workerId)
+    }
+  }, [taskId, roundId, workerId, round, cacheVersion])
 
   const changes = getRoundChanges(taskId, roundId) ?? []
 
