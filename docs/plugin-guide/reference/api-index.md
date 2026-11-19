@@ -269,7 +269,7 @@ has_children: false
 
 | 坐标系 | 类型 / 方向 | 关键占用（实测） | 详解 |
 |---|---|---|---|
-| AdvisorProvider | int，升序=外→内；锚点 `TCA = ToolCallingAdvisor.DEFAULT_ORDER = HP+300 = -2147483348` | HP+50 system-info、HP+60 agents-md、HP+140 git、HP+150 SlashTokenResolve、HP+160 FileAttachment、**TCA 工具循环本体**、TCA+30~+500 重试/护栏/压缩/限流、`0`=TokenCalibration（⚠️ 绝对值，实际最内层） | [advisors §2.2](../backend/advisors.md#22-内置-advisor-链完整-order-表)、[§2.4](../backend/advisors.md#24-420-850-的源码验证结论与计划口径不符如实更正) |
+| AdvisorProvider | int，升序=外→内；锚点 `TCA = ToolCallingAdvisor.DEFAULT_ORDER = HP+300 = -2147483348` | HP+50 system-info、HP+60 agents-md、HP+140 git、HP+150 SlashTokenResolve、**TCA 工具循环本体**、TCA+30~+500 重试/护栏/压缩/附件注入（TCA+450，须留在循环内侧）/限流、`0`=TokenCalibration（⚠️ 绝对值，实际最内层） | [advisors §2.2](../backend/advisors.md#22-内置-advisor-链完整-order-表)、[§2.4](../backend/advisors.md#24-420-850-的源码验证结论与计划口径不符如实更正) |
 | TaskLifecycleNode | float 洋葱；**临界段 [420,850] 落入即 WARN 拒绝** | 插件节点 15 / 40 / 870 / 877 / 950 | [任务 §2.3](../backend/task-and-rpc.md#23-完整节点-order-占用表worker-内置-26--插件-5共-31)、[§2.5](../backend/task-and-rpc.md#25-临界段-420850-专节) |
 | ToolExecutionInterceptor | int | unattended=100、secret-redaction=900 | [工具 §2](../backend/tools-and-sandbox.md#2-toolexecutioninterceptor--工具执行拦截链) |
 
