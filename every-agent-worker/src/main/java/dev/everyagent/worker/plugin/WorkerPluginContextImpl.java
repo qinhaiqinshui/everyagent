@@ -10,7 +10,7 @@ import dev.everyagent.plugin.api.rpc.RpcMethod;
 import dev.everyagent.plugin.api.slash.SlashProvider;
 import dev.everyagent.plugin.api.slash.SlashTokenResolver;
 import dev.everyagent.plugin.api.spi.AdvisorProvider;
-import dev.everyagent.plugin.api.spi.FileReferenceHandler;
+import dev.everyagent.plugin.api.spi.FileReadHandler;
 import dev.everyagent.plugin.api.spi.SandboxProvider;
 import dev.everyagent.plugin.api.spi.SearchProvider;
 import dev.everyagent.plugin.api.spi.TokenEstimator;
@@ -22,7 +22,7 @@ import dev.everyagent.plugin.api.task.TaskLifecycleNode;
 import dev.everyagent.worker.plugin.registry.AdvisorProviderRegistry;
 import dev.everyagent.worker.plugin.registry.AuthorizationHandlerRegistry;
 import dev.everyagent.worker.plugin.registry.ChatModelEnhancerRegistry;
-import dev.everyagent.worker.plugin.registry.FileReferenceHandlerRegistry;
+import dev.everyagent.worker.plugin.registry.FileReadHandlerRegistry;
 import dev.everyagent.worker.plugin.registry.SandboxProviderRegistry;
 import dev.everyagent.worker.plugin.registry.SearchProviderRegistry;
 import dev.everyagent.worker.plugin.registry.TaskAdmissionPolicyRegistry;
@@ -88,7 +88,7 @@ public class WorkerPluginContextImpl implements WorkerPluginContext {
     private final TaskLifecycleRegistry lifecycleRegistry;
     private final ChatModelEnhancerRegistry chatModelEnhancerRegistry;
     private final TaskAdmissionPolicyRegistry admissionPolicyRegistry;
-    private final FileReferenceHandlerRegistry fileReferenceHandlerRegistry;
+    private final FileReadHandlerRegistry fileReadHandlerRegistry;
     private final EventEgressFilterRegistry eventEgressFilterRegistry;
     private final RoundEgressFilterRegistry roundEgressFilterRegistry;
     private final RpcDispatcher rpcDispatcher;
@@ -117,7 +117,7 @@ public class WorkerPluginContextImpl implements WorkerPluginContext {
             TaskLifecycleRegistry lifecycleRegistry,
             ChatModelEnhancerRegistry chatModelEnhancerRegistry,
             TaskAdmissionPolicyRegistry admissionPolicyRegistry,
-            FileReferenceHandlerRegistry fileReferenceHandlerRegistry,
+            FileReadHandlerRegistry fileReadHandlerRegistry,
             EventEgressFilterRegistry eventEgressFilterRegistry,
             RoundEgressFilterRegistry roundEgressFilterRegistry,
             RpcDispatcher rpcDispatcher,
@@ -137,7 +137,7 @@ public class WorkerPluginContextImpl implements WorkerPluginContext {
         this.lifecycleRegistry = lifecycleRegistry;
         this.chatModelEnhancerRegistry = chatModelEnhancerRegistry;
         this.admissionPolicyRegistry = admissionPolicyRegistry;
-        this.fileReferenceHandlerRegistry = fileReferenceHandlerRegistry;
+        this.fileReadHandlerRegistry = fileReadHandlerRegistry;
         this.eventEgressFilterRegistry = eventEgressFilterRegistry;
         this.roundEgressFilterRegistry = roundEgressFilterRegistry;
         this.rpcDispatcher = rpcDispatcher;
@@ -224,8 +224,8 @@ public class WorkerPluginContextImpl implements WorkerPluginContext {
     }
 
     @Override
-    public void registerFileReferenceHandler(FileReferenceHandler handler) {
-        fileReferenceHandlerRegistry.register(handler);
+    public void registerFileReadHandler(FileReadHandler handler) {
+        fileReadHandlerRegistry.register(handler);
     }
 
     @Override

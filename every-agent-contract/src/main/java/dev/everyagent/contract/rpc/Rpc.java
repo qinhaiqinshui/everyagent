@@ -23,6 +23,8 @@ public final class Rpc {
     public static final String ERR_INTERNAL = "INTERNAL";
     /** 业务方需要用户补充凭证(如 git.clone 远端认证):由调用方弹窗收集后重试。 */
     public static final String ERR_AUTH_REQUIRED = "AUTH_REQUIRED";
+    /** 插件依赖的本机工具/环境不可用(如 git 未安装):由调用方静默降级提示,不弹错误框。 */
+    public static final String ERR_UNAVAILABLE = "UNAVAILABLE";
 
     /** RPC 取消的方法名——信封协议自身的一部分,随信封定义。 */
     public static final String RPC_CANCEL = "rpc.cancel";

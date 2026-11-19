@@ -12,7 +12,7 @@ import dev.everyagent.plugin.api.task.UserInput;
  * <p>后续轮次：QueueLoopNode(870) 从队列 poll 后覆盖 ctx.input()，本节点再消费。
  * <p>MainAgentNode(390) 只负责构建 agent，不再消费输入——避免同一输入被消费两次。
  * <p><b>位置约束：必须留在轮次循环（queue.loop=870）内侧。</b>consume.input 与
- * file.reference.process(875)/edit.resend(877) 同属「每轮重入」的输入预处理簇，
+ * edit.resend(877) 同属「每轮重入」的输入预处理簇，
  * 逐轮消费队列项；一旦落到循环外侧（&lt;870），队列续跑的后续轮次将无人消费输入。
  */
 public final class ConsumeInputNode implements TaskLifecycleNode {

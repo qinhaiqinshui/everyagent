@@ -7,14 +7,14 @@ import dev.everyagent.worker.attachment.FileAttachmentAdvisor;
 import dev.everyagent.worker.plugin.AdvisorContextImpl;
 import dev.everyagent.plugin.api.execution.ExecContext;
 import org.springframework.ai.chat.client.advisor.api.Advisor;
-import org.springframework.core.Ordered;
 
 /**
  * {@link FileAttachmentAdvisor} 适配器。
  *
- * <p>order = {@link Ordered#HIGHEST_PRECEDENCE} + 160（紧跟 SlashTokenResolveAdvisor 之后，
- * 只改写末位 user 消息、不动 system 区）。
- * 每 run 新建实例；子 agent 无 taskEntry 属性时 Advisor 恒放行。
+ * <p>order 直接取 {@link FileAttachmentAdvisor#ORDER}（工具循环内侧、压缩之后），与 advisor
+ * 自己的 {@code getOrder()} 同一常量、不可能漂移；链位置缘由见该常量注释——<b>不得改到
+ * 工具循环外侧</b>，否则 run 中途 read_file 并入的附件本轮发不出去。每 run 新建实例；
+ * 子 agent 无 taskEntry 属性时 Advisor 恒放行。
  */
 public class FileAttachmentAdvisorProvider implements AdvisorProvider {
 
@@ -25,7 +25,7 @@ public class FileAttachmentAdvisorProvider implements AdvisorProvider {
 
     @Override
     public int order() {
-        return Ordered.HIGHEST_PRECEDENCE + 160;
+        return FileAttachmentAdvisor.ORDER;
     }
 
     @Override

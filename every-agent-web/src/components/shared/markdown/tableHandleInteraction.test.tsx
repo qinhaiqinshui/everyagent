@@ -8,7 +8,7 @@
  * - 桌面口径(hover 能力)悬停表格亦显示工具栏,移出即隐(固定态除外);
  * - 行高 ⇕ 把手在表外左栏每行一个(回归:曾渲染在每个单元格底部 = 行×列个);
  * - 列宽 ↔ 把手在表外顶栏每列右缘一个,不在任何 th/td 内;
- * - 拖动调列宽(colgroup 覆盖为 px),双击重置(回到 ch 口径)。
+ * - 拖动调列宽(colgroup 覆盖为 px),双击重置(回到自动分配的列宽)。
  */
 import { describe, it, expect, afterEach, beforeAll } from 'vitest'
 import React from 'react'
@@ -327,9 +327,10 @@ describe('表格外把手栏(工具栏「调整表格」切换)', () => {
     expect(firstCol?.getAttribute('style')).toContain('130px')
   })
 
-  it('双击列把手:重置为自动列宽(回到 ch 口径)', async () => {
+  it('双击列把手:重置为自动列宽', async () => {
     const container = await renderTable()
     await enterAdjustMode(container)
+    const autoStyle = container.querySelector('col')?.getAttribute('style')
     const handle = colHandles()[0]
     await React.act(async () => {
       fire(handle, 'pointerdown', { clientX: 100, clientY: 9 })
@@ -340,7 +341,7 @@ describe('表格外把手栏(工具栏「调整表格」切换)', () => {
     await React.act(async () => {
       fire(handle, 'dblclick')
     })
-    expect(container.querySelector('col')?.getAttribute('style')).toContain('ch')
+    expect(container.querySelector('col')?.getAttribute('style')).toBe(autoStyle)
   })
 
   it('拖动/双击行把手不抛错,行把手保持(行高覆盖走内容层 clamp)', async () => {

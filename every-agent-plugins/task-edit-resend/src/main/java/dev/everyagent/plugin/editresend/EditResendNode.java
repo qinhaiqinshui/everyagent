@@ -10,10 +10,10 @@ import java.util.Map;
 
 /**
  * 编辑重发节点（order=877，虚拟线程阶段，临界段内侧·轮次循环段，
- * 位于 file.reference.process(875) 与 consume.input(880) 之间）。
+ * 位于 queue.loop(870) 与 consume.input(880) 之间）。
  * 从 ctx.runParams() 取 editSeq，有就截断，然后放行到 consume.input(880)。
  * 在轮次循环（queue.loop=870）内侧：队列消费出的带 editSeq 输入逐轮生效。
- * 插件不存在时此节点不存在，file.reference.process(875) → consume.input(880) 直连。
+ * 插件不存在时此节点不存在，queue.loop(870) → consume.input(880) 直连。
  */
 public final class EditResendNode implements TaskLifecycleNode {
 

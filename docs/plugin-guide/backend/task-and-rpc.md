@@ -133,9 +133,9 @@ public interface TaskLifecycleNode {
 
 与 Advisor 链（int、`HIGHEST_PRECEDENCE + N` 约 -21.47 亿，[advisors.md](advisors.md) §2.1）是**两套互不相干的坐标系**：这里是朴素正数 float，15/40/870/950 都是「裸值」。
 
-### 2.3 完整节点 order 占用表（worker 内置 26 + 插件 6，共 32）
+### 2.3 完整节点 order 占用表（worker 内置 27 + 插件 6，共 33）
 
-worker 内置节点分两处注册：RPC 线程段 6 个在 `TaskManager.registerLifecycleNodes`（`every-agent-worker/src/main/java/dev/everyagent/worker/task/TaskManager.java:174-187`，需要 TaskManager 内部 Map/Counter 所以不进 `BuiltInTaskLifecycleNodes`）；其余 20 个在 `BuiltInTaskLifecycleNodes.registerAll`（`every-agent-worker/src/main/java/dev/everyagent/worker/task/lifecycle/BuiltInTaskLifecycleNodes.java:68-96`），全部以 `pluginId="worker"` 注册（不受临界段限制）。「段型」栏：普通 = 走 `invoke` 语义；Section = `SectionNode`/`UpstreamNode` 子类（§2.5）。
+worker 内置节点分两处注册：RPC 线程段 6 个在 `TaskManager.registerLifecycleNodes`（`every-agent-worker/src/main/java/dev/everyagent/worker/task/TaskManager.java:174-187`，需要 TaskManager 内部 Map/Counter 所以不进 `BuiltInTaskLifecycleNodes`）；其余 21 个在 `BuiltInTaskLifecycleNodes.registerAll`（`every-agent-worker/src/main/java/dev/everyagent/worker/task/lifecycle/BuiltInTaskLifecycleNodes.java:68-96`），全部以 `pluginId="worker"` 注册（不受临界段限制）。「段型」栏：普通 = 走 `invoke` 语义；Section = `SectionNode`/`UpstreamNode` 子类（§2.5）。
 
 | order | id | 段型 | 职责 | 来源 | 证据（文件:行号） |
 |---|---|---|---|---|---|
@@ -160,29 +160,29 @@ worker 内置节点分两处注册：RPC 线程段 6 个在 `TaskManager.registe
 | **500** | `persistence.untrack` | **临界段** | 摘流源/注销落盘 | worker | `PersistenceUntrackNode.java:29` |
 | **550** | `disk.index` | **临界段** | 磁盘索引更新 | worker | `DiskIndexNode.java:26` |
 | **650** | `status.persist` | **临界段** | 终态落盘 meta | worker | `StatusPersistNode.java:26` |
+| **700** | `rounds.reconcile` | **临界段** | 终态轮次对账（补闭合漏做的轮 + 推 round.closed） | worker | `RoundIndexReconcileNode.java:35` |
 | **750** | `log.flush` | **临界段** | 事件日志 flush/关 writer | worker | `LogFlushNode.java:26` |
 | **800** | `concurrency.release` | **临界段** | 并发计数扣减 | worker | `ConcurrencyReleaseNode.java:19` |
 | **840** | `status` | **临界段**（成对：down 在段外） | 终态事件广播 | worker | `StatusNode.java:36` |
 | 860 | `ledger.persist` | Upstream | 台账落盘 agents.json | worker | `AgentLedgerPersistNode.java:28` |
 | **870** | `queue.loop` | 普通 | 轮次循环：重复 next.proceed 续跑队列项 | **task-input-queue** | `QueueLoopNode.java:54` |
-| 875 | `file.reference.process` | 普通 | `@` 文件引用预处理（每轮；薄壳委托核心 `UserInputMaterializer` 物化） | worker | `FileReferenceProcessNode.java:71-72` |
 | **877** | `edit.resend` | 普通 | 编辑重发截断（每轮） | **task-edit-resend** | `EditResendNode.java:32` |
 | **879** | `wait.bind` | 普通 | 扫描本轮 rawContent 中的 task.wait 胶囊并登记内存绑定（每轮） | **task-wait** | `WaitBindNode.java` |
 | 880 | `consume.input` | 普通 | 消费当前轮输入（每轮） | worker | `ConsumeInputNode.java:24` |
 | 900 | `cascade.stop` | Upstream | 逐轮失败级联停 | worker | `CascadeStopNode.java:33` |
 | **950** | `spawned.await` | 普通 | 逐轮等子 agent 全部终态（轮收口前） | **subagent** | `SubAgentSpawnedAwaitNode.java:29` |
 
-⚠️ 与架构文档的差异：[`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §7.14.1 写「内置节点（17 个）」且列出 `status.start(300)`/`queue.persist(700)` 等节点——代码中已不存在（现无 300/700 节点，台账类节点是后来收编的）；本表以源码 order() 实测为准。轮次循环段（870~950，临界段内侧）每轮重入、每轮把 `queue.loop` 的 next 链完整跑一遍；任务级收口节点全部在循环外侧只执行一次（`QueueLoopNode.java:10-19` 注释详述）。
+⚠️ 与架构文档的差异：[`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §7.14.1 写「内置节点（17 个）」且列出 `status.start(300)`/`queue.persist(700)` 等节点——代码中已不存在（300 位仍空；700 位现为 `rounds.reconcile`，台账类节点是后来收编的）；本表以源码 order() 实测为准。轮次循环段（870~950，临界段内侧）每轮重入、每轮把 `queue.loop` 的 next 链完整跑一遍；任务级收口节点全部在循环外侧只执行一次（`QueueLoopNode.java:10-19` 注释详述）。
 
 ### 2.4 洋葱 order 数轴（ASCII）
 
 ```
  外层（先见下行 / 后见上行）                                        内层（紧贴内核 runner.run）
- 10 ─15─ 20 ─ 30 ─ 40 ─ 50 ─55─ 70 ─ 80 ── 100 ── 150 ── 200 ── 310 ─ 340 ─ 350 ─ 390 ┄┄ [420⋯840] ┄┄ 860 ─ 870 ─ 875 ─ 877 ─ 880 ─ 900 ─ 950 → 内核
+ 10 ─15─ 20 ─ 30 ─ 40 ─ 50 ─55─ 70 ─ 80 ── 100 ── 150 ── 200 ── 310 ─ 340 ─ 350 ─ 390 ┄┄ [420⋯840] ┄┄ 860 ─ 870 ─ 877 ─ 880 ─ 900 ─ 950 → 内核
   │   │       │    │    │        │                │                │   ╔═══════════╗    │    │         │         │    │         │
   │   │       │    │    │        │                │                │   ║ 临界段     ║    │  轮次循环段（每轮重入）   │
- 幂等 队列   工作区  id   队列    准入           落盘track        接线            主agent  ║ 840→420   ║ 台账  队列   文件引用  编辑   消费   级联   等子agent
- 检查  dispatch     生成  排队   entry创建      150/200/310/340/350            ║ 共享一把锁 ║ persist loop  875      877   880    停    950
+ 幂等 队列   工作区  id   队列    准入           落盘track        接线            主agent  ║ 840→420   ║ 台账  队列   编辑    消费   级联   等子agent
+ 检查  dispatch     生成  排队   entry创建      150/200/310/340/350            ║ 共享一把锁 ║ persist loop   877    880    停    950
       (插件)              (插件)  (rerun 55 在此)                              ╚═══════════╝   (插件)        (插件)     (插件)
       task-input-queue      task-queue                                            ↑插件禁区[420,850]↑
 ```

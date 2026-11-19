@@ -5,6 +5,7 @@ import dev.everyagent.contract.rpc.Rpc;
 import dev.everyagent.plugin.api.exception.AuthRequiredException;
 import dev.everyagent.plugin.api.exception.BadParamsException;
 import dev.everyagent.plugin.api.exception.NotFoundException;
+import dev.everyagent.plugin.api.exception.UnavailableException;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.hub.HubLink;
 import dev.everyagent.worker.hub.HubPool;
@@ -98,6 +99,8 @@ public class RpcDispatcher implements HubPool.Listener {
                 ctx.err(Rpc.ERR_SANDBOX_DENIED, e.getMessage());
             } catch (AuthRequiredException e) {
                 ctx.err(Rpc.ERR_AUTH_REQUIRED, e.getMessage());
+            } catch (UnavailableException e) {
+                ctx.err(Rpc.ERR_UNAVAILABLE, e.getMessage());
             } catch (java.util.concurrent.CancellationException e) {
                 // 被取消:不再应答
             } catch (InterruptedException e) {

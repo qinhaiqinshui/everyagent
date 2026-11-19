@@ -1,5 +1,5 @@
 import React from 'react'
-import { gitGateway, GitNotInitializedError, type GitCommitFileChange } from './gitGateway'
+import { gitGateway, GitNotInitializedError, GitUnavailableError, type GitCommitFileChange } from './gitGateway'
 import InlineSpinner from './InlineSpinner'
 import { GitIcon } from './icons'
 import { getPluginContext } from './pluginRuntime'
@@ -62,6 +62,9 @@ export default function GitHistoryPanel({ workspaceRoot, path, name }: GitHistor
         if (cancelled) return
         if (loadError instanceof GitNotInitializedError) {
           setError('此工作区不是 Git 仓库')
+        } else if (loadError instanceof GitUnavailableError) {
+          // git 不可用(UNAVAILABLE):内联展示友好文案(本就静默,不弹 toast)。
+          setError('Git 不可用:未找到 git 可执行文件(如不需要 Git,可在「扩展」面板禁用 Git 插件)')
         } else {
           setError(loadError instanceof Error ? loadError.message : String(loadError))
         }

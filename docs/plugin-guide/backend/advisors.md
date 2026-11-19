@@ -109,6 +109,7 @@ public class AgentsMdAdvisorProvider implements AdvisorProvider {
 | provider 与 advisor 的 order 不一致 | `AgentBuilder` 按 provider 的 `order()` 排序聚合，Spring AI 链又按 advisor 自己的 `getOrder()` 重排——两个值**必须写同一个数**（仓库内所有实现均成对一致，如 `RateLimitAdvisorProvider.java:31-33` 与 `RateLimitAdvisor.java:63`） | `AgentBuilder.java:303-312`；`DefaultAroundAdvisorChain`（spring-ai-client-chat 2.0.1）`reOrder()` 用 `OrderComparator` 重排 |
 | 在 provider 里存 per-run 状态 | `create()` 每次 agent 装配都会调用，provider 是长生命周期对象；per-run 状态放 `create` 里 new 出的 advisor 实例字段（git/file-change 均如此，`GitAutoSyncAdvisorProvider.java:12` 注释） | `AgentBuilder.java:303-312` |
 | 一个 advisor 塞多个职责 | §14.8 红线：**一个 Advisor 只负责一个功能**；要挂钩工具循环的增强必须继承 `ToolCallingAdvisor` 重写受保护 hook，**不得另起一层包裹**或重复实现递归循环 | [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §14.8（本篇 §8 原文） |
+| **指望「每次模型调用都生效」却把 order 挂在工具循环外侧** | 工具循环在 `ToolCallingAdvisor` 内部递归，每轮迭代只把请求交给 `chain.copy(this)`——**「本 advisor 之后」的链段**，外侧 advisor 一次 run 只见请求一次。凡依赖「工具结果之后再发给模型的东西」（附件注入、按轮刷新的上下文）必须取 `> TCA` 的位置，否则同一 run 中途产生的新内容本轮永不出现在发给模型的请求里，模型只见到文字侧的工具结果、凭上下文编造内容 | `FileAttachmentAdvisor.java:33-44,55-61`（order 不变式与事故口径）、spring-ai-client-chat 2.0.1 `ToolCallingAdvisor.internalStream/adviseCall` + `DefaultAroundAdvisorChain.copyAdvisorsAfter` |
 | advisor 里 import 任务域类型 | 横切层只准取 ExecContext 槽位（`subjectId()/snapshot()/emitter()/terminal()`），禁止 import `TaskEntry/TaskRuntime/TaskInfo` | §14.11；[工具与沙箱扩展点](tools-and-sandbox.md) §5.1 |
 
 ## 2. Advisor order 坐标图（核心交付物）
@@ -132,15 +133,15 @@ public class AgentsMdAdvisorProvider implements AdvisorProvider {
 | 5 | `HP + 100` | -2147483548 | SkillAdvisor | worker | skill 渐进式披露索引（skillsDir 目录扫描，§5） | `every-agent-worker/src/main/java/dev/everyagent/worker/skill/SkillAdvisor.java:99-102` |
 | 6 | `HP + 140` | -2147483508 | GitAutoSyncAdvisor | git | 本轮开始前 git 自动同步 | `every-agent-plugins/git/src/main/java/dev/everyagent/plugin/git/GitAutoSyncAdvisorProvider.java:28-30` |
 | 7 | `HP + 150` | -2147483498 | SlashTokenResolveAdvisor | worker | composer opaque token 解析改写 | `every-agent-worker/src/main/java/dev/everyagent/worker/skill/SlashTokenResolveAdvisor.java:57-59` |
-| 8 | `HP + 160` | -2147483488 | FileAttachmentAdvisor | worker | metadata.attachments → 末位多模态消息 | `every-agent-worker/src/main/java/dev/everyagent/worker/attachment/FileAttachmentAdvisor.java:54-56` |
-| 9 | `TCA`（= `HP + 300`） | -2147483348 | WorkerToolEventAdvisor | worker | **工具循环本体** + delta/thinking/message/usage 事件 | `every-agent-worker/src/main/java/dev/everyagent/worker/agent/WorkerToolEventAdvisor.java:80` |
-| 10 | `HP + 301` | -2147483347 | FileChangeAdvisor | file-change | 文件变更轮末收口（写侧记账在文件工具写锁内回调 FileWriteListener（FileChangeRecorder），§7.15.2） | `every-agent-plugins/file-change/src/main/java/dev/everyagent/plugin/filechange/FileChangeAdvisorProvider.java:45-47` |
-| 11 | `TCA + 30`（= `HP + 330`） | -2147483318 | DialogInsertAdvisor | task-input-queue | 主 agent「插入对话」队列 drain | `every-agent-plugins/task-input-queue/src/main/java/dev/everyagent/plugin/inputqueue/DialogInsertAdvisorProvider.java:34` |
-| 12 | `TCA + 100`（= `HP + 400`） | -2147483248 | EmptyResponseRetryAdvisor | empty-response-retry | 空响应重调 | `every-agent-plugins/empty-response-retry/src/main/java/dev/everyagent/plugin/emptyretry/EmptyResponseRetryAdvisorProvider.java:30-32` |
-| 13 | `TCA + 200`（= `HP + 500`） | -2147483148 | TransientErrorRetryAdvisor | transient-error-retry | 瞬时错误退避重试 | `every-agent-plugins/transient-error-retry/src/main/java/dev/everyagent/plugin/transientretry/TransientErrorRetryAdvisorProvider.java:30-32` |
-| 14 | `TCA + 250`（= `HP + 550`） | -2147483098 | AdaptiveMaxTokensAdvisor | adaptive-max-tokens | 自适应输出预算 | `every-agent-plugins/adaptive-max-tokens/src/main/java/dev/everyagent/plugin/adaptivemaxtokens/AdaptiveMaxTokensAdvisorProvider.java:37-39` |
-| 15 | `TCA + 300`（= `HP + 600`） | -2147483048 | ModelLengthGuardAdvisor | model-length-guard | 输出预算耗尽护栏（finish_reason=length） | `every-agent-plugins/model-length-guard/src/main/java/dev/everyagent/plugin/modellengthguard/ModelLengthGuardAdvisorProvider.java:38-40` |
-| 16 | `TCA + 400`（= `HP + 700`） | -2147482948 | ContextCompressionAdvisor | context-compression | 上下文压缩（只改发给模型的视图） | `every-agent-plugins/context-compression/src/main/java/dev/everyagent/plugin/contextcompression/ContextCompressionAdvisorProvider.java:30-32` |
+| 8 | `TCA`（= `HP + 300`） | -2147483348 | WorkerToolEventAdvisor | worker | **工具循环本体** + delta/thinking/message/usage 事件 | `every-agent-worker/src/main/java/dev/everyagent/worker/agent/WorkerToolEventAdvisor.java:80` |
+| 9 | `HP + 301` | -2147483347 | FileChangeAdvisor | file-change | 文件变更轮末收口（写侧记账在文件工具写锁内回调 FileWriteListener（FileChangeRecorder），§7.15.2） | `every-agent-plugins/file-change/src/main/java/dev/everyagent/plugin/filechange/FileChangeAdvisorProvider.java:45-47` |
+| 10 | `TCA + 30`（= `HP + 330`） | -2147483318 | DialogInsertAdvisor | task-input-queue | 主 agent「插入对话」队列 drain | `every-agent-plugins/task-input-queue/src/main/java/dev/everyagent/plugin/inputqueue/DialogInsertAdvisorProvider.java:34` |
+| 11 | `TCA + 100`（= `HP + 400`） | -2147483248 | EmptyResponseRetryAdvisor | empty-response-retry | 空响应重调 | `every-agent-plugins/empty-response-retry/src/main/java/dev/everyagent/plugin/emptyretry/EmptyResponseRetryAdvisorProvider.java:30-32` |
+| 12 | `TCA + 200`（= `HP + 500`） | -2147483148 | TransientErrorRetryAdvisor | transient-error-retry | 瞬时错误退避重试 | `every-agent-plugins/transient-error-retry/src/main/java/dev/everyagent/plugin/transientretry/TransientErrorRetryAdvisorProvider.java:30-32` |
+| 13 | `TCA + 250`（= `HP + 550`） | -2147483098 | AdaptiveMaxTokensAdvisor | adaptive-max-tokens | 自适应输出预算 | `every-agent-plugins/adaptive-max-tokens/src/main/java/dev/everyagent/plugin/adaptivemaxtokens/AdaptiveMaxTokensAdvisorProvider.java:37-39` |
+| 14 | `TCA + 300`（= `HP + 600`） | -2147483048 | ModelLengthGuardAdvisor | model-length-guard | 输出预算耗尽护栏（finish_reason=length） | `every-agent-plugins/model-length-guard/src/main/java/dev/everyagent/plugin/modellengthguard/ModelLengthGuardAdvisorProvider.java:38-40` |
+| 15 | `TCA + 400`（= `HP + 700`） | -2147482948 | ContextCompressionAdvisor | context-compression | 上下文压缩（只改发给模型的视图） | `every-agent-plugins/context-compression/src/main/java/dev/everyagent/plugin/contextcompression/ContextCompressionAdvisorProvider.java:30-32` |
+| 16 | `TCA + 450`（= `HP + 750`） | -2147482898 | FileAttachmentAdvisor | worker | metadata.attachments → 末位多模态消息（**必须在工具循环内侧**，见 §1.5） | `every-agent-worker/src/main/java/dev/everyagent/worker/attachment/FileAttachmentAdvisor.java:61`（provider 同值 `FileAttachmentAdvisorProvider.java:27`） |
 | 17 | `TCA + 500`（= `HP + 800`） | -2147482848 | RateLimitAdvisor | model-rate-limit | 模型请求限流（rpm/并发/tpm） | `every-agent-plugins/model-rate-limit/src/main/java/dev/everyagent/plugin/modelratelimit/RateLimitAdvisorProvider.java:31-33` |
 | 18 | `0`（**绝对值**，非 HP 系） | 0 | TokenCalibrationAdvisor | token-estimator | token 估算 EMA 校准（⚠️ 见 §2.5） | `every-agent-plugins/token-estimator/src/main/java/dev/everyagent/plugin/tokenEstimator/TokenCalibrationAdvisor.java:60-63,141-144` |
 
@@ -150,13 +151,13 @@ worker 适配器的注册顺序（先/后）不影响链位置——`AdvisorProv
 
 ```
  外层（先见请求 / 后见响应）                                    内层（紧贴模型 HTTP 调用）
- HP+0 ─5─ 10 ────── 50 ─ 60 ────── 100 ─ 140 ─ 150 ─ 160 ─ 300 ─ 301 ─ 330 ─ 400 ─ 500 ─ 550 ─ 600 ─ 700 ─ 800 ─────── 0(绝对)
-  │   │   │          │   │          │    │    │    │    ▲TCA▲   │   │    │    │    │    │    │    │           ▲
-  │   │   │          │   │          │    │    │    │  工具循环 │   │    │    │    │    │    │    │      TokenCalibration
-  │   │   │          │   │          │    │    │    │  (事件发射)│   │    │    │    │    │    │    │      order=0 绝对值，
-  │   │   │          │   │          │    │    │    │           │   │    │    │    │    │    │    │      数值最大 ⇒ 实际最内
-  空档 状态 轮次      系统 AGENTS     skill git  token 附件  FileChg 插入  空响  瞬时  自适  长度  压缩  限流
-       事件 索引      信息 .md        索引  同步  解析  注入  变更跟踪 对话  重试  重试  预算  护栏        （HP 系最内）
+ HP+0 ─5─ 10 ────── 50 ─ 60 ────── 100 ─ 140 ─ 150 ────── 300 ─ 301 ─ 330 ─ 400 ─ 500 ─ 550 ─ 600 ─ 700 ─ 750 ─ 800 ─── 0(绝对)
+  │   │   │          │   │          │    │    │    │       ▲TCA▲   │   │    │    │    │    │    │    │    │    │      ▲
+  │   │   │          │   │          │    │    │    │     工具循环  │   │    │    │    │    │    │    │    │    │  TokenCalibration
+  │   │   │          │   │          │    │    │    │    (事件发射) │   │    │    │    │    │    │    │    │    │  order=0 绝对值，
+  │   │   │          │   │          │    │    │    │               │   │    │    │    │    │    │    │    │    │  数值最大 ⇒ 实际最内
+  空档 状态 轮次      系统 AGENTS     skill git  token             FileChg 插入  空响  瞬时  自适  长度  压缩  附件  限流
+       事件 索引      信息 .md        索引  同步  解析             变更跟踪 对话  重试  重试  预算  护栏        注入 （HP 系最内）
 ```
 
 读法：同一数值锚点上的 advisor 按注册顺序并列；插件想插空档就取两锚点之间的任意偏移（int 精度足够，如 `HP + 120`）。
@@ -182,8 +183,8 @@ worker 适配器的注册顺序（先/后）不影响链位置——`AdvisorProv
 | 你想做什么 | 推荐区间（HP 偏移） | 理由 |
 |---|---|---|
 | 注入 system 级上下文（prompt 前置信息） | `+15~+45`、`+65~+95` | 生命周期/轮次信号之后、skill 索引前后；对外层可见性无破坏 |
-| 改写用户输入 / 注入会话上下文 | `+165~+299` | 附件注入（+160）之后、工具循环（+300）之前——进入模型前的最后一站外层 |
-| 挂进工具循环内侧（每轮工具迭代都过） | `+302~+329`、`+340~+399`、`+410~+490`、`+510~+540`、`+560~+590`、`+610~+690`、`+710~+790` | 与重试/护栏/压缩带交错；注意与既有锚点间隔 ≥10，留后续内置位 |
+| 改写用户输入 / 注入会话上下文 | `+160~+299` | token 解析（+150）之后、工具循环（+300）之前——进入模型前的最后一站外层（附件注入已移到循环内侧，见 §2.2 #16） |
+| 挂进工具循环内侧（每轮工具迭代都过） | `+302~+329`、`+340~+399`、`+410~+490`、`+510~+540`、`+560~+590`、`+610~+690`、`+710~+740`、`+760~+790` | 与重试/护栏/压缩带交错；注意与既有锚点间隔 ≥10，留后续内置位 |
 | 比限流更内（最先见响应原文） | `+810~+999` | HP 系最内空档；再往内只有绝对值 > 0 一途（不建议，见 §2.5） |
 | 继承 ToolCallingAdvisor 做事件/工具循环挂钩 | 直接覆写 `TCA` 同值或紧邻内侧 | 参照 `WorkerToolEventAdvisor`；红线要求继承重写 hook，不得另起包裹层 |
 

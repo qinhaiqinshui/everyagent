@@ -82,6 +82,51 @@ export function computeFallbackColumnWidths(headers: string[], rows: string[][])
   return idealColumnCh(headers, rows).map((ch) => `min(${ch}ch, 100vw)`)
 }
 
+/** 贴边容差(px):列宽总和超出容器不到 1px 时视为「放得下」。
+ *  亚像素取整(容器实测宽 799.6 而 Σ列宽 800)本该无滚动,若判成溢出,
+ *  用户看到的就是一条宽度满屏却几乎滚不动的横向滚动条。 */
+const FIT_EPSILON_PX = 1
+
+/** 列宽总和相对容器宽的留白(px):Σ列宽略小于表宽时,table-layout:fixed 会把
+ *  差额均摊给各列(表宽 100%,视觉无差),这 1px 用来吸收浏览器亚像素取整——
+ *  宁可少分 1px,也不要让 Σ 刚好贴着容器宽,再被取整挤出一个像素的溢出。 */
+const FIT_RESERVE_PX = 1
+
+/**
+ * 整数像素化:**Σ 精确落到 floor(target) 且绝不超出**。
+ * 逐列 Math.round 会让 Σ 最多多出 0.5px × 列数——列数一多,这零点几像素就足以
+ * 撑出横向滚动条(宽度看似刚好满屏却滚不动)。少分时用最大余数法补足,
+ * 多分时(贴边容差带)从最宽的列逐列削 1px;少掉的 <1px 由 fixed 布局均摊补齐。
+ */
+function snapColumnWidths(widths: number[], target: number): number[] {
+  const total = Math.max(0, Math.floor(target))
+  const floors = widths.map((value) => Math.floor(value))
+  const remain = total - floors.reduce((acc, value) => acc + value, 0)
+  const result = floors.slice()
+  if (remain === 0) return result
+  if (remain > 0) {
+    const order = widths
+      .map((value, index) => ({ index, fraction: value - Math.floor(value) }))
+      .sort((a, b) => b.fraction - a.fraction)
+    for (let step = 0; step < remain; step += 1) {
+      result[order[step % order.length].index] += 1
+    }
+    return result
+  }
+  // Σ 比目标宽还多(贴边容差带内):从最宽的列起每列削 1px,削到恰好等于目标宽。
+  const order = result
+    .map((value, index) => ({ index, value }))
+    .sort((a, b) => b.value - a.value)
+  let excess = -remain
+  for (let step = 0; excess > 0 && step < order.length * 64; step += 1) {
+    const slot = order[step % order.length]
+    if (result[slot.index] <= 1) continue
+    result[slot.index] -= 1
+    excess -= 1
+  }
+  return result
+}
+
 /**
  * 初始列宽分配(px 数值,主路径),两段式:
  * 1. 每列内容理想宽:优先用 measureColumnIdealWidths 实测值(真实字体口径,
@@ -92,7 +137,9 @@ export function computeFallbackColumnWidths(headers: string[], rows: string[][])
  *    a. 优先按缺口(理想宽 − 钳制宽)补给被 20% 上限钳掉的列——它们的 content
  *       还没放完,最需要宽度;缺口全补平后仍有富余,再按理想宽占比分给所有列
  *       (内容多的列多吸收,短内容列保持紧凑);放大后单列可超 20%;
- * 3. Σ钳制宽 ≥ 容器宽 → 维持钳制宽,表格横向滚动。
+ * 3. Σ钳制宽 > 容器宽 + 1px → 维持钳制宽,表格横向滚动。
+ * 放得下的情形(含差不到 1px 的贴边)Σ 精确落到「容器宽 − 1px 留白」:
+ * 取整只下取整不超分配,保证列宽总和永不把表格撑出横向滚动条。
  * containerWidth / chPx 无效时返回 [](调用方走 ch 兜底)。
  */
 export function allocateColumnWidths(
@@ -119,16 +166,20 @@ export function allocateColumnWidths(
   const capped = raw.map((px) => Math.max(MIN_COMPACT_COL_PX, Math.min(maxCol, px)))
 
   const sum = capped.reduce((acc, value) => acc + value, 0)
-  if (sum >= containerWidth) {
+  // 真溢出:列理想宽总和放不下 → 维持钳制宽,表格横向滚动(滚动距离是实打实的)。
+  if (sum > containerWidth + FIT_EPSILON_PX) {
     return capped.map((value) => Math.round(value))
   }
 
-  let slack = containerWidth - sum
+  // 放得下(含差不到 1px 的贴边情形):把 Σ 精确落到「容器宽 − 1px 留白」,
+  // 不贴着容器宽分配——贴着分配的表格会被亚像素取整挤出一像素溢出。
+  const targetTotal = Math.max(0, containerWidth - FIT_RESERVE_PX)
+  let slack = targetTotal - sum
   // 第一段:按缺口补给被上限钳掉的列(理想宽没放完的列优先吃富余)。
   const deficit = raw.map((px, index) => Math.max(0, px - capped[index]))
   const totalDeficit = deficit.reduce((acc, value) => acc + value, 0)
   let widths = capped
-  if (totalDeficit > 0) {
+  if (totalDeficit > 0 && slack > 0) {
     const fill = Math.min(1, slack / totalDeficit)
     widths = capped.map((value, index) => value + deficit[index] * fill)
     slack -= totalDeficit * fill
@@ -142,7 +193,7 @@ export function allocateColumnWidths(
       ? widths.map((value, index) => value + (slack * raw[index]) / totalRaw)
       : widths.map((value) => value + slack / widths.length)
   }
-  return widths.map((value) => Math.round(value))
+  return snapColumnWidths(widths, targetTotal)
 }
 
 /** 用户手调列宽合并(px):手调列用覆盖值,其余列维持初始分配不动(Excel 式)。 */
@@ -162,8 +213,28 @@ function measureChPx(host: HTMLElement): number {
   return fontSize / 2
 }
 
-/** 实测保险余量系数:克隆量宽已含内边距,余量仅覆盖边框竖线(1px)与亚像素取整。 */
-const MEASURE_BUFFER = 1.04
+/**
+ * 容器内容宽(px,**亚像素**口径):clientWidth 是取整后的整数,拿它当分配目标
+ * 会让列宽总和最多比真实内容宽多出 1px——表格宽度看着刚好满屏,却冒出一条几乎
+ * 滚不动的横向滚动条。这里用 getBoundingClientRect 减边框/内边距取真实值。
+ * 未布局(rect 为 0)时回落 clientWidth。
+ */
+export function measureContainerWidth(wrap: HTMLElement): number {
+  if (typeof window === 'undefined') return wrap.clientWidth
+  const rect = wrap.getBoundingClientRect()
+  if (!(rect.width > 0)) return wrap.clientWidth
+  const style = window.getComputedStyle(wrap)
+  const px = (value: string | undefined) => Number.parseFloat(value ?? '') || 0
+  const inner = rect.width
+    - px(style.borderLeftWidth) - px(style.borderRightWidth)
+    - px(style.paddingLeft) - px(style.paddingRight)
+  return inner > 0 ? inner : wrap.clientWidth
+}
+
+/** 实测保险余量(px):克隆量宽已含内边距,余量只覆盖边框竖线(1px)与亚像素取整。
+ *  不用百分比:4% 在 500px 的列上凭空多 20px,多列表格叠加后会把「内容其实放得下」
+ *  的表格顶成横向溢出(详见 allocateColumnWidths 的 FIT_EPSILON_PX)。 */
+const MEASURE_BUFFER_PX = 1
 /** 每列参与实测的候选单元格数:按启发式长度取前 N(估算排序可能有系统性
  *  偏差,实测前 3 名基本覆盖真实最宽行,同时控制克隆探针数量)。 */
 const MEASURE_CANDIDATES = 3
@@ -224,7 +295,7 @@ export function measureColumnIdealWidths(host: HTMLElement): number[] {
   })
   layer.remove()
   if (maxima.every((width) => width === 0)) return []
-  return maxima.map((width) => (width > 0 ? Math.ceil(width * MEASURE_BUFFER) : 0))
+  return maxima.map((width) => (width > 0 ? Math.ceil(width) + MEASURE_BUFFER_PX : 0))
 }
 
 type DragState = {
@@ -340,11 +411,12 @@ export function useTableLayout(): TableLayoutController {
     return () => window.removeEventListener('pointerdown', onPointerDown, true)
   }, [pinToolbar, showHandles])
 
-  // 容器宽度:ResizeObserver 持续跟踪(窗口缩放/布局变化)。
+  // 容器宽度:ResizeObserver 持续跟踪(窗口缩放/布局变化)。亚像素口径,
+  // 与列宽分配目标同源——用取整后的 clientWidth 会把表格挤出 1px 滚动条。
   React.useEffect(() => {
     const wrap = wrapRef.current
     if (!wrap || typeof ResizeObserver === 'undefined') return
-    const update = () => setContainerWidth(wrap.clientWidth)
+    const update = () => setContainerWidth(measureContainerWidth(wrap))
     update()
     const observer = new ResizeObserver(update)
     observer.observe(wrap)

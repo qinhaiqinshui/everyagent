@@ -60,7 +60,7 @@ public class RipgrepToolPlugin implements EveryAgentPlugin {
         // void registerRoundEgressFilter(RoundEgressFilter filter)                注册轮次级出网过滤链节点
         // void registerTokenEstimator(TokenEstimator estimator)                   注册 Token 估算器（替换内置实现）
         // void registerChatModelEnhancer(ChatModelEnhancer enhancer)              注册模型构建增强器（如模型池容灾）
-        // void registerFileReferenceHandler(FileReferenceHandler handler)         注册文件引用处理器（按扩展名处理 @ 文件引用）
+        // void registerFileReadHandler(FileReadHandler handler)                  注册 read_file 按扩展名接管处理器
         //
         // ── 通用扩展注册（3 个，WorkerPluginContext）──
         // void registerRpcMethod(String method, RpcMethod handler)                注册 RPC 方法（方法名「域.动作」，如 "git.status"，经 RpcDispatcher 分发）

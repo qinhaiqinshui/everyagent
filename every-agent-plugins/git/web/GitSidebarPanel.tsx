@@ -26,6 +26,7 @@ import { getPluginContext } from './pluginRuntime'
 import {
   gitGateway,
   GitNotInitializedError,
+  GitUnavailableError,
   GitAuthRequiredError,
   type GitCredential,
   type GitRemote,
@@ -238,6 +239,8 @@ function GitWorkspaceGroupPanel({
   const { message, modal } = App.useApp()
   const [initialized, setInitialized] = React.useState<boolean | null>(null)
   const [status, setStatus] = React.useState<GitStatusResult | null>(null)
+  /** 本机 git 不可用(worker 抛 UNAVAILABLE):静默降级,渲染「Git 不可用」提示视图,不弹错误 toast。 */
+  const [unavailable, setUnavailable] = React.useState(false)
   const [selectedPaths, setSelectedPaths] = React.useState<Set<string>>(new Set())
   const [commitMessage, setCommitMessage] = React.useState('')
   const [busy, setBusy] = React.useState<'status' | 'commit' | 'pull' | 'push' | 'init' | 'clone' | 'discard' | 'delete' | null>('status')
@@ -278,11 +281,19 @@ function GitWorkspaceGroupPanel({
     try {
       // 历史提交不再随刷新预取(结果此前被丢弃):工作区「Git 历史」折叠区懒加载,展开时才调 git.log。
       const statusResult = await gitGateway.status(workspaceRoot)
+      setUnavailable(false)
       setInitialized(true)
       setStatus(statusResult)
     } catch (refreshError) {
       if (refreshError instanceof GitNotInitializedError) {
         setInitialized(false)
+        setStatus(null)
+        return
+      }
+      if (refreshError instanceof GitUnavailableError) {
+        // git 不可用(UNAVAILABLE):静默降级为面板内「不可用」提示视图,不弹错误 toast。
+        setUnavailable(true)
+        setInitialized(null)
         setStatus(null)
         return
       }
@@ -803,7 +814,9 @@ function GitWorkspaceGroupPanel({
       </div>
       {!collapsed && (
         <>
-          {initialized === false ? (
+          {unavailable ? (
+        <GitUnavailableView />
+      ) : initialized === false ? (
         <GitNotInitializedView
           disabled={busy !== null}
           onInit={() => void handleInit()}
@@ -1138,6 +1151,24 @@ function GitNotInitializedView({
           克隆
         </Button>
       </div>
+    </div>
+  )
+}
+
+/**
+ * 「Git 不可用」提示视图(worker 抛 UNAVAILABLE,如本机未安装 git):对齐 VS Code 的
+ * 静默降级——不弹任何错误 toast,仅在面板内说明原因与出路(安装 / 配置路径 /
+ * 不需要则在扩展面板禁用本插件)。该态替换提交区/更改树/历史区,操作入口不可达。
+ */
+function GitUnavailableView() {
+  return (
+    <div style={emptyStyle}>
+      <GitIcon size={32} />
+      <p style={unavailableTitleStyle}>Git 不可用:未找到 git 可执行文件。</p>
+      <p style={emptyTextStyle}>
+        可安装 Git for Windows,或在 worker 配置 <code style={unavailableCodeStyle}>worker.git.executable</code> 指定路径。
+      </p>
+      <p style={emptyTextStyle}>如果用不到 Git,可在左侧「扩展」面板中禁用 Git 插件。</p>
     </div>
   )
 }
@@ -1578,6 +1609,24 @@ const emptyTextStyle: React.CSSProperties = {
   fontSize: 'var(--text-xs)',
   color: 'var(--text-muted)',
   textAlign: 'center',
+}
+
+/** 「Git 不可用」视图首行:比指引行略重(text-sm/700),指引行沿用 emptyTextStyle(muted)。 */
+const unavailableTitleStyle: React.CSSProperties = {
+  margin: 0,
+  fontSize: 'var(--text-sm)',
+  fontWeight: 700,
+  color: 'var(--text-secondary)',
+  textAlign: 'center',
+}
+
+/** 配置键名内联代码样式(mono 小胶囊,与路径等代码类展示一致)。 */
+const unavailableCodeStyle: React.CSSProperties = {
+  fontFamily: 'var(--font-mono, monospace)',
+  fontSize: 'var(--text-xs)',
+  padding: '0 4px',
+  borderRadius: 3,
+  background: 'var(--bg-secondary)',
 }
 
 const initCardStyle: React.CSSProperties = {

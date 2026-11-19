@@ -128,7 +128,7 @@ export default function TaskDraftComposerPanel({
             workspace={selectedWorkspace || undefined}
             workerId={workerId}
             isMobile={isMobile}
-            placeholder="输入你想让当前任务处理的内容"
+            placeholder="在这里输入你的问题或任务，发送给 AI 帮你处理"
             abovePanel={abovePanel}
             submitLabel={submitLabel}
             submitDisabled={submitDisabled}

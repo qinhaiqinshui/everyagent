@@ -18,7 +18,7 @@ import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.plugin.registry.AdvisorProviderRegistry;
 import dev.everyagent.worker.plugin.registry.AuthorizationHandlerRegistry;
 import dev.everyagent.worker.plugin.registry.ChatModelEnhancerRegistry;
-import dev.everyagent.worker.plugin.registry.FileReferenceHandlerRegistry;
+import dev.everyagent.worker.plugin.registry.FileReadHandlerRegistry;
 import dev.everyagent.worker.plugin.registry.PluginStateStore;
 import dev.everyagent.worker.plugin.registry.SandboxProviderRegistry;
 import dev.everyagent.worker.plugin.registry.SearchProviderRegistry;
@@ -79,7 +79,7 @@ class PluginLoaderDisabledTest {
                 mock(TaskLifecycleRegistry.class),
                 mock(ChatModelEnhancerRegistry.class),
                 mock(TaskAdmissionPolicyRegistry.class),
-                mock(FileReferenceHandlerRegistry.class),
+                mock(FileReadHandlerRegistry.class),
                 mock(dev.everyagent.worker.ship.EventEgressFilterRegistry.class),
                 mock(dev.everyagent.worker.ship.RoundEgressFilterRegistry.class),
                 states,

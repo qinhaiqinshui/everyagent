@@ -177,43 +177,68 @@ describe('replaceMarkdownRange', () => {
 describe('allocateColumnWidths(初始列宽分配)', () => {
   it('长内容列钳 20% 上限,富余分配后仍填满容器', () => {
     // 24 字中文 → 48ch + 3 = 51ch × 8px = 408px,容器 1000 → 上限 200px;
-    // 缺口(208)补平后仍有富余,再按理想宽占比 → 单列吃满 1000。
+    // 缺口(208)补平后仍有富余,再按理想宽占比 → 单列吃满容器(留 1px 给取整)。
     const widths = allocateColumnWidths(['二十个中文字'.repeat(4)], [], 1000, 8)
-    expect(widths).toEqual([1000])
-    // 两列等长内容:缺口补平后富余对半分 → 各 500。
+    expect(widths).toEqual([999])
+    // 两列等长内容:缺口补平后富余对半分 → 各 499/500(Σ 仍是 999)。
     const two = allocateColumnWidths(
       ['很长很长很长很长很长很长很长', '很长很长很长很长很长很长很长'],
       [], 1000, 8)
-    expect(two).toEqual([500, 500])
+    expect(two).toEqual([500, 499])
   })
 
   it('短内容列按内容收紧(64px 下限),富余流向长内容列', () => {
     // 'ab' → 5ch × 8 = 40px,不足 64px 下限 → 64px(旧算法会被 120px 下限垫肥);
-    // 长内容列 31ch → 248px 钳 200(缺口 48):补缺口后富余 688 按理想宽
-    // 占比(40/288 vs 248/288)分 → [160, 840],合计 1000。
+    // 长内容列 31ch → 248px 钳 200(缺口 48):补缺口后富余按理想宽
+    // 占比(40/288 vs 248/288)分 → [159, 840],合计 999。
     const widths = allocateColumnWidths(['ab', '很长很长很长很长很长很长很长'], [], 1000, 8)
-    expect(widths).toEqual([160, 840])
+    expect(widths).toEqual([159, 840])
   })
 
   it('缺口未被补平时,富余只分给被钳掉的长内容列', () => {
     // 容器 600:上限 = max(120, 600×20%) = 120px。钳制后 [64, 120, 80, 120] = 384,
-    // 富余 216 < 缺口(176+360=536)→ 按缺口比例补给列1/列3:
-    // 列1 = 120+176×(216/536) ≈ 191,列3 = 120+360×(216/536) ≈ 265;
-    // 短内容列(0/2)分文不动,合计恰为 600。
+    // 富余 215 < 缺口(176+360=536)→ 按缺口比例补给列1/列3:
+    // 列1 = 120+176×(215/536) ≈ 191,列3 = 120+360×(215/536) ≈ 264;
+    // 短内容列(0/2)分文不动,合计恰为 599(容器宽 − 1px 留白)。
     const headers = ['name', 'key', 'default', 'desc']
     const rows = [['开关', 'a'.repeat(34), 'true', '说明'.repeat(20)]]
     const widths = allocateColumnWidths(headers, rows, 600, 8)
-    expect(widths).toEqual([64, 191, 80, 265])
+    expect(widths).toEqual([64, 191, 80, 264])
   })
 
   it('缺口补平后仍有富余 → 按理想宽占比分配(短内容列保持紧凑)', () => {
     // 容器 1000、chPx 8 → 上限 200px:列0 7ch→56→64;列1 37ch→296→钳 200(缺口 96);
     // 列2 10ch→80;列3 60ch 封顶→480→钳 200(缺口 280)。缺口 376 全补平 →
-    // [64, 296, 80, 480],余 80 按占比(56/296/80/480)分 → [69, 322, 87, 522]。
+    // [64, 296, 80, 480],余 79 按占比(56/296/80/480)分 → [69, 322, 87, 521]。
     const headers = ['name', 'key', 'default', 'desc']
     const rows = [['开关', 'a'.repeat(34), 'true', '说明'.repeat(20)]]
     const widths = allocateColumnWidths(headers, rows, 1000, 8)
-    expect(widths).toEqual([69, 322, 87, 522])
+    expect(widths).toEqual([69, 322, 87, 521])
+  })
+
+  it('列宽总和永不超过容器宽(否则表格会冒出滚不动的横向滚动条)', () => {
+    // 逐列 Math.round 曾让 Σ 最多多出 0.5px × 列数——宽度看着刚好满屏,
+    // 却多出一条几乎滚不动的滚动条。取整改为只下取整,Σ 恒 ≤ 容器宽。
+    const headers = ['name', 'key', 'default', 'desc', 'note', 'extra']
+    const rows = [['开关', 'key-1', 'true', '说明'.repeat(20), 'a'.repeat(17), 'x']]
+    const cases: Array<[number, number, number[]?]> = [
+      [997, 8],
+      [1000, 8],
+      [1000.6, 8],
+      [800.4, 7.35],
+      [640, 8, [150.4, 90.6, 60, 400, 33.3, 120]],
+    ]
+    for (const [containerWidth, chPx, measured] of cases) {
+      const widths = allocateColumnWidths(headers, rows, containerWidth, chPx, measured)
+      expect(widths.reduce((acc, value) => acc + value, 0)).toBeLessThanOrEqual(containerWidth)
+      expect(widths.every((value) => Number.isInteger(value))).toBe(true)
+    }
+  })
+
+  it('贴边(超出容器不到 1px)按放得下处理,不留滚动条', () => {
+    // 5 列 × 64px 下限 = 320,容器 319.6:亚像素级贴边,不该判成横向溢出。
+    const widths = allocateColumnWidths(['a', 'b', 'c', 'd', 'e'], [], 319.6, 8, [0, 0, 0, 0, 0])
+    expect(widths.reduce((acc, value) => acc + value, 0)).toBeLessThanOrEqual(319.6)
   })
 
   it('总宽超出容器 → 维持钳制宽(横向滚动)', () => {
@@ -236,18 +261,18 @@ describe('allocateColumnWidths(初始列宽分配)', () => {
 describe('allocateColumnWidths(实测理想宽优先)', () => {
   it('实测宽替代启发式:钳制/缺口/占比逻辑不变', () => {
     // 实测 [80, 500]:500 钳 60ch 上限(480)→ raw [80,480];钳 20%(200)后 [80,200],
-    // 缺口 280 由富余补平 → [80,480];余 440 按理想宽占比(80/580)分 → [143, 857]。
+    // 缺口 280 由富余补平 → [80,480];余 439 按理想宽占比(80/580)分 → [143, 856]。
     const widths = allocateColumnWidths(['a', 'b'], [], 1000, 8, [80, 500])
-    expect(widths).toEqual([143, 857])
+    expect(widths).toEqual([143, 856])
   })
 
   it('实测宽超 60ch 上限仍封顶(超长单行内容换行)', () => {
-    // 实测 [600, 100] → raw [480, 100] → 分配后 [828, 172]。
-    expect(allocateColumnWidths(['a', 'b'], [], 1000, 8, [600, 100])).toEqual([828, 172])
+    // 实测 [600, 100] → raw [480, 100] → 分配后 [827, 172](Σ = 容器宽 − 1)。
+    expect(allocateColumnWidths(['a', 'b'], [], 1000, 8, [600, 100])).toEqual([827, 172])
   })
 
   it('空列(实测 0)落 64px 下限,富余全给有内容的列', () => {
-    expect(allocateColumnWidths(['a', 'b'], [['', 'x']], 1000, 8, [0, 100])).toEqual([64, 936])
+    expect(allocateColumnWidths(['a', 'b'], [['', 'x']], 1000, 8, [0, 100])).toEqual([64, 935])
   })
 
   it('实测数组长度不匹配或含非法值 → 回落启发式', () => {

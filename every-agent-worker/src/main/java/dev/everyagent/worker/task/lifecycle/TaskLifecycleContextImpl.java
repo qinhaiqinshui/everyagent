@@ -127,8 +127,9 @@ public class TaskLifecycleContextImpl implements TaskLifecycleContext {
         ConversationLoader.catchUpRuntime(main.conversation,
                 taskEntry.log.readLastRecords(64), taskEntry.mainAgentId);
         gate.beginRun(taskEntry.taskId); // 新一条用户输入:本轮(run)授权失效(任务级不受影响)
-        // user.message 落盘后以它的 seq 为轮起点开轮:最后一行未闭合则沿用(中间输入/续跑不开新轮);
-        // 已闭合/无行则追加一条 endSeq="" 的未闭合轮。中断/取消/失败不再于终态补写,轮行随开轮即持久化。
+        // user.message 落盘后以它的 seq 为轮起点开轮:先按事件对账补齐漏做的闭合,
+        // 最后一行仍真未闭合则沿用(中间输入/续跑不开新轮),已闭合/无行则追加一条 endSeq="" 的未闭合轮。
+        // 中断/取消/失败不再于终态补写,轮行随开轮即持久化。
         long seq = taskEntry.events.emit(EmitEvent.of(SnowflakeId.next(), "user.message", null,
                 null, null, text, null,
                 rawContent != null && !rawContent.isEmpty()
@@ -143,7 +144,8 @@ public class TaskLifecycleContextImpl implements TaskLifecycleContext {
         if (rawContent != null && !rawContent.isEmpty()) {
             userPayload.set("data", Json.obj().put("rawContent", rawContent));
         }
-        if (roundIndexStore.openRoundAtStart(taskEntry.taskDir(), taskEntry.taskId, seq, text, userPayload)) {
+        if (roundIndexStore.openRoundAtStart(taskEntry.taskDir(), taskEntry.log, taskEntry.taskId,
+                taskEntry.mainAgentId, seq, text, userPayload)) {
             // 真的新开一轮(非中间输入/续跑沿用)才推 round.opened;瞬态不落盘。
             ObjectNode roundData = Json.obj();
             roundData.put("startSeq", String.valueOf(seq));

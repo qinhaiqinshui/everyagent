@@ -89,7 +89,6 @@ import dev.everyagent.plugin.api.rpc.RpcMethod;
 import dev.everyagent.plugin.api.slash.SlashProvider;
 import dev.everyagent.plugin.api.slash.SlashTokenResolver;
 import dev.everyagent.plugin.api.spi.AdvisorProvider;
-import dev.everyagent.plugin.api.spi.FileReferenceHandler;
 import dev.everyagent.plugin.api.spi.SandboxProvider;
 import dev.everyagent.plugin.api.spi.SearchProvider;
 import dev.everyagent.plugin.api.spi.TokenEstimator;
@@ -131,7 +130,6 @@ class RecordingPluginContext implements WorkerPluginContext {
     @Override public void registerToolExecutionInterceptor(ToolExecutionInterceptor interceptor) { toolInterceptors.add(interceptor); }
     @Override public void registerTokenEstimator(TokenEstimator estimator) { }
     @Override public void registerChatModelEnhancer(ChatModelEnhancer enhancer) { }
-    @Override public void registerFileReferenceHandler(FileReferenceHandler handler) { }
     @Override public void registerEventEgressFilter(EventEgressFilter filter) { }
     @Override public void registerRoundEgressFilter(RoundEgressFilter filter) { }
     @Override public void registerRpcMethod(String method, RpcMethod handler) { rpcMethods.put(method, handler); }

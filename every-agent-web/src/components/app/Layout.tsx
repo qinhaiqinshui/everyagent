@@ -41,6 +41,7 @@ import BrowserNotificationHost from './BrowserNotificationHost'
 import BrowserNotificationGuide from './BrowserNotificationGuide'
 import ReconnectionModal from './ReconnectionModal'
 import MissingWorkspaceRepairHost from './MissingWorkspaceRepairHost'
+import EmptyWorkspaceQuickStart from './EmptyWorkspaceQuickStart'
 import RawAccessConfirmHost from '@/components/files/RawAccessConfirmHost'
 import { WorkspaceShellProvider } from './WorkspaceShellContext'
 import { setShellBridge, invalidateComposerBridge } from '@/plugin/pluginRuntimeBridge'
@@ -1154,6 +1155,10 @@ function EmptyWorkspaceHome({ onNewTask }: { onNewTask: () => void }) {
       >
         <BrandMark size={108} animated={false} />
       </div>
+      {/* 「开始」区小标题(VSCode 欢迎页风格):复用 emptyWorkspaceHintStyle,仅清掉默认段落边距。 */}
+      <p style={{ ...emptyWorkspaceHintStyle, margin: 0 }}>开始</p>
+      {/* 冷启动快捷入口(新建任务/新建工作区/添加模型配置/导入 skill):纯导航,跳到对应页面再操作。 */}
+      <EmptyWorkspaceQuickStart />
     </div>
   )
 }
@@ -1175,6 +1180,9 @@ const emptyWorkspaceStyle: React.CSSProperties = {
   justifyContent: 'center',
   gap: 18,
   padding: 28,
+  // 本容器是行向 flex(body 容器)的 flex item,默认 min-width:auto 会被
+  // 子内容的固有宽度撑破窄视口(移动端),显式允许收缩保证始终被夹在视口内。
+  minWidth: 0,
 }
 
 const emptyWorkspaceBrandMarkHitStyle: React.CSSProperties = {

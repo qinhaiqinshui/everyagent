@@ -51,7 +51,7 @@ public interface ExecContext {
      */
     AgentFactory agentFactory();
 
-    /** metadata 中附件列表的键名（{@code List<Map>} 形态，由 FileReferenceProcessNode 写入）。 */
+    /** metadata 中附件列表的键名（{@code List<Map>} 形态，由 read_file 扩展名接管（FileReadHandler）合并写入）。 */
     String METADATA_ATTACHMENTS_KEY = "attachments";
 
     /** 主体策略标记（unattended / ai-review 等；随 meta.json 落盘的持久数据；授权链节点判定用）。 */
@@ -65,7 +65,7 @@ public interface ExecContext {
 
     /**
      * 已绑定本主体的用户交互口（静态代理：ask 的 context map 自动填 subjectId
-     * ——替代 HumanAuthorizationHandler / ImageReferenceHandler / AskUserTool 手动
+     * ——替代 HumanAuthorizationHandler / AskUserTool 手动
      * 组装 Map.of("taskId",...)；agentId 由调用方按需经 context 参数补充）。
      * 与 emitter()/agentFactory() 同为预绑定端口。
      */

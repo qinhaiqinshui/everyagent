@@ -1,20 +1,26 @@
 package dev.everyagent.worker.task;
 
+import dev.everyagent.contract.json.Json;
 import dev.everyagent.plugin.api.event.EventLogReader;
 import dev.everyagent.plugin.api.event.Events;
 import dev.everyagent.plugin.api.event.EventRecord;
+import dev.everyagent.plugin.api.model.EmitEvent;
+import dev.everyagent.plugin.api.model.EventEmitter;
 import dev.everyagent.plugin.api.proto.ShortIds;
+import dev.everyagent.plugin.api.proto.SnowflakeId;
 import dev.everyagent.plugin.api.task.RoundClosedInfo;
 import dev.everyagent.plugin.api.task.RoundClosedListener;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.node.ObjectNode;
 
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -38,6 +44,9 @@ import java.util.TreeMap;
  * <li>一轮内可有多个子 agent,agentRanges 按出现顺序;尚无主 agent 轮时的子 agent 事件忽略;
  *     agentId 缺失的旧 events.jsonl 行视为主线程(wireEvent 同口径)。</li>
  * </ul>
+ * <p><b>事件是唯一权威,rounds.jsonl 只是索引缓存</b>:闭合行的落盘是「有事发生时顺手补写」
+ * (每轮最终回复后 / 开轮前 / 任务终态收口),因此可能迟到或漏做;任何决策(是否开新轮、
+ * 当前有没有开着的轮)一律以扫描事件为准,索引行只作渲染素材与幂等对账目标。
  */
 @Component
 public class RoundIndexStore {
@@ -177,26 +186,41 @@ public class RoundIndexStore {
 
     /**
      * 开轮落盘(用户输入被消费时调用,user.message 落盘后):
-     * 读 rounds.jsonl 最后一行——
      * <ul>
-     * <li>文件为空或最后一行已闭合 → 追加一条 endSeq="" 的未闭合轮;</li>
-     * <li>最后一行未闭合 → 沿用当前轮,不写(中间输入/续跑不开新轮)。</li>
+     * <li>文件为空,或最后一行已闭合 → 追加一条 endSeq="" 的未闭合轮;</li>
+     * <li>最后一行未闭合 → <b>先按事件扫描对账</b>(见下),仍真未闭合才沿用当前轮不写
+     *     (中间输入/续跑不开新轮)。</li>
      * </ul>
-     * 不扫描事件、不做终态补写/对账:轮行随开轮即持久化,中断/失败/取消的未闭合轮自然留在文件里。
-     * 开轮即记录 {@code startedAt = System.currentTimeMillis()} 并随行落盘——耗时口径以磁盘为
-     * 唯一真相源:闭合轮时由 {@link #applyRounds} 取当前时间减去磁盘 startedAt 计算,不再依赖内存
-     * 计时槽,任务出错停止后继续(续跑改判闭合)也以最初开轮时刻计耗时,不会因为重新打点而失真。
+     * <b>开轮前对账(不变式)</b>:闭合行的落盘是「有事时顺手补写」,任何原因漏做(闭合那次扫描
+     * 没看到最终回复)都会让尾行停在未闭合。此时若直接沿用,本条用户输入及其后的全部事件都会
+     * 落在上一轮区间之外——磁盘没有任何一行覆盖它们,{@code task.rounds} 也开不出这一轮,
+     * 前端于是只看到「上一轮已闭合」而实际执行的内容整轮不可见。故尾行未闭合时先跑一次
+     * {@link #persistClosedRounds}(以事件为权威、幂等),再按磁盘重判:能闭合则闭合后正常开新轮;
+     * 真是开着的轮(授权回复/中断补充/续跑)则沿用。尾行已闭合时无需扫描(常见路径零额外开销)。
+     * <p>开轮即记录 {@code startedAt = System.currentTimeMillis()} 并随行落盘——耗时口径以磁盘为
+     * 唯一真相源:闭合轮时由 {@link #applyRounds} 取「最终回复事件时间 − 磁盘 startedAt」计算,
+     * 任务出错停止后继续(续跑改判闭合)也以最初开轮时刻计耗时,不会因为重新打点而失真。
      * 异常全部吞掉(仅记日志),绝不阻断任务输入消费。
      *
+     * @param dir   任务数据目录(定位 rounds.jsonl 及 agent 事件文件)
+     * @param log   任务内存事件日志(对账窗口的内存侧)
+     * @param mainAgentId 主 agent id(对账扫描的轮次归属判据)
      * @return true=真的追加了新行(新开一轮);false=沿用未闭合尾行未写或写盘失败
      */
-    public boolean openRoundAtStart(Path dir, String taskId, long startSeq, String user,
-            JsonNode userMessage) {
+    public boolean openRoundAtStart(Path dir, EventLogReader log, String taskId, String mainAgentId,
+            long startSeq, String user, JsonNode userMessage) {
         try {
             List<RoundIndex.Round> existing = taskStore.readRounds(dir);
             RoundIndex.Round last = existing.isEmpty() ? null : existing.get(existing.size() - 1);
             if (last != null && !last.closed()) {
-                return false; // 沿用当前未闭合轮(roundId 已存在,不重生成)
+                // 尾行未闭合有两种可能:①真·开着的轮(中间输入/续跑)→ 沿用;②上一轮闭合被漏做
+                // 留下的陈旧行 → 必须先把上一轮补闭合,否则本条输入整轮不可见(见方法注释)。
+                persistClosedRounds(dir, log, taskId, mainAgentId);
+                existing = taskStore.readRounds(dir);
+                last = existing.isEmpty() ? null : existing.get(existing.size() - 1);
+                if (last != null && !last.closed()) {
+                    return false; // 真·未闭合:沿用当前未闭合轮(roundId 已存在,不重生成)
+                }
             }
             long index = last == null ? 1 : last.index() + 1;
             String roundId = ShortIds.next("round");
@@ -211,13 +235,14 @@ public class RoundIndexStore {
     }
 
     /**
-     * 增量闭合「已闭合轮」(RoundIndexAdvisor 每轮最终回复后调用):
+     * 增量闭合「已闭合轮」——三处调用:RoundIndexAdvisor 每轮最终回复后(增量补写)、开轮前对账、
+     * 任务终态收口对账(后两者补齐漏做的闭合;三者幂等,重复调用不重复写)。
      * 窗口 = 磁盘持久事件 ∪ 内存尾部按 seq 归并(同 seq 以内存为准),<b>下界含锚点本身</b>
      * (锚点 = rounds.jsonl 最后一行 startSeq;该行未闭合时其开轮 user.message 事件须进窗口,
      * 续跑补出最终回复后开着的轮才能被重扫并闭合——原位改写为闭合行,见 {@link #applyRounds})。
      * 只把开轮路径已落盘的未闭合行改写为闭合行;缺失行不补写(不做自愈/对账)。
      * rounds.jsonl 缺失时另由 {@code task.rounds} 首次惰性全量生成兜底。异常全部吞掉
-     * (仅记日志),绝不阻断模型流的 doOnComplete。
+     * (仅记日志),绝不阻断调用方(模型流 doOnComplete / 输入消费 / 终态收口)。
      *
      * @param dir   任务数据目录(定位 rounds.jsonl 及 agent 事件文件)
      * @param log   任务内存事件日志(当前 run 的全部事件;冷启动后 EventLog 只含本次运行)
@@ -237,13 +262,51 @@ public class RoundIndexStore {
             if (found.isEmpty()) {
                 return List.of();
             }
+            // 窗口事件的 seq → 事件时间:闭合行耗时取「最终回复事件时间 − startedAt」的真值
+            // (迟到补闭合/续跑改判不吃「等待时间」)。
+            Map<Long, Long> tsBySeq = new HashMap<>();
+            for (EventRecord r : window) {
+                tsBySeq.putIfAbsent(r.seq(), r.ts());
+            }
             List<RoundIndex.Round> newlyClosed =
-                    applyRounds(taskId, taskStore.readRounds(dir), found);
+                    applyRounds(taskId, taskStore.readRounds(dir), found, tsBySeq);
             notifyRoundClosedListeners(taskId, dir, newlyClosed);
             return newlyClosed;
         } catch (IOException | RuntimeException e) {
             LOG.warn("轮次索引增量补写失败 task={}(不影响任务运行)", taskId, e);
             return List.of();
+        }
+    }
+
+    /**
+     * 闭合行落盘之后推 {@code round.closed}(瞬态,只走 stream 频道不落盘)。
+     * 闭合行先落盘、通知后推送是既有不变式(前端收到通知即拉 {@code task.rounds},
+     * 耗时必已就位);增量闭合与终态收口对账共用本实现(一个功能一处实现)。
+     * 异常自吞:推送失败不影响任务收口。
+     *
+     * @param events 任务级事件口(瞬态推送)
+     * @param closed 本次新闭合的轮(来自 {@link #persistClosedRounds})
+     */
+    public void publishClosed(String taskId, EventEmitter events, List<RoundIndex.Round> closed) {
+        if (events == null || closed == null || closed.isEmpty()) {
+            return;
+        }
+        for (RoundIndex.Round r : closed) {
+            if (r.endSeq() == null) {
+                continue;
+            }
+            ObjectNode roundClosedData = Json.obj();
+            roundClosedData.put("startSeq", String.valueOf(r.startSeq()));
+            roundClosedData.put("endSeq", String.valueOf(r.endSeq()));
+            if (r.finalReply() != null) {
+                roundClosedData.put("finalReply", r.finalReply());
+            }
+            try {
+                events.emit(EmitEvent.transientOf(SnowflakeId.next(), Events.ROUND_CLOSED, null,
+                        null, null, null, null, roundClosedData, EmitEvent.Mode.REPLACE));
+            } catch (RuntimeException e) {
+                LOG.warn("round.closed 推送失败 task={}(不影响任务收口)", taskId, e);
+            }
         }
     }
 
@@ -257,16 +320,17 @@ public class RoundIndexStore {
      * <li>磁盘不存在 → 跳过,不补写(开轮路径负责落盘,不做自愈/对账)。</li>
      * </ul>
      *
-     * <p><b>耗时口径(磁盘唯一真相源)</b>:闭合轮时取当前时间减去磁盘 prior 行的 startedAt
-     * (开轮落盘时刻),随闭合行同一次写入内联 durationMs——不依赖内存计时槽;中断/失败后继续
-     * (续跑改判闭合)也以最初开轮时刻计耗时,本轮耗时跨运行延续不失真。prior.startedAt 未知(0,
-     * 旧行/scan)时不计耗时(保持 0)。prior 已有耗时(>0)不覆盖(幂等)。
+     * <p><b>耗时口径(磁盘唯一真相源)</b>:闭合轮时取「最终回复事件时间 − 磁盘 prior 行的
+     * startedAt(开轮落盘时刻)」,随闭合行同一次写入内联 durationMs——不依赖内存计时槽;迟到补
+     * 闭合(闭合曾漏做,直到下次开轮 / 终态收口对账才补)与续跑改判闭合都取轮的真实终点,不会把
+     * 等待时间算进耗时。事件时间不可得时回退当前时间。prior.startedAt 未知(0,旧行/scan)时不
+     * 计耗时(保持 0)。prior 已有耗时(>0)不覆盖(幂等)。
      *
      * @return 本次实际<b>新闭合</b>的轮(含 startSeq/endSeq/finalReply,供 round.closed 事件发射;
      *         幂等跳过与双双未闭合不计入)
      */
-    private List<RoundIndex.Round> applyRounds(String taskId,
-            List<RoundIndex.Round> existing, List<RoundIndex.Round> found) throws IOException {
+    private List<RoundIndex.Round> applyRounds(String taskId, List<RoundIndex.Round> existing,
+            List<RoundIndex.Round> found, Map<Long, Long> tsBySeq) throws IOException {
         Map<Long, RoundIndex.Round> byStart = new LinkedHashMap<>();
         for (RoundIndex.Round r : existing) {
             byStart.putIfAbsent(r.startSeq(), r); // 撕行已由 readRounds 过滤,不参与对账
@@ -283,11 +347,11 @@ public class RoundIndexStore {
             if (r.closed()) {
                 // 未闭合尾行 → 闭合行:原地改写(index 沿用磁盘行;roundId 沿用 prior 的稳定主键,
                 // 不新生成;耗时随行内联——prior 已有耗时(>0)不覆盖,未知(≤0)且 prior.startedAt
-                // 有效时取「当前时间 − 磁盘 startedAt」)
+                // 有效时取「最终回复事件时间 − 磁盘 startedAt」)
                 long dur = prior.durationMs() > 0
                         ? prior.durationMs()
                         : (prior.startedAt() > 0
-                                ? Math.max(0L, System.currentTimeMillis() - prior.startedAt())
+                                ? Math.max(0L, closeTimestamp(r.endSeq(), tsBySeq) - prior.startedAt())
                                 : 0L);
                 RoundIndex.Round closed = new RoundIndex.Round(prior.roundId(), prior.index(),
                         r.startSeq(), r.endSeq(), r.user(), r.finalReply(),
@@ -301,6 +365,12 @@ public class RoundIndexStore {
             // 双双未闭合:行已存在,不重复写
         }
         return newlyClosed;
+    }
+
+    /** 轮闭合时刻:优先最终回复事件的事件时间(轮真实终点),不可得回退当前时间。 */
+    private static long closeTimestamp(Long endSeq, Map<Long, Long> tsBySeq) {
+        Long ts = endSeq == null ? null : tsBySeq.get(endSeq);
+        return ts != null && ts > 0 ? ts : System.currentTimeMillis();
     }
 
     /**
@@ -323,6 +393,7 @@ public class RoundIndexStore {
         window.sort(Comparator.comparingLong(EventRecord::seq));
         return window;
     }
+
     /** 最终回复判定:主 agent message 且 data.toolCalls 缺失/空数组 且 content 非空。 */
     private static boolean isFinalReply(JsonNode payload) {
         if (payload == null || !payload.isObject()) {

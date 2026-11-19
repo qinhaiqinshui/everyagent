@@ -1015,7 +1015,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
           {/* 任务级错误信息已由线程内 error 事件的红色 trace 承载，输入框上方不再重复弹提示条。 */}
           <TaskComposerSurface
             draft={draft}
-            placeholder="继续输入，让当前 Task 创建新的 Agent 执行下一轮"
+            placeholder="继续输入内容发送给 AI，开启下一轮对话"
             taskId={effectiveTaskId}
             workerId={ownerWorkerId}
             workspace={entry?.workspace}

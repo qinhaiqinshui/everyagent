@@ -29,14 +29,14 @@ has_children: false
 
 ### 1.2 `WorkerPluginContext` —— 16 个注册方法
 
-14 个声明于 `every-agent-plugin-api/.../WorkerPluginContext.java:43-109`（11 个 SPI + 3 个通用），末 2 个在父接口 `TaskPluginContext`（表中 #15/#16）。注册即生效：worker 侧只往注册表 `add` 一行，无校验、无过滤（[总览 §6.1](../backend/overview.md#61-注册方法16-个)）。另有 2 个事件出网过滤注册（表中 #8/#9）暂无本站专篇，契约见[架构说明 §8.5](../../ARCHITECTURE.md#85-插件系统统一加载架构)。skill 贡献**不在此表**——代码注册通道已删除，插件 skill 走 [advisors §5](../backend/advisors.md#5-技能包物化skillmaterializer-插件贡献-skill-的唯一方式) 的物化落盘。
+14 个声明于 `every-agent-plugin-api/.../WorkerPluginContext.java:43-112`（11 个 SPI + 3 个通用），末 2 个在父接口 `TaskPluginContext`（表中 #15/#16）。注册即生效：worker 侧只往注册表 `add` 一行，无校验、无过滤（[总览 §6.1](../backend/overview.md#61-注册方法16-个)）。另有 2 个事件出网过滤注册（表中 #8/#9）暂无本站专篇，契约见[架构说明 §8.5](../../ARCHITECTURE.md#85-插件系统统一加载架构)。skill 贡献**不在此表**——代码注册通道已删除，插件 skill 走 [advisors §5](../backend/advisors.md#5-技能包物化skillmaterializer-插件贡献-skill-的唯一方式) 的物化落盘。
 
 | # | 注册方法（一行签名） | 详解 | 内置范例 |
 |---|---|---|---|
 | 1 | `void registerToolProvider(ToolProvider p)` | [工具 §1](../backend/tools-and-sandbox.md#1-toolprovider--给-ai-注入工具) | subagent、sandbox-windows-codex/mic、sandbox-wsl-ubuntu |
 | 2 | `void registerToolExecutionInterceptor(ToolExecutionInterceptor i)` | [工具 §2](../backend/tools-and-sandbox.md#2-toolexecutioninterceptor--工具执行拦截链) | secret-redaction(900)、unattended(100) |
 | 3 | `void registerSandboxProvider(SandboxProvider p)` | [工具 §3](../backend/tools-and-sandbox.md#3-sandboxprovider--沙箱后端) | sandbox-wsl-ubuntu(priority 10)、codex(8)、mic(5) |
-| 4 | `void registerFileReferenceHandler(FileReferenceHandler h)` | [工具 §4](../backend/tools-and-sandbox.md#4-filereferencehandler--用户输入里的文件引用) | image-vision（唯一） |
+| 4 | `void registerFileReadHandler(FileReadHandler h)` | [工具 §4](../backend/tools-and-sandbox.md#4-filereadhandler--read_file-按扩展名接管) | image-vision（read_file 图片接管） |
 | 5 | `void registerAdvisorProvider(AdvisorProvider p)` | [advisors §1](../backend/advisors.md#1-advisorprovider--向-agent-链注入-advisor) | 12 插件 13 provider（system-info、git、context-compression…） |
 | 6 | `void registerSearchProvider(SearchProvider p)` | [advisors §6](../backend/advisors.md#6-searchprovider--搜索后端统一-search-聚合--mentionquery-能力接口) | 统一 `search` 聚合（内置 `file-content`/`file-name`/`task` 三 provider 与插件 provider 同权，按 `order` 升序聚合）；能力接口 `SuggestionProvider`（mention.query）；无内置插件范例 |
 | 7 | `void registerAuthorizationHandler(AuthorizationHandler h)` | [advisors §7](../backend/advisors.md#7-authorizationhandler--授权决议链节点) | ai-review(100f)、unattended(200f)；内置 human=300f 终结 |
@@ -62,9 +62,9 @@ has_children: false
 
 ### 1.4 `TaskPluginContext` —— 父接口（2 方法）
 
-`WorkerPluginContext extends TaskPluginContext`，该父接口只声明上表 #15/#16 两个注册方法（`every-agent-plugin-api/.../task/TaskPluginContext.java:17,24`）。详解：[准入预检](../backend/task-and-rpc.md#1-taskadmissionpolicy--任务创建准入预检)、[洋葱节点](../backend/task-and-rpc.md#2-tasklifecyclenode--洋葱模型)。
+`WorkerPluginContext extends TaskPluginContext`，该父接口只声明上表 #16/#17 两个注册方法（`every-agent-plugin-api/.../task/TaskPluginContext.java:17,24`）。详解：[准入预检](../backend/task-and-rpc.md#1-taskadmissionpolicy--任务创建准入预检)、[洋葱节点](../backend/task-and-rpc.md#2-tasklifecyclenode--洋葱模型)。
 
-### 1.5 `WorkerServices` —— 服务清单（15 项）
+### 1.5 `WorkerServices` —— 服务清单（14 项）
 
 > 本表摘自 [后端总览 §6.3](../backend/overview.md#63-workerservices能取到什么逐个列)（逐项声明行号见该篇）；声明：`every-agent-plugin-api/.../WorkerServices.java`。插件只面向此接口编程，不依赖 worker 实现类。
 
@@ -76,7 +76,6 @@ has_children: false
 | `tokenEstimator()` | token 估算器（内置或插件注册版） | token-estimator |
 | `SlashTokenService slashTokens()` | 任务级 slash token 只读查询：任务级开关的真相源读取口（`tokensOf(taskId)` / `hasKind(taskId, kind)`，见 `SlashTokenService`） | ai-review、unattended |
 | `interaction()` | 用户交互服务（ask 提问 / 授权弹窗） | ai-review、image-vision |
-| `userInputMaterializer()` | 用户输入物化（@ 文件引用 → 「（附图:xxx）」正文 + 附件 Media；输入投递入口必用） | task-input-queue（插入对话） |
 | `config()` | worker 全局 `worker.*` 只读视图（≠ `ctx.config()`） | task-queue |
 | `ids()` | ID 生成器（单调递增 long + 短 ID） | — |
 | `stream()` | 事件扇出口（向 hub 连接广播，如 task.updated） | — |
@@ -88,7 +87,7 @@ has_children: false
 
 ### 1.6 `ExecContext` —— 上下文槽位（11 槽 + 1 常量）
 
-四个 SPI 的上下文（`ToolContext`/`ToolExecutionContext`/`FileReferenceContext`）全部 `extends ExecContext`，插件只准从这些槽位取执行数据（§14.11 红线）。逐字段表：[工具 §5.2](../backend/tools-and-sandbox.md#52-逐字段表)；红线原文与方向判据：[工具 §5](../backend/tools-and-sandbox.md#5-execcontext--槽位判据与字段表)。
+四个 SPI 的上下文中，`ToolContext`/`ToolExecutionContext` 全部 `extends ExecContext`（`FileReadHandler.read` 直接收 `ExecContext`），插件只准从这些槽位取执行数据（§14.11 红线）。逐字段表：[工具 §5.2](../backend/tools-and-sandbox.md#52-逐字段表)；红线原文与方向判据：[工具 §5](../backend/tools-and-sandbox.md#5-execcontext--槽位判据与字段表)。
 
 | 槽位 | 一句话 | 消费范例 |
 |---|---|---|
@@ -103,7 +102,7 @@ has_children: false
 | `boolean terminal()` | 主体是否已收口（终态后不再发射） | leak-guard |
 | `InteractionService interaction()` | 预绑定交互口（ask 自动补 subjectId） | image-vision |
 | `Map<String,AgentContext> agents()` | 本主体活动 agent 注册表（自动维护，插件不再手动 put） | AgentBuilder |
-| 常量 `METADATA_ATTACHMENTS_KEY` | metadata 中附件列表键名（`"attachments"`） | FileReferenceProcessNode |
+| 常量 `METADATA_ATTACHMENTS_KEY` | metadata 中附件列表键名（`"attachments"`） | FileTools（read_file 接管附件合并）、FileAttachmentAdvisor |
 
 ### 1.7 五个支撑类型
 
@@ -270,7 +269,7 @@ has_children: false
 
 | 坐标系 | 类型 / 方向 | 关键占用（实测） | 详解 |
 |---|---|---|---|
-| AdvisorProvider | int，升序=外→内；锚点 `TCA = ToolCallingAdvisor.DEFAULT_ORDER = HP+300 = -2147483348` | HP+50 system-info、HP+60 agents-md、HP+140 git、HP+150 SlashTokenResolve、HP+160 FileAttachment、**TCA 工具循环本体**、TCA+30~+500 重试/护栏/压缩/限流、`0`=TokenCalibration（⚠️ 绝对值，实际最内层） | [advisors §2.2](../backend/advisors.md#22-内置-advisor-链完整-order-表)、[§2.4](../backend/advisors.md#24-420-850-的源码验证结论与计划口径不符如实更正) |
+| AdvisorProvider | int，升序=外→内；锚点 `TCA = ToolCallingAdvisor.DEFAULT_ORDER = HP+300 = -2147483348` | HP+50 system-info、HP+60 agents-md、HP+140 git、HP+150 SlashTokenResolve、**TCA 工具循环本体**、TCA+30~+500 重试/护栏/压缩/附件注入（TCA+450，须留在循环内侧）/限流、`0`=TokenCalibration（⚠️ 绝对值，实际最内层） | [advisors §2.2](../backend/advisors.md#22-内置-advisor-链完整-order-表)、[§2.4](../backend/advisors.md#24-420-850-的源码验证结论与计划口径不符如实更正) |
 | TaskLifecycleNode | float 洋葱；**临界段 [420,850] 落入即 WARN 拒绝** | 插件节点 15 / 40 / 870 / 877 / 950 | [任务 §2.3](../backend/task-and-rpc.md#23-完整节点-order-占用表worker-内置-26--插件-5共-31)、[§2.5](../backend/task-and-rpc.md#25-临界段-420850-专节) |
 | ToolExecutionInterceptor | int | unattended=100、secret-redaction=900 | [工具 §2](../backend/tools-and-sandbox.md#2-toolexecutioninterceptor--工具执行拦截链) |
 
