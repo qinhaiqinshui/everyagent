@@ -25,6 +25,12 @@ export type ListRowActionsProps = {
   disabled?: boolean
   /** 是否为移动端。移动端隐藏触发按钮、改用长按；弹层锚定到 openMenu 传入的行节点。 */
   isMobile?: boolean
+  /**
+   * 菜单**即将打开**时的回调（触发按钮点击与父级 `openMenu` 长按/右键两条路都走）。
+   * 用于「点击菜单项之前」的轻量准备——例如预取该项要用的数据，让点击时无需再等网络
+   * （剪贴板写入要求用户手势仍在，跨 await 的取数会把手势吃掉）。不得阻塞开菜单。
+   */
+  onOpen?: () => void
 }
 
 /**
@@ -39,7 +45,7 @@ export type ListRowActionsProps = {
  *   @/ 弹层一致。
  */
 const ListRowActions = forwardRef<ListRowActionsHandle, ListRowActionsProps>(function ListRowActions(
-  { items, title = '更多操作', className, disabled = false, isMobile = false },
+  { items, title = '更多操作', className, disabled = false, isMobile = false, onOpen },
   ref,
 ) {
   const rootRef = useRef<HTMLDivElement | null>(null)
@@ -60,10 +66,11 @@ const ListRowActions = forwardRef<ListRowActionsHandle, ListRowActionsProps>(fun
         setExternalAnchor(anchorEl ?? null)
         setAnchorPoint(point ?? null)
         setOpen(true)
+        onOpen?.()
       },
       closeMenu,
     }),
-    [closeMenu],
+    [closeMenu, onOpen],
   )
 
   const listItems = items as MenuListItem[]
@@ -94,6 +101,7 @@ const ListRowActions = forwardRef<ListRowActionsHandle, ListRowActionsProps>(fun
             return
           }
           setOpen(true)
+          onOpen?.()
         }}
       >
         <MoreHorizontalIcon size={13} />

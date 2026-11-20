@@ -59,6 +59,43 @@ function toListItem(entry: TaskListEntry): TaskListItemSnapshot {
   }
 }
 
+/**
+ * task.dataDir 预取缓存(taskId → 预取条目)。
+ *
+ * 为什么需要:「复制任务路径」在**非安全上下文**(局域网 http 访问)下只能靠同步
+ * `execCommand('copy')` 写剪贴板,而它要求点击手势仍在——先 await 一次 RPC 再复制,
+ * 手势已被跨 task 的往返吃掉,复制必然失败。故路径必须在点击**之前**就绪:菜单打开时
+ * 发出预取,点击时同步取用(`getPrefetchedTaskDataDir`)。
+ *
+ * 条目带 TTL:worker 数据目录迁移(换 homeDir 重启)后旧值会陈旧,过期即重新预取。
+ */
+interface TaskDataDirCacheEntry {
+  /** 预取发起时刻(用于 TTL 判定)。 */
+  at: number
+  /** 已解析的绝对路径;预取在飞/失败时为 null。 */
+  resolved: string | null
+}
+
+const TASK_DATA_DIR_TTL_MS = 5 * 60 * 1000
+const taskDataDirCache = new Map<string, TaskDataDirCacheEntry>()
+
+/**
+ * task.dataDir 取数本体(模块级函数:getTaskDataDir 与预取共用,不依赖 this,
+ * 避免方法被解构调用时丢上下文)。
+ */
+async function fetchTaskDataDir(taskId: string): Promise<string> {
+  const ownerWorkerId = taskStore.get(taskId)?.workerId
+  if (!ownerWorkerId) {
+    throw new Error('无法确定任务所属 worker(任务数据不可用)')
+  }
+  const result = await hubSession.rpcTo(ownerWorkerId, 'task.dataDir', { taskId })
+  const path = String(result?.path ?? '')
+  if (!path) {
+    throw new Error('worker 未返回任务路径')
+  }
+  return path
+}
+
 export const taskQueryService = {
   /** 任务列表快照(来自 taskStore 镜像,调用方经 taskStore.subscribe 订阅变更)。 */
   listTaskListItems(): TaskListItemSnapshot[] {
@@ -78,16 +115,43 @@ export const taskQueryService = {
    * 按任务归属 worker 定向调用;失败抛可读错误。
    */
   async getTaskDataDir(taskId: string): Promise<string> {
-    const ownerWorkerId = taskStore.get(taskId)?.workerId
-    if (!ownerWorkerId) {
-      throw new Error('无法确定任务所属 worker(任务数据不可用)')
+    return fetchTaskDataDir(taskId)
+  },
+
+  /**
+   * 预取任务数据目录(菜单打开等「即将复制」的时机调用):fire-and-forget,
+   * 结果落 {@link getPrefetchedTaskDataDir} 供点击时同步取用。失败静默(点击时才提示)。
+   */
+  prefetchTaskDataDir(taskId: string): void {
+    const cached = taskDataDirCache.get(taskId)
+    // 已有新鲜条目 = 在飞或已落定,不重复发起。
+    if (cached && Date.now() - cached.at < TASK_DATA_DIR_TTL_MS) return
+    const entry: TaskDataDirCacheEntry = { at: Date.now(), resolved: null }
+    taskDataDirCache.set(taskId, entry)
+    // 预取是「顺手准备」:失败从缓存移除(点击时重取并提示),且不冒 unhandled rejection
+    // ——两个 handler 都不抛。
+    fetchTaskDataDir(taskId).then(
+      (path) => {
+        entry.resolved = path
+      },
+      () => {
+        if (taskDataDirCache.get(taskId) === entry) taskDataDirCache.delete(taskId)
+      },
+    )
+  },
+
+  /**
+   * 同步取预取到的任务数据目录路径;尚未落定/已过期/不存在返回 null。
+   * 调用点据此在**点击回调内同步写剪贴板**,不跨 await(保住 execCommand 需要的用户手势)。
+   */
+  getPrefetchedTaskDataDir(taskId: string): string | null {
+    const entry = taskDataDirCache.get(taskId)
+    if (!entry) return null
+    if (Date.now() - entry.at >= TASK_DATA_DIR_TTL_MS) {
+      taskDataDirCache.delete(taskId)
+      return null
     }
-    const result = await hubSession.rpcTo(ownerWorkerId, 'task.dataDir', { taskId })
-    const path = String(result?.path ?? '')
-    if (!path) {
-      throw new Error('worker 未返回任务路径')
-    }
-    return path
+    return entry.resolved
   },
 
   /**

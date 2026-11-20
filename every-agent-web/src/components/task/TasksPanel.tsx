@@ -16,8 +16,9 @@ import { ChevronDownIcon, CopyIcon, MagnifierCheckIcon, MoreHorizontalIcon, Plus
 import { Button, IconButton } from '@/components/shared/ui'
 import ActionMenu from '@/components/shared/ui/ActionMenu'
 import { useAppUi } from '@/components/app/AppUiContext'
-import { copyText } from '@/utils/clipboard'
+import { copyText, copyTextSync } from '@/utils/clipboard'
 import ConfirmDialog from '@/components/shared/ConfirmDialog'
+import ManualCopyDialog from '@/components/shared/ManualCopyDialog'
 import PropertiesDialog from '@/components/shared/PropertiesDialog'
 import { buildWorkspacePropertyItems, getWorkspaceDisplayName } from '@/components/shared/workspacePropertyUtils'
 import { Checkbox } from 'antd'
@@ -379,19 +380,43 @@ export default function TasksPanel({
 
   const { showToast } = useAppUi()
 
+  /** 「复制任务路径」失败降落伞:路径已拿到但写不进剪贴板时,弹手动复制弹窗。 */
+  const [manualCopyText, setManualCopyText] = React.useState<string | null>(null)
+
   /**
    * 「复制任务路径」:向任务归属 worker 定向拉 task.dataDir(workspaces/<workspaceId>/tasks/
-   * <taskId>/ 在 worker 宿主上的完整绝对路径)并复制到剪贴板,成功/失败均 toast 反馈。
+   * <taskId>/ 在 worker 宿主上的完整绝对路径)并复制到剪贴板。
    * 路径必须由 worker 提供——前端(可能远端经 hub)无从拼出 worker 宿主上的数据目录。
+   *
+   * 复制**必须**在点击手势内完成:非安全上下文(局域网 http)下 `navigator.clipboard`
+   * 不存在,只剩同步 execCommand,而它要求手势仍在——因此这里先用菜单打开时预取到的路径
+   * 走同步写(见 taskQueryService.prefetchTaskDataDir),预取没命中才退让到「取数后复制」
+   * (跨 await 可能丢手势),最终失败则弹手动复制弹窗,绝不只报一句失败。
    */
   const handleCopyTaskPath = React.useCallback(async (task: TaskListItemSnapshot) => {
+    const prefetched = taskQueryService.getPrefetchedTaskDataDir(task.taskId)
+    if (prefetched && copyTextSync(prefetched)) {
+      showToast('已复制任务路径', 'success')
+      return
+    }
+    let path = prefetched
+    let failureMessage = '复制任务路径失败'
     try {
-      const path = await taskQueryService.getTaskDataDir(task.taskId)
+      if (!path) {
+        path = await taskQueryService.getTaskDataDir(task.taskId)
+      }
       await copyText(path)
       showToast('已复制任务路径', 'success')
+      return
     } catch (copyError) {
-      showToast(copyError instanceof Error ? copyError.message : '复制任务路径失败', 'error')
+      failureMessage = copyError instanceof Error ? copyError.message : failureMessage
     }
+    if (path) {
+      // 路径拿到了、只是剪贴板写不进(典型:非安全上下文 + 跨 await 手势失效)。
+      setManualCopyText(path)
+      return
+    }
+    showToast(failureMessage, 'error')
   }, [showToast])
 
   const { setActiveSidebarPanel } = useWorkspaceShell()
@@ -539,6 +564,9 @@ export default function TasksPanel({
               ref={(el) => {
                 actionRefs.current.set(task.taskId, el)
               }}
+              // 菜单一打开就预取路径:点击「复制任务路径」时路径已就绪,
+              // 同步写入剪贴板不跨 await(非安全上下文下 execCommand 才认这个手势)。
+              onOpen={() => taskQueryService.prefetchTaskDataDir(task.taskId)}
               items={[
                 {
                   key: 'copyDataDir',
@@ -803,6 +831,12 @@ export default function TasksPanel({
         name={workspacePropertiesTarget ? getWorkspaceDisplayName(workspacePropertiesTarget.root) : undefined}
         items={workspacePropertiesTarget ? buildWorkspacePropertyItems(workspacePropertiesTarget) : []}
         onClose={() => setWorkspacePropertiesTarget(null)}
+      />
+      <ManualCopyDialog
+        open={manualCopyText !== null}
+        title="复制任务路径"
+        text={manualCopyText ?? ''}
+        onClose={() => setManualCopyText(null)}
       />
     </div>
   )
