@@ -25,8 +25,8 @@
  *   - 校验失败(fail-fast)时 staging 已清空,任何退出路径都不会把过期产物带进安装包。
  *
  * 防静默降级:按 pom.xml 存在与否判型(与 scripts/build-plugins.py 同口径)。
- * Java 插件若缺 target 产物,staging 只剩根 plugin.json 时 Scanner 会把它误判为
- * 「纯 web 声明式插件」而静默加载——因此 jar/manifest/bundle 任一缺失即报错退出,
+ * Java 插件若缺 target 产物,根清单声明了 main,BuiltInPluginScanner 会 WARN「内置插件未构建」
+ * 整目录跳过——安装包里该插件连同 web UI 一起缺席,因此 jar/manifest/bundle 任一缺失即报错退出,
  * dist 链中止,绝不带病打包。
  *
  * 用法:

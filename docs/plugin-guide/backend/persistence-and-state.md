@@ -242,8 +242,8 @@ Java 插件 `mvn package` 后同时存在根 `plugin.json` 与 `target/classes/p
 | 用途 | 读哪份 | 证据 |
 |---|---|---|
 | `enabled` 判定 | **根 plugin.json** | `BuiltInPluginScanner.java:79-81`（`dir.resolve("plugin.json")` → `isEnabled`）；类注释明言「不依赖 target/ 是否存在，避免已构建但未清理的 target/ 残留导致禁用插件被误加载」 |
-| java/web 形态判定 | `target/classes/plugin.json` 是否存在 | `BuiltInPluginScanner.java:90`（`hasTargetClassesPluginJson`，`:170-172`） |
-| manifest 内容（id/main/webMain/contributes…） | **target/classes/plugin.json 优先**，无则根 | `resolveManifestPath`（`BuiltInPluginScanner.java:193-204`）；PluginLoader 按 source 分派调用（`PluginLoader.java:199-201`） |
+| java/web 形态判定 | **根 plugin.json 是否声明 Java 入口类**（`main` 或旧格式 `provides.spi.EveryAgentPlugin`） | `BuiltInPluginScanner.declaresJavaEntry`；`target/classes/plugin.json` 的有无**不参与判型**——纯 web 插件目录残留它不会被误判为「未构建」 |
+| manifest 内容（id/main/webMain/contributes…） | Java 插件 **target/classes/plugin.json 优先**，无则根；纯 web 插件一律读根 | `resolveManifestPath`（`BuiltInPluginScanner`）；PluginLoader 按 source 分派调用（`PluginLoader.java:199-201`） |
 
 ⇒ **改了根 plugin.json 忘了重新 `mvn package`，字段变更不生效**（加载期读的还是 target 里的旧清单）；只有 `enabled` 例外——它永远看根。这是「我明明改了清单为什么没变化」的最常见根因（[guides/troubleshooting.md](../guides/troubleshooting.md) 排查表同款条目）。
 

@@ -247,7 +247,7 @@ mvn -f every-agent-plugins/sample-java/pom.xml package
 jar tf every-agent-plugins\sample-java\target\sample-java-0.1.0.jar | findstr plugin.json
 ```
 
-- **产物与机制一句话**：`target/sample-java-0.1.0.jar`（版本缺省 `0.1.0`，也即 `.eap` 命名的版本源）；pom 内联的 `maven-resources-plugin` 在 `process-resources` 阶段把根目录 `plugin.json` 复制进 `target/classes` 并随 jar 打包——而 worker 的内置扫描器正是以 `target/classes/plugin.json` 的存在来判定「这是个 java 插件」的（无 target 产物则按纯 web 插件纳入，详见 [后端模型总览](backend/overview.md)）。
+- **产物与机制一句话**：`target/sample-java-0.1.0.jar`（版本缺省 `0.1.0`，也即 `.eap` 命名的版本源）；pom 内联的 `maven-resources-plugin` 在 `process-resources` 阶段把根目录 `plugin.json` 复制进 `target/classes` 并随 jar 打包——worker 的内置扫描器按根清单声明的 `main` 判定「这是个 java 插件」，并要求这份副本与 `target/` 下的 jar 齐备，缺一 WARN「内置插件未构建」跳过（未声明 `main` 则按纯 web 插件纳入，详见 [后端模型总览](backend/overview.md)）。
 - **生效**：重启 worker（cwd 在仓库根），日志出现 `[plugins] 插件已激活: id=sample-java name=… v0.1.0 entry=… source=builtin` 即激活成功（日志格式取自 `every-agent-worker/src/main/java/dev/everyagent/worker/plugin/loader/PluginLoader.java:337`；插件编译与 jar 内含清单已真机验证，worker 内激活这一环本篇按源码口径给出、未单独复跑）。
 - full 形态在 ② 之外还要做 §4 步骤 3 的 `build:plugins`，两条都完成再重启。
 

@@ -6,8 +6,9 @@ build-plugins.py —— 一条命令重建全部内置插件(前端 bundle + 插
 背景(见 docs/ARCHITECTURE.md §内置插件装载前置):
   - 内置插件不进根 reactor:根 pom 的 <modules> 只有 contract/plugin-parent/plugin-api/hub/worker;
   - deploy.py 只打 `-pl every-agent-hub,every-agent-worker -am package`,同样不带插件;
-  - BuiltInPluginScanner 要求 every-agent-plugins/<id>/target/classes/plugin.json 且
+  - BuiltInPluginScanner 按根清单是否声明 main 判型:java 插件要求 every-agent-plugins/<id>/target/classes/plugin.json 且
     target/ 下存在非 sources/javadoc 的 jar,否则 WARN「内置插件未构建」并跳过;
+    纯 web 插件(无 main,无 pom)不看 target/,残留的历史构建产物不会让它被误判为「未构建」;
   - findTargetJars 把 target/ 下所有非 sources/javadoc 的 jar 按字典序全部塞进
     URLClassLoader → 残留旧版本 jar 会遮蔽新类(表现为「改了没生效」),
     所以重建必须带 clean;

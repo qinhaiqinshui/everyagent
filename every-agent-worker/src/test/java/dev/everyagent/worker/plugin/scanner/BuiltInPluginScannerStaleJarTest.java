@@ -35,13 +35,13 @@ class BuiltInPluginScannerStaleJarTest {
     @TempDir
     Path pluginsRoot;
 
-    /** 造一个带 target/classes/plugin.json 的 Java 插件骨架,返回插件根目录。 */
+    /** 造一个带 target/classes/plugin.json 的 Java 插件骨架(根清单声明 main,扫描器据此判为 Java 插件),返回插件根目录。 */
     private Path javaPlugin(String name) throws IOException {
         Path dir = pluginsRoot.resolve(name);
         Files.createDirectories(dir.resolve("target/classes"));
-        Files.writeString(dir.resolve("plugin.json"), "{\"id\":\"" + name + "\",\"name\":\"" + name + "\"}");
-        Files.writeString(dir.resolve("target/classes/plugin.json"),
-                "{\"id\":\"" + name + "\",\"name\":\"" + name + "\"}");
+        String manifest = "{\"id\":\"" + name + "\",\"name\":\"" + name + "\",\"main\":\"x.Entry\"}";
+        Files.writeString(dir.resolve("plugin.json"), manifest);
+        Files.writeString(dir.resolve("target/classes/plugin.json"), manifest);
         return dir;
     }
 

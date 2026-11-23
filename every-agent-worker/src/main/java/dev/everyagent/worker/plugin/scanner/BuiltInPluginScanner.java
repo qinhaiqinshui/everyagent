@@ -26,12 +26,17 @@ import java.util.stream.Stream;
  *   <li>若子目录根存在 {@code plugin.json}:解析并检查 {@code enabled} 字段,
  *       {@code enabled=false} 的插件直接跳过(不依赖 target/ 是否存在,
  *       避免已构建但未清理的 target/ 残留导致禁用插件被误加载)。</li>
- *   <li>{@code enabled} 为 true 或缺省(视为 true):
+ *   <li>{@code enabled} 为 true 或缺省(视为 true),<b>按根清单是否声明 Java 入口类判型</b>
+ *       ({@code main} / 旧格式 {@code provides.spi.EveryAgentPlugin},见 {@link #declaresJavaEntry(Path)}),
+ *       <b>不按 target/ 产物是否存在判型</b>:
  *     <ul>
- *       <li>若存在 {@code target/classes/plugin.json}(Java 插件,maven 已构建):
- *           还要求 {@code target/} 下至少有一个非 sources/javadoc 的 jar,
- *           两者都满足才纳入;否则 WARN 提示「内置插件未构建,请先 mvn package」并跳过。</li>
- *       <li>否则(无 target/classes/plugin.json):视为纯 web 插件(根 plugin.json 即清单),纳入。</li>
+ *       <li>声明了入口类 = Java 插件:须有 {@code target/classes/plugin.json}(maven 已构建)
+ *           且 {@code target/} 下至少一个非 sources/javadoc 的 jar,两者都满足才纳入;
+ *           否则 WARN「内置插件未构建,请先 mvn package」并跳过。</li>
+ *       <li>未声明入口类 = 纯 web / 声明式插件(根 plugin.json 即清单),纳入;
+ *           目录里残留的 {@code target/}(历史构建产物)不参与判型——若按产物判型,
+ *           残留的 target/classes/plugin.json 会把它误判成「Java 插件未构建」整目录跳过,
+ *           前端入口(如扩展管理侧栏)静默消失。</li>
  *     </ul>
  *   </li>
  *   <li>子目录根无 {@code plugin.json}:跳过。</li>
@@ -88,16 +93,21 @@ public class BuiltInPluginScanner implements PluginScanner {
                 continue;
             }
 
-            if (hasTargetClassesPluginJson(dir)) {
-                // Java 插件:target/classes/plugin.json 存在
-                if (hasTargetJars(dir)) {
+            // 判型只看根清单是否声明 Java 入口类,不看 target/ 产物是否残留:
+            // 纯 web 插件目录若残留历史构建产物 target/classes/plugin.json(无 jar),
+            // 按产物判型会把它误判成「Java 插件未构建」整目录跳过,前端入口(如扩展
+            // 管理侧栏)静默消失、worker 控制台只有一行 WARN——与 PluginLoader 的
+            // 「无 main = 声明式插件,不需要 jar」口径对齐后不再出现这种半新半旧。
+            if (declaresJavaEntry(rootManifest)) {
+                // Java 插件:须有 mvn package 产物(target/classes/plugin.json + 可加载 jar)
+                if (hasTargetClassesPluginJson(dir) && hasTargetJars(dir)) {
                     warnIfJarStale(dir);
                     result.add(new ScannedPlugin(dir, "builtin"));
                 } else {
                     log.warn("[plugins-builtin] 内置插件未构建,请先 mvn package: {}", dir.getFileName());
                 }
             } else {
-                // 纯 web 插件:根目录 plugin.json(已确认存在且 enabled)
+                // 纯 web / 声明式插件:根目录 plugin.json(已确认存在且 enabled)即清单
                 result.add(new ScannedPlugin(dir, "builtin"));
             }
         }
@@ -107,6 +117,30 @@ public class BuiltInPluginScanner implements PluginScanner {
     }
 
     // ---- 工具方法(供后续 PluginLoader 复用) ----
+
+    /**
+     * 检查 plugin.json 是否声明 Java 入口类:顶层 {@code main},兼容旧格式
+     * {@code provides.spi.EveryAgentPlugin}。
+     *
+     * <p>与 {@code PluginLoader.loadPlugin} 判定「声明式插件」的口径互为反面:声明了入口类
+     * 的插件才需要 jar 等构建产物,未声明的(纯 web / 声明式)一个 jar 都不加载,
+     * 故 {@code target/} 的有无对后者毫无意义。解析失败视为未声明({@link #isEnabled}
+     * 已 WARN;加载器用同一份清单同样解析不出 main)。
+     *
+     * @param manifestPath plugin.json 路径
+     * @return true = 声明了 Java 入口类(java 插件);false = 纯 web / 声明式插件
+     */
+    public static boolean declaresJavaEntry(Path manifestPath) {
+        try {
+            JsonNode json = Json.parse(Files.readString(manifestPath));
+            if (!json.path("main").asString("").isEmpty()) {
+                return true;
+            }
+            return !json.path("provides").path("spi").path("EveryAgentPlugin").asString("").isEmpty();
+        } catch (Exception e) {
+            return false;
+        }
+    }
 
     /**
      * 检查 plugin.json 中的 {@code enabled} 字段。
@@ -243,23 +277,26 @@ public class BuiltInPluginScanner implements PluginScanner {
     }
 
     /**
-     * 解析插件的 manifest(plugin.json)路径:
-     * 优先返回 {@code target/classes/plugin.json}(Java 插件构建产物),
-     * 否则返回子目录根的 {@code plugin.json}(纯 web 插件),
-     * 两者都不存在返回 {@code null}。
+     * 解析插件的 manifest(plugin.json)路径。
+     *
+     * <p>仅 Java 插件(根清单声明入口类,或根清单缺失只有构建副本)优先返回
+     * {@code target/classes/plugin.json}(mvn package 的复制件),否则返回根 {@code plugin.json}
+     * (纯 web / 声明式插件以根清单为唯一真相——目录里残留的 {@code target/classes/plugin.json}
+     * 是历史构建产物,不得遮蔽根清单的 webMain 等字段);两者都不存在返回 {@code null}。
      *
      * @param pluginDir 插件根目录
      * @return manifest 路径,或 null
      */
     public static Path resolveManifestPath(Path pluginDir) {
+        Path rootManifest = pluginDir.resolve("plugin.json");
         Path targetManifest = pluginDir.resolve("target/classes/plugin.json");
-        if (Files.isRegularFile(targetManifest)) {
+        if (Files.isRegularFile(targetManifest)
+                && (!Files.isRegularFile(rootManifest) || declaresJavaEntry(rootManifest))) {
             return targetManifest;
         }
-        Path rootManifest = pluginDir.resolve("plugin.json");
         if (Files.isRegularFile(rootManifest)) {
             return rootManifest;
         }
-        return null;
+        return Files.isRegularFile(targetManifest) ? targetManifest : null;
     }
 }

@@ -76,7 +76,7 @@ every-agent-plugins/<id>/
 | java + web | `main` + `webMain` | 上两行合并 | `every-agent-plugins/git/` |
 | 纯 web | 只有 `webMain` | `plugin.json` + `web/`（**无 pom、无 src**） | `every-agent-plugins/pdf-viewer/`、`plugin-manager/`、`update-file-view/` |
 
-worker 侧的判定规则（`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/scanner/BuiltInPluginScanner.java`）：子目录根有 `plugin.json` 才被视为插件；若存在 `target/classes/plugin.json` 则判为 java 插件并要求 `target/` 下有可加载 jar，否则 WARN「内置插件未构建,请先 mvn package」并跳过；没有 `target/` 产物则按纯 web 插件纳入（此类插件在后端登记为「声明式插件」）。
+worker 侧的判定规则（`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/scanner/BuiltInPluginScanner.java`）：子目录根有 `plugin.json` 且 `enabled≠false` 才被视为插件；随后**按根清单是否声明 Java 入口类判型**（`main` / 旧格式 `provides.spi.EveryAgentPlugin`），**不看 `target/` 产物是否残留**——声明了入口类即 java 插件，要求 `target/classes/plugin.json` 与 `target/` 下可加载 jar 两者齐备，缺任一 WARN「内置插件未构建,请先 mvn package」并跳过；未声明入口类即纯 web 插件，直接纳入（此类插件在后端登记为「声明式插件」），目录里残留的 `target/classes/plugin.json`（历史构建产物）不会让它被误判为「未构建」而从前端消失。
 
 **全站通用的几条硬事实**（出处：`.everyagent/web-plugin-facts.md`、`.everyagent/plan-plugin-scaffold-docs.md`「已核实事实」，本指南各篇不再重复论证）：
 

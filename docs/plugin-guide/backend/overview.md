@@ -19,9 +19,9 @@ worker 启动（Spring 容器装配完成 → PluginLoader.init() @PostConstruct
    │   一级子目录按名称排序，逐个判定：
    │     ├─ 根无 plugin.json → 不是插件，跳过
    │     ├─ enabled=false → INFO 跳过（在 target/ 判定之前，防残留误加载）
-   │     ├─ 有 target/classes/plugin.json（java 插件）→ 还须 target/ 下有非 sources/javadoc 的 jar
-   │     │     └─ 无 jar → WARN「内置插件未构建,请先 mvn package」整目录跳过
-   │     └─ 无 target 产物 → 判为纯 web 插件，直接纳入            → source="builtin"
+   │     ├─ 根清单声明 main（java 插件）→ 还须 target/classes/plugin.json + target/ 下非 sources/javadoc 的 jar
+   │     │     └─ 缺任一 → WARN「内置插件未构建,请先 mvn package」整目录跳过
+   │     └─ 根清单无 main → 判为纯 web 插件，直接纳入（target/ 残留不参与判型） → source="builtin"
    ├─ ExternalPluginScanner.scan()               ┘
    │   根目录 = worker.plugins-dir（默认 <home>/plugins，<home> 默认 ~/.everyagent）
    │   一级子目录根含 plugin.json 且 enabled≠false 即纳入（enabled=false 跳过） → source="external"
@@ -60,13 +60,13 @@ worker 启动（Spring 容器装配完成 → PluginLoader.init() @PostConstruct
 
 `<home>` 解析顺序：`worker.home-dir` 显式配置优先（`WorkerProperties.java:29` 字段 + `:212-216` 实现）；空白时回退 `<user.home>/.everyagent`。`worker.plugins-dir` 在其下拼 `plugins`。
 
-### 2.2 内置扫描的 target/ 分流（java / 纯 web 两种命运）
+### 2.2 内置扫描的判型分流（java / 纯 web 两种命运）
 
-`BuiltInPluginScanner.scan()` 对每个一级子目录按序做三件事（`BuiltInPluginScanner.java:79-101`）：
+`BuiltInPluginScanner.scan()` 对每个一级子目录按序做三件事（`BuiltInPluginScanner.java:79-104`）：
 
-1. **先查根 `plugin.json` 的 `enabled`**：`enabled=false` → INFO `[plugins-builtin] 插件已禁用(enabled=false),跳过: {}` 后整目录跳过（`:81-84`）。这一步刻意放在 `target/` 判定**之前**——源码注释明说是「避免已构建但未清理的 target/ 残留导致禁用插件被误加载」（类注释 `:26-28`）。`enabled` 缺省或解析失败都视为 `true`（`isEnabled`，`:117-125`，失败时 WARN `[plugins-builtin] 解析 plugin.json 失败,视为已启用: {}`）。
-2. **有 `target/classes/plugin.json` = java 插件**：还要求 `target/` 下至少有一个非 `-sources`/`-javadoc` 的 jar（`hasTargetJars:160-162`、`findTargetJars:134-152`，排除后排序）；不满足 → WARN `[plugins-builtin] 内置插件未构建,请先 mvn package: {}` 并**整目录跳过**（连纯 web 部分都不加载）（`:90-97`）。
-3. **无 `target/` 产物 = 纯 web 插件**：直接纳入，根 `plugin.json` 即清单（`:98-101`）。
+1. **先查根 `plugin.json` 的 `enabled`**：`enabled=false` → INFO `[plugins-builtin] 插件已禁用(enabled=false),跳过: {}` 后整目录跳过（`:81-84`）。这一步刻意放在构建产物判定**之前**——源码注释明说是「避免已构建但未清理的 target/ 残留导致禁用插件被误加载」（类注释 `:26-28`）。`enabled` 缺省或解析失败都视为 `true`（`isEnabled`，失败时 WARN `[plugins-builtin] 解析 plugin.json 失败,视为已启用: {}`）。
+2. **根清单声明 Java 入口类 = java 插件**（顶层 `main`，兼容旧格式 `provides.spi.EveryAgentPlugin`；`declaresJavaEntry`）：要求 `target/classes/plugin.json`（mvn package 的复制件）**且** `target/` 下至少有一个非 `-sources`/`-javadoc` 的 jar（`hasTargetJars`、`findTargetJars`，排除后排序）；缺任一 → WARN `[plugins-builtin] 内置插件未构建,请先 mvn package: {}` 并**整目录跳过**（连 web 部分都不加载）——从没构建过（连 `target/` 都没有）的 java 插件同样命中，不再被静默当成声明式插件。
+3. **根清单无入口类 = 纯 web / 声明式插件**：直接纳入，根 `plugin.json` 即清单。**判型不看 `target/` 产物是否残留**：纯 web 插件目录若残留历史构建产物 `target/classes/plugin.json`（无 jar），按产物判型会把它误判成「java 插件未构建」整目录跳过——前端入口（如扩展管理侧栏）静默消失、worker 控制台只有一行 WARN。判型口径与 `PluginLoader.loadPlugin` 的「无 main = 声明式插件，一个 jar 都不加载」互为反面，两侧永远一致。
 
 收尾日志：`[plugins-builtin] 扫描到 {} 个内置插件 (共 {} 个子目录)`（`:103`）；外部侧对应 `[plugins-external] 扫描到 {} 个外部插件`（`ExternalPluginScanner.java:55`）。
 
