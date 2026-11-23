@@ -8,11 +8,14 @@ import java.util.concurrent.ConcurrentHashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import dev.everyagent.contract.json.Json;
 import dev.everyagent.plugin.api.WorkerServices;
 import dev.everyagent.plugin.api.agent.AgentContext;
 import dev.everyagent.plugin.api.agent.AgentFactory;
 import dev.everyagent.plugin.api.agent.ConversationArchive;
+import dev.everyagent.plugin.api.event.Channels;
 import dev.everyagent.plugin.api.event.Events;
+import dev.everyagent.plugin.api.event.StreamEmitter;
 import dev.everyagent.plugin.api.execution.ExecContext;
 import dev.everyagent.plugin.api.interaction.AskResult;
 import dev.everyagent.plugin.api.interaction.InteractionService;
@@ -40,8 +43,11 @@ import tools.jackson.databind.node.ObjectNode;
  *       → 追加进 {@code agents/<name>.jsonl}（行形态照抄 task 域 wire 映射，
  *       {@link AgentSessions#projectPayload}；行内 agentId={@code <agentName>#<instanceId>}）；</li>
  *   <li>实例域事件（wf./node./supervisor. 前缀）→ events.jsonl + 内存尾部队列；</li>
- *   <li>其余（delta/thinking/tool.started 瞬态、agent./error/cancelled/task.*）
- *       不入工作流持久面（工作流无任务流频道，瞬态无处可去）；匿名 AI 节点
+ *   <li>AI 节点经 {@link #view(String, String)} 的 node 绑定视图装配时，agent 域
+ *       delta/thinking 增量以 {@link #NODE_DELTA} 瞬态扇出实例流频道（不落盘、
+ *       不进内存尾部队列，架构 §7.13）；</li>
+ *   <li>其余（tool.started 瞬态、agent./error/cancelled/task.*、未经 node 视图包装的
+ *       delta/thinking）不入工作流持久面；匿名 AI 节点
  *       （agentId 不以 {@code #<instanceId>} 结尾）不落 agents/。</li>
  * </ul>
  * emit 内异常一律自吞（不得抛出打断任务线程——与 AgentEntity.safeEmit 同纪律）。
@@ -52,6 +58,14 @@ import tools.jackson.databind.node.ObjectNode;
 public final class WorkflowRuntime implements ExecContext, WorkflowSubject {
 
     private static final Logger log = LoggerFactory.getLogger(WorkflowRuntime.class);
+
+    /**
+     * AI 节点流式瞬态 wire 事件名（架构 §7.13）：AI 节点运行期间 agent 域 delta/thinking
+     * 增量经实例流频道（Channels.workflowStream）广播扇出，payload
+     * {@code {nodeId, agentId, kind:'thinking'|'text', content}}。瞬态：不进 events.jsonl、
+     * 不进实例内存尾部队列（补拉/重放天然不含即为正确）；seq 雪花占号、磁盘回放有洞合法。
+     */
+    public static final String NODE_DELTA = "node.delta";
 
     private final WorkflowStore store;
     private final WorkerServices services;
@@ -146,7 +160,17 @@ public final class WorkflowRuntime implements ExecContext, WorkflowSubject {
      * contextWindowTokens 等消费方走默认回退）。
      */
     NodeExecView view(String effectiveConfigId) {
-        return new NodeExecView(resolveModelConfig(effectiveConfigId), effectiveConfigId);
+        return new NodeExecView(resolveModelConfig(effectiveConfigId), effectiveConfigId, null);
+    }
+
+    /**
+     * 同 {@link #view(String)}，但携带节点上下文：AI 节点装配用——视图的
+     * {@code emitter()} 为 node 绑定包装（agent 域 delta/thinking 增量转
+     * {@link #NODE_DELTA} 瞬态扇出实例流频道，架构 §7.13；其余事件转发实例级双路由，
+     * 行为与无包装视图完全一致）。
+     */
+    NodeExecView view(String effectiveConfigId, String nodeId) {
+        return new NodeExecView(resolveModelConfig(effectiveConfigId), effectiveConfigId, nodeId);
     }
 
     private ModelConfig resolveModelConfig(String configId) {
@@ -176,11 +200,17 @@ public final class WorkflowRuntime implements ExecContext, WorkflowSubject {
 
         private final ModelConfig snapshot;
         private final String configId;
+        /** 节点绑定标记（AI 节点装配传入 node.id()；null=纯模型解析视图）。 */
+        private final String nodeId;
+        /** node 绑定包装 emitter（nodeId null 时为 null，emitter() 直委托实例级）。 */
+        private final EventEmitter nodeEmitter;
         private volatile AgentFactory factory;
 
-        private NodeExecView(ModelConfig snapshot, String configId) {
+        private NodeExecView(ModelConfig snapshot, String configId, String nodeId) {
             this.snapshot = snapshot;
             this.configId = configId;
+            this.nodeId = nodeId;
+            this.nodeEmitter = nodeId == null ? null : e -> routeNodeDelta(nodeId, e);
         }
 
         /** 本视图解析出的有效 configId（装配 create(agentKey, configId) 直用）。 */
@@ -210,7 +240,7 @@ public final class WorkflowRuntime implements ExecContext, WorkflowSubject {
 
         @Override
         public EventEmitter emitter() {
-            return WorkflowRuntime.this.emitter();
+            return nodeEmitter != null ? nodeEmitter : WorkflowRuntime.this.emitter();
         }
 
         @Override
@@ -352,8 +382,9 @@ public final class WorkflowRuntime implements ExecContext, WorkflowSubject {
                     }
                 }
                 default -> {
-                    // delta/thinking/tool.started 瞬态与 agent.*/error/cancelled/task.*：
-                    // 不入工作流持久面（匿名 AI 节点 agentId 无 #<wi> 后缀同样落此分支被丢弃）
+                    // tool.started 瞬态与 agent.*/error/cancelled/task.*：不入工作流持久面。
+                    // delta/thinking 落此即未经 node 视图包装直发（AI 节点装配的 node.delta
+                    // 扇出在包装层拦截，不经本路由）——supervisor 等无节点上下文的瞬态照旧丢弃。
                 }
             }
             return e.id();
@@ -362,6 +393,45 @@ public final class WorkflowRuntime implements ExecContext, WorkflowSubject {
                     instanceId, e == null ? null : e.kind(), e == null ? null : e.agentId(), ex);
             return e == null ? 0L : e.id();
         }
+    }
+
+    // ══════════════════════════ node.delta 瞬态扇出 ══════════════════════════
+
+    /**
+     * node 绑定路由（NodeExecView 的包装 emitter 委托点）：agent 域瞬态增量
+     * （delta=正文/thinking=思考）转 {@link #NODE_DELTA} 扇出实例流频道
+     * （Channels.workflowStream，与插件实例事件扇出同通道同帧形）；其余事件原样
+     * 转发实例级双路由 {@link #route}（行为与无包装视图完全一致）。
+     *
+     * <p>瞬态契约（架构 §7.13）：不进 events.jsonl、不进内存尾部队列（不经
+     * {@code store.appendEvent}）；seq 用事件自带雪花号（占号不落盘，磁盘回放有洞合法）；
+     * 帧外层 {@code {seq,ts,event,payload}}、内层 {@code {nodeId,agentId,kind,content}}。
+     * 扇出异常自吞——瞬态可丢，绝不打断任务线程。
+     */
+    private long routeNodeDelta(String nodeId, EmitEvent e) {
+        if (e != null && (Events.DELTA.equals(e.kind()) || Events.THINKING.equals(e.kind()))) {
+            try {
+                StreamEmitter stream = services.stream();
+                String wid = stream.workerId();
+                ObjectNode payload = Json.obj()
+                        .put("nodeId", nodeId)
+                        .put("agentId", e.agentId() == null ? "" : e.agentId())
+                        .put("kind", Events.THINKING.equals(e.kind()) ? "thinking" : "text")
+                        .put("content", e.content() == null ? "" : e.content());
+                ObjectNode frame = Json.obj()
+                        .put("seq", Long.toString(e.id()))
+                        .put("ts", System.currentTimeMillis())
+                        .put("event", NODE_DELTA)
+                        .set("payload", payload);
+                stream.fanout(k -> Channels.workflowStream(k, wid, instanceId), NODE_DELTA,
+                        e.id(), frame, null);
+            } catch (RuntimeException ex) {
+                log.warn("[workflow] node.delta 扇出失败(自吞,瞬态可丢) instance={} node={} agent={}",
+                        instanceId, nodeId, e.agentId(), ex);
+            }
+            return e.id();
+        }
+        return route(e);
     }
 
     /**
