@@ -5,13 +5,14 @@
  * 布局（任务面板同构）：
  * - SidebarScrollArea 滚动区（自宿主复制，CSS 类为宿主全局样式）；
  * - 分组卡片（padding 6 / radius-md / border-light / bg-primary）：组头=折叠箭头（仅点击图标
- *   折叠，rotate 过渡）+ 粗体组名 + 右侧图标按钮（导入 / ＋ 新建 / ⋯ 刷新）；
+ *   折叠，rotate 过渡）+ 粗体组名 + 右侧图标按钮（＋ 新建 / ⋯ 导入·刷新）；
  * - 组内两段可折叠子区「定义」「实例」（箭头交互同组头）；
  * - 行卡片（.ui-row）=标题行（粗体单行名称 + hover 浮现的 ⋯「更多操作」菜单）+ 元数据行
  *   （等宽 id 省略 + 可点击切换的相对/绝对时间 + 状态药丸）+ 次要信息行。
  *
  * 与任务面板的一处刻意差异：空工作区也展示——任务在输入框创建、侧栏可隐藏空组；工作流
- * 的创建入口就在组头（＋/导入需选定工作区），隐藏空组会让首个工作流无处可建。
+ * 的创建入口就在组头（＋ 直达，导入在 ⋯ 菜单，均需选定工作区），隐藏空组会让首个工作流
+ * 无处可建。
  * 归属数据的工作区未注册时收进尾组「工作区缺失」（只读展示，无创建入口）。
  *
  * 行级操作收进 ⋯ 菜单（RowActions，复用宿主 .ui-row-actions 全局样式）：
@@ -801,34 +802,32 @@ export default function SidebarPanel() {
                   tools={
                     <>
                       {group.entry ? (
-                        <>
-                          <Button
-                            type="text"
-                            style={toolbarButtonStyle}
-                            disabled={runBusy('import')}
-                            title={`导入 .workflow.json 到此工作区`}
-                            aria-label="导入工作流定义"
-                            onClick={() => {
-                              importTargetRef.current = group.entry?.id as string
-                              fileInputRef.current?.click()
-                            }}
-                          >
-                            <UploadIcon size={13} />
-                          </Button>
-                          <Button
-                            type="text"
-                            style={toolbarButtonStyle}
-                            title="在此工作区新建工作流定义（打开编辑器空白定义）"
-                            aria-label="新建工作流定义"
-                            onClick={() => group.entry && onNewDefinition(group.entry.id as string)}
-                          >
-                            <PlusIcon size={13} />
-                          </Button>
-                        </>
+                        <Button
+                          type="text"
+                          style={toolbarButtonStyle}
+                          title="在此工作区新建工作流定义（打开编辑器空白定义）"
+                          aria-label="新建工作流定义"
+                          onClick={() => group.entry && onNewDefinition(group.entry.id as string)}
+                        >
+                          <PlusIcon size={13} />
+                        </Button>
                       ) : null}
                       <HeaderMenu
                         title="更多操作"
                         items={[
+                          // 导入收进 ⋯ 菜单（低频动作，给 ＋ 新建让位；落位本组工作区）。
+                          ...(group.entry
+                            ? [{
+                                key: 'import',
+                                label: '导入工作流…',
+                                icon: <UploadIcon size={13} />,
+                                disabled: runBusy('import'),
+                                onSelect: () => {
+                                  importTargetRef.current = group.entry?.id as string
+                                  fileInputRef.current?.click()
+                                },
+                              }]
+                            : []),
                           {
                             key: 'refresh',
                             label: '刷新',
@@ -842,7 +841,7 @@ export default function SidebarPanel() {
                 />
                 {collapsed ? null : bothEmpty ? (
                   <div style={emptyStyle}>
-                    {group.entry ? '暂无工作流——点 ＋ 新建，或导入 .workflow.json。' : '暂无数据。'}
+                    {group.entry ? '暂无工作流——点 ＋ 新建，或从 ⋯ 菜单导入 .workflow.json。' : '暂无数据。'}
                   </div>
                 ) : (
                   <>
@@ -1187,8 +1186,9 @@ const confirmFooterStyle: React.CSSProperties = {
  * ── 人工验证清单（侧边栏，任务面板同构 · 工作区分组 · 推送驱动）────────────
  * 1. 打开侧边栏「工作流」：注册表里每个工作区一张分组卡片同时并陈（含空工作区，
  *    显示「暂无工作流——点 ＋ 新建…」），**无**顶部下拉/工具条；组序=注册表顺序。
- * 2. 组头：仅点击箭头折叠/展开（点组名不折叠）；右侧=导入 / ＋ / ⋯（⋯ 内「刷新」=全量重拉）。
- *    ＋/导入落位本组工作区；导入残缺/非法 JSON → 本组「定义」段内红色逐项回显。
+ * 2. 组头：仅点击箭头折叠/展开（点组名不折叠）；右侧=＋ / ⋯（⋯ 内「导入工作流…」打开文件
+ *    选择、「刷新」=全量重拉）。＋/导入落位本组工作区；导入残缺/非法 JSON → 本组「定义」
+ *    段内红色逐项回显。
  * 3. 组内两段「定义」「实例」各有箭头可独立折叠；头带计数（实例含「k 活跃」）。
  * 4. 行卡片：hover 时右侧浮现 ⋯ 菜单；实例=取消实例（活跃时）/删除；定义=运行/编辑/导出 JSON/删除。
  *    点行打开实例页/编辑器（tab.data 正确）；导出下载 `<名称>.workflow.json`。
