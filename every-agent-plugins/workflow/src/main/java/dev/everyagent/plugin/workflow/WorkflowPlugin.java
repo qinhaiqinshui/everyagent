@@ -11,8 +11,8 @@ import org.slf4j.LoggerFactory;
 /**
  * workflow 插件入口。
  *
- * <p>当前阶段（步骤 4+5+6）：模型/校验/存储层 + hidden 五工具 + 激活扫描 + <b>执行引擎</b>
- * （WorkflowRuntime/调度器/节点执行器）+ <b>RPC 面</b>（workflow.* 14 个方法）。本类 activate 做四件事：
+ * <p>职责（模型/校验/存储层 + hidden 五工具 + 激活扫描 + <b>执行引擎</b>
+ * （WorkflowRuntime/调度器/节点执行器）+ <b>RPC 面</b>（workflow.* 14 个方法））。本类 activate 做四件事：
  * <ol>
  *   <li>构造 {@link WorkflowStore} 并执行 activate 扫描（建内存索引 + 非终态实例标
  *       failed("worker 重启中断")）；</li>

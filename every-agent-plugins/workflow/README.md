@@ -30,23 +30,42 @@ workflow 插件
 
 构建产物 `target/`（Maven）与 `web/index.js(.map)` / `web/index.css(.map)`（esbuild）均为 gitignored，不入库。
 
-## 功能概览（步骤 4+5 后端现状）
+## 功能概览
 
-- **持久化层**（`model/` `validate/` `store/`）：工作流定义/实例 JSON 持久化于
-  `workspaces/<wsId>/workflows/`（与 tasks/ 平级）；全量校验；events.jsonl/runs/agents
-  五种文件形态与写策略；激活扫描（非终态实例标 failed）。
-- **执行引擎**（`engine/`）：`WorkflowRuntime`（ExecContext + WorkflowSubject 标记，
-  per-node 视图 + emitter 双路由：agent 域事件→agents/&lt;name&gt;.jsonl、实例域→events.jsonl）
+工作流插件：把「多 agent 协作 + 命令执行 + 出错人工介入」编排为可视化工作流——
+画布定义、实例运行、并行调度与 supervisor 督导一体（前后端同一插件 id）。
+
+- **持久化层**（`model/` `validate/` `store/`）：定义/实例 JSON 持久化于
+  `workspaces/<wsId>/workflows/`（与 tasks/ 平级、工作区即隔离边界；
+  `definitions/<wfId>/definition.json` + `instances/<wiId>/{meta.json,events.jsonl,runs/,agents/}`）；
+  全量校验器；激活扫描（非终态实例标 failed）。
+- **执行引擎**（`engine/`）：`WorkflowRuntime`（ExecContext 实现 + WorkflowSubject 标记，
+  per-node 视图 + emitter 双路由：agent 域事件→`agents/<name>.jsonl`、实例域→events.jsonl；
+  agentId=`<name>#<instanceId>`，匿名 AI 节点一次性会话不落盘）
   + `WorkflowEngine` 调度器（开始节点先行、边激活语义一次求值、同 agent fair 锁互斥、
-  循环上限、实例状态机、错误三策略 fail/supervisor/askUser、取消）+ `NodeRunners`
+  循环上限 maxRuns、实例状态机、错误三策略 fail/supervisor/askUser、取消）+ `NodeRunners`
   （命令节点走 nativeExec、AI 节点按会话时序 ①-⑥ 走 agentFactoryFor 装配链、
-  supervisor 决策协议）。
+  supervisor 决策协议 retry/skip/fail/retryWithInput）。
+- **RPC 面**（`rpc/`）：`workflow.*` 14 方法——`def.list`/`def.get`/`def.save`/`def.delete`/
+  `def.export`/`def.import`、`run`、`instance.list`/`instance.get`/`instance.runLog`/
+  `instance.events`/`instance.cancel`/`instance.delete`/`instance.decide`；**写操作必带
+  workspace 参数**（同 `task.run` 纪律）；实例事件补齐走 `instance.events` 长轮询
+  （插件自持事件日志，不占任务流频道）。
 - **hidden 五工具**（`WorkflowToolProvider` + `skill/workflow-tools/skill.md`）：
-  workflow_create/get/update/delete/list，只服务普通任务的 AI（工作流自己的 agent 不携带）。
-- **设计决策**：命令节点不经 PermissionGate（与 git/term 同级信任——用户编排的受控操作）；
-  AI 节点不设节点级超时（依赖模型链路既有护栏，timeoutMs 仅命令节点有效）；
-  v1 无断点续跑（worker 重启即 failed，同任务语义）。
-- RPC 面（workflow.* 14 方法）与前端界面由步骤 6/8-10 补齐。
+  `workflow_create/get/update/delete/list`，只服务普通任务的 AI（工作流自己的 agent
+  不携带，`appliesTo` 排除），模型经 skill 文档按名调用。
+- **前端界面**（`web/`）：自研 SVG 画布（拖拽/连线/条件标签/运行态着色）+ 定义编辑器
+  （palette/节点属性面板/七种边条件/运行变量/出错策略/Agents 总表，输入模板用宿主
+  RichComposer）+ 侧边栏（实例/定义双区列表、运行对话框、导入导出）+ 实例运行页
+  （只读画布实时投影、askUser 决策横幅、事件流断线重连）+ 运行日志页（物流式时间线：
+  命令 stdout/stderr、AI 输入输出、督导介入链）。人工验证清单汇总见
+  [MANUAL-TEST.md](MANUAL-TEST.md)。
+- **设计决策**：
+  - **命令节点不经 PermissionGate**——与 git/term 同级信任：工作流是用户显式编排的
+    受控操作（命令固定写进 definition.json、可审查），不是模型即兴决定；执行走
+    nativeExec（cwd=工作区根），与 git/term 工具同一通道同一纪律。
+  - AI 节点不设节点级超时（依赖模型链路既有护栏，timeoutMs 仅命令节点有效）；
+  - v1 无断点续跑（worker 重启即实例标 failed，同任务语义）。
 
 ## 构建与验证
 
