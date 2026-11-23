@@ -1,0 +1,11 @@
+{
+  "id": "workflow",
+  "name": "工作流",
+  "version": "0.1.0",
+  "description": "工作流插件（定义/实例持久化 + hidden 定义 CRUD 工具；引擎与界面由后续版本提供）",
+  "author": "everyagent",
+  "main": "dev.everyagent.plugin.workflow.WorkflowPlugin",
+  "webMain": "web/index.ts",
+  "skills": "skill",
+  "enabled": true
+}
