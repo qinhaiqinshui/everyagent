@@ -1,11 +1,15 @@
 package dev.everyagent.plugin.api;
 
 import java.nio.file.Path;
+import java.util.List;
 
+import dev.everyagent.plugin.api.agent.AgentFactory;
 import dev.everyagent.plugin.api.config.WorkerConfig;
 import dev.everyagent.plugin.api.event.StreamEmitter;
+import dev.everyagent.plugin.api.execution.ExecContext;
 import dev.everyagent.plugin.api.interaction.InteractionService;
 import dev.everyagent.plugin.api.model.EventEmitter;
+import dev.everyagent.plugin.api.model.ModelConfig;
 import dev.everyagent.plugin.api.slash.SlashTokenService;
 import dev.everyagent.plugin.api.spi.IdGenerator;
 import dev.everyagent.plugin.api.spi.NativeExec;
@@ -103,4 +107,26 @@ public interface WorkerServices extends TaskServices {
      * @return AI 沙箱内可见路径;无映射时原样返回
      */
     String toSandboxPath(Path hostPath);
+
+    /**
+     * 返回绑定到指定 {@link ExecContext} 的 {@link AgentFactory}。
+     *
+     * <p>工作流等<b>非任务主体</b>用——自实现 ExecContext 的 runtime 经此获取与任务主体
+     * 同构的 agent 执行链（同一工厂同一装配口径）；任务主体创建时已绑定工厂，
+     * 请直接走 {@code ExecContext.agentFactory()}，不要经本方法重取。
+     *
+     * @param exec 执行上下文（非任务主体的 runtime）
+     * @return 绑定该 ExecContext 的 AgentFactory 静态代理
+     */
+    AgentFactory agentFactoryFor(ExecContext exec);
+
+    /**
+     * 模型配置全表（configId / provider / baseUrl / fullUrl / model / params）。
+     *
+     * <p>{@link ModelConfig} record 天然不含 apiKey（掩码），供工作流等非任务主体
+     * 选择 AI 节点模型；返回快照拷贝，调用方修改不影响 worker 内存索引。
+     *
+     * @return 模型配置列表（可能为空，不为 null）
+     */
+    List<ModelConfig> modelConfigs();
 }

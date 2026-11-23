@@ -29,6 +29,18 @@ public class GitAutoSyncAdvisorProvider implements AdvisorProvider {
         return Ordered.HIGHEST_PRECEDENCE + 140;
     }
 
+    /**
+     * 仅任务主体挂载：{@code git.auto_sync} slash token 语义属任务域（SlashTaskScopeStore
+     * 以 taskId 分区），挂到非任务主体（如工作流 runtime）会在无任务上下文处误触发自动同步。
+     */
+    @Override
+    public boolean appliesTo(AdvisorContext ctx) {
+        if (!ctx.isTaskSubject()) {
+            return false;
+        }
+        return true;
+    }
+
     @Override
     public Advisor create(AdvisorContext ctx) {
         AgentContext a = ctx.agentEntity();

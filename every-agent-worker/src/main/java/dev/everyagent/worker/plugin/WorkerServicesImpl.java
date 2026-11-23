@@ -17,6 +17,8 @@ import dev.everyagent.plugin.api.task.RoundClosedListener;
 import dev.everyagent.plugin.api.task.TaskService;
 import dev.everyagent.plugin.api.task.TaskStoreService;
 import dev.everyagent.worker.config.WorkerProperties;
+import dev.everyagent.worker.agent.AgentFactoryImpl;
+import dev.everyagent.worker.modules.ConfigStore;
 import dev.everyagent.worker.modules.WorkspaceManager;
 import dev.everyagent.worker.hub.EventSink;
 import dev.everyagent.worker.interaction.InteractionServiceImpl;
@@ -55,6 +57,10 @@ public class WorkerServicesImpl implements WorkerServices {
     private final SlashTaskScopeStore slashStore;
     /** 文件工具共享层:文件写监听器注册通道(addFileWriteListener,架构 §7.15.2)。 */
     private final FsToolSupport fsToolSupport;
+    /** agent 工厂(agentFactoryFor:非任务主体经此获取绑定工厂,架构 §7.20.7)。 */
+    private final AgentFactoryImpl agentFactory;
+    /** 模型配置存储(modelConfigs:全表掩码快照)。 */
+    private final ConfigStore configStore;
 
     public WorkerServicesImpl(OsSandbox sandbox, SandboxPathRegistry pathRegistry,
             WorkspaceManager workspaces,
@@ -65,7 +71,9 @@ public class WorkerServicesImpl implements WorkerServices {
             WorkerProperties workerProperties, EventSink eventSink,
             StreamSourceRegistry streamSources,
             @Lazy SlashTaskScopeStore slashStore,
-            FsToolSupport fsToolSupport) {
+            FsToolSupport fsToolSupport,
+            AgentFactoryImpl agentFactory,
+            ConfigStore configStore) {
         this.sandbox = sandbox;
         this.pathRegistry = pathRegistry;
         this.workspaces = workspaces;
@@ -79,6 +87,8 @@ public class WorkerServicesImpl implements WorkerServices {
         this.streamSources = streamSources;
         this.slashStore = slashStore;
         this.fsToolSupport = fsToolSupport;
+        this.agentFactory = agentFactory;
+        this.configStore = configStore;
         this.idGenerator = new IdGenerator() {
             @Override
             public long next() {
@@ -212,6 +222,29 @@ public class WorkerServicesImpl implements WorkerServices {
     @Override
     public String toSandboxPath(java.nio.file.Path hostPath) {
         return pathRegistry.toSandboxPath(hostPath);
+    }
+
+    /**
+     * 非任务主体(工作流等)获取绑定工厂:委托 {@link AgentFactoryImpl#bind}——与
+     * {@code TaskEntry.agentFactory()} 同一获取口、同一装配口径(架构 §7.20.7)。
+     */
+    @Override
+    public dev.everyagent.plugin.api.agent.AgentFactory agentFactoryFor(
+            dev.everyagent.plugin.api.execution.ExecContext exec) {
+        return agentFactory.bind(exec);
+    }
+
+    /**
+     * 模型配置全表(掩码):ConfigStore 全量 DTO 剥离 apiKey 映射为 plugin-api
+     * {@code ModelConfig} 快照——与 {@code ResolvedConfig.snapshot()} 同款口径。
+     */
+    @Override
+    public java.util.List<dev.everyagent.plugin.api.model.ModelConfig> modelConfigs() {
+        return configStore.list().stream()
+                .map(c -> new dev.everyagent.plugin.api.model.ModelConfig(
+                        c.configId(), c.provider(), c.baseUrl(), c.fullUrl(),
+                        c.model(), c.params()))
+                .toList();
     }
 
 }

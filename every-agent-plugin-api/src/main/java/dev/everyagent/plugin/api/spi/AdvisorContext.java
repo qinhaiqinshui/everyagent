@@ -2,6 +2,7 @@ package dev.everyagent.plugin.api.spi;
 
 import dev.everyagent.plugin.api.agent.AgentContext;
 import dev.everyagent.plugin.api.execution.ExecContext;
+import dev.everyagent.plugin.api.task.TaskRuntime;
 import org.springframework.ai.model.tool.ToolCallingManager;
 
 /**
@@ -55,4 +56,19 @@ public interface AdvisorContext extends ExecContext {
      * @return 当前 agent 上下文
      */
     AgentContext agentEntity();
+
+    /**
+     * 本 advisor 链所属执行主体是否为<b>任务域</b>（{@link TaskRuntime}）。
+     *
+     * <p>任务域 advisor provider（轮次索引 / 文件变更收口 / git.auto_sync 等语义
+     * 钉死在「任务」上的增强）经此过滤 appliesTo：挂到非任务主体（如工作流的
+     * WorkflowRuntime）会强转失败 / collector 泄漏 / 误副作用。判定走
+     * {@link #agentEntity()} 委托槽位上的 {@code execution()}——本接口自身不实现
+     * {@code TaskRuntime}（槽位是委托，不能 {@code this instanceof TaskRuntime}）。
+     *
+     * @return true = 当前主体是任务（agentEntity 非空且其 execution 为 TaskRuntime）
+     */
+    default boolean isTaskSubject() {
+        return agentEntity() != null && agentEntity().execution() instanceof TaskRuntime;
+    }
 }

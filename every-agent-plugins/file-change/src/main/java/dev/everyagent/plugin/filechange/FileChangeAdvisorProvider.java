@@ -64,6 +64,19 @@ public class FileChangeAdvisorProvider implements AdvisorProvider, RoundClosedLi
         return Ordered.HIGHEST_PRECEDENCE + 301;
     }
 
+    /**
+     * 仅任务主体挂载：collector 以 taskId 为 key 常驻 provider（activeCollectors），
+     * 挂到非任务主体（如工作流 runtime）时轮闭合回调永不触发，collector 条目永不落盘
+     * ——内存泄漏。
+     */
+    @Override
+    public boolean appliesTo(AdvisorContext ctx) {
+        if (!ctx.isTaskSubject()) {
+            return false;
+        }
+        return true;
+    }
+
     @Override
     public Advisor create(AdvisorContext ctx) {
         AgentContext a = ctx.agentEntity();

@@ -33,6 +33,18 @@ public class RoundIndexAdvisorProvider implements AdvisorProvider {
         return Ordered.HIGHEST_PRECEDENCE + 10;
     }
 
+    /**
+     * 仅任务主体挂载：{@code RoundIndexAdvisor} 内部将 {@code agentEntity().execution()}
+     * 强转为 {@code (TaskRuntime)}，挂到非任务主体（如工作流 runtime）必抛 CCE。
+     */
+    @Override
+    public boolean appliesTo(AdvisorContext ctx) {
+        if (!ctx.isTaskSubject()) {
+            return false;
+        }
+        return true;
+    }
+
     @Override
     public Advisor create(AdvisorContext ctx) {
         AgentEntity a = (AgentEntity) ((AdvisorContextImpl) ctx).agentEntity();
