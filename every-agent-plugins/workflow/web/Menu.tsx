@@ -186,9 +186,9 @@ function ensureMobileActionsStyles(): void {
 }
 
 /**
- * 列表行「更多操作」（⋯）按钮——自宿主 components/shared/ui/ListRowActions 复制
- * 精简（无移动端长按句柄；桌面 hover 显现由宿主全局 CSS `.ui-row:hover
- * .ui-row-actions` 控制，点击弹出 MenuList）。侧边栏行卡片（.ui-row）内使用。
+ * 列表行「更多操作」（⋯）按钮——自宿主 ListRowActions 复制精简（无移动端长按句柄）：
+ * 桌面 hover 整行（.ui-row）时浮现（宿主全局 .ui-row:hover .ui-row-actions），
+ * 点击弹出 MenuList；移动端常显并放大触控目标（见上方样式）。侧边栏行卡片内使用。
  */
 export function RowActions({
   items,
@@ -237,6 +237,52 @@ export function RowActions({
           onClose={() => setOpen(false)}
           title={title}
         />
+      ) : null}
+    </div>
+  )
+}
+
+/**
+ * 组头「更多操作」（⋯）按钮——与宿主 ActionMenu 同角色：常显（不靠 hover 揭示），
+ * 复用 .ui-row-actions__trigger 的图标按钮外观，点击弹出 MenuList（锚定按钮右下）。
+ * 分组卡片组头使用（宿主 .ui-row-actions 包裹层靠 hover 揭示，组头处不适用）；
+ * 移动端同样套 wf-row-actions-visible 放大触控目标。
+ */
+export function HeaderMenu({
+  items,
+  title = '更多操作',
+  disabled = false,
+}: {
+  items: MenuListItem[]
+  title?: string
+  disabled?: boolean
+}) {
+  const triggerRef = React.useRef<HTMLButtonElement | null>(null)
+  const [open, setOpen] = React.useState(false)
+
+  React.useEffect(ensureMobileActionsStyles, [])
+
+  if (items.length === 0) {
+    return null
+  }
+
+  return (
+    <div className="ui-more-button" onClick={(event) => event.stopPropagation()}>
+      <button
+        ref={triggerRef}
+        type="button"
+        className="ui-row-actions__trigger wf-row-actions-visible"
+        title={title}
+        aria-label={title}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        disabled={disabled}
+        onClick={() => setOpen(v => !v)}
+      >
+        <MoreHorizontalIcon size={13} />
+      </button>
+      {open && typeof document !== 'undefined' ? (
+        <MenuList anchor={triggerRef.current} items={items} onClose={() => setOpen(false)} title={title} />
       ) : null}
     </div>
   )
