@@ -13,6 +13,7 @@
  * 「RPC 参数契约」表一致。
  */
 import { getPluginContext, resolveWorkspaceRef } from './pluginRuntime'
+import { appendNodeDelta, clearInstanceDeltas, clearNodeDelta } from './nodeDeltaBuffer'
 
 // ─── wire 类型（definition.json / meta.json 结构的前端镜像） ────────────────
 
@@ -164,6 +165,27 @@ export interface WorkflowInstanceEvent {
   ts: number
   event: string
   payload: Record<string, unknown>
+}
+
+/**
+ * node.delta 瞬态帧（AI 节点流式增量，架构 §7.13 瞬态契约）：不落盘、不进 events
+ * 回放数组（磁盘回放有洞合法、补拉天然不含）；帧外层 {seq,ts,event,payload}，内层
+ * payload {nodeId, agentId, kind, content}——AI 节点运行期间 thinking=思考增量、
+ * text=正文增量（content 为追加语义的增量文本）。
+ */
+export interface WorkflowNodeDelta {
+  /** 帧序号（字符串雪花；瞬态占号不落盘——不参与持久游标推进，仅作帧标识）。 */
+  seq: string
+  /** 帧时间戳（epoch ms）。 */
+  ts: number
+  /** 产出增量的节点 id。 */
+  nodeId: string
+  /** agent 域 agentId（命名会话线为 <name>#<instanceId> 归户键；匿名一次性 id）。 */
+  agentId: string
+  /** 增量种类：thinking=思考、text=正文。 */
+  kind: 'thinking' | 'text'
+  /** 增量文本（追加语义；累积由 nodeDeltaBuffer 承担）。 */
+  content: string
 }
 
 /** instance.runLog 的单次节点运行记录（runs/*.json）。 */
@@ -553,6 +575,10 @@ export const workflowGateway = {
  * - **终态自动停**：观测到终态标记事件（wf.done / wf.cancelled / wf.status{终态}）
  *   即停并退订（后端不再产出新事件）；**他端删除**经 plugin-worker-event
  *   {kind:instance, action:deleted} 侦测（运行中实例不可删，删除只发生在终态后）。
+ * - **node.delta 瞬态旁路**：AI 节点 thinking/text 增量帧不落盘（补拉天然不含），
+ *   只经 {@code onNodeDelta} 单独回调透出 + 喂入 nodeDeltaBuffer 累积层——不进
+ *   onEvents/events 回放数组、不推进游标；收口（node.output/node.error）/实例终态
+ *   时清理对应累积（详见 nodeDeltaBuffer 头注释）。
  * - NOT_FOUND（订阅时实例已不存在）直接终停。
  */
 
@@ -573,6 +599,14 @@ export interface SubscribeWorkflowEventsOptions {
   afterSeq?: string
   /** 订阅状态回调（终停原因；缺省忽略）。 */
   onState?: (state: WorkflowEventsPollState) => void
+  /**
+   * node.delta **瞬态旁路**回调（AI 节点 thinking/text 增量帧）。瞬态不落盘、补拉
+   * 天然不含——绝不进 onEvents/events 回放数组（会造成重放污染），也**不推进游标**
+   * （防瞬态雪花号越过尚未送达的持久事件 seq 导致 accept 过滤丢事件）。gateway 已
+   * 同步喂入累积层（nodeDeltaBuffer），本回调仅供消费方驱动 UI 刷新，帧内容以累积层
+   * 快照为准（回调逐帧高频，勿在此做重活）。
+   */
+  onNodeDelta?: (delta: WorkflowNodeDelta) => void
 }
 
 /**
@@ -608,6 +642,35 @@ function eventFromStreamFrame(e: {
 }
 
 /**
+ * 推送帧 → WorkflowNodeDelta（仅认 node.delta 事件名；其余返回 null 走持久事件路径）。
+ * 与 {@link eventFromStreamFrame} 平行：帧外层即 WorkflowInstanceEvent 形状，内层
+ * payload {nodeId, agentId, kind, content}；缺 nodeId / kind 非法视为坏帧丢弃。
+ */
+function nodeDeltaFromStreamFrame(e: {
+  seq?: string
+  ts?: number
+  event: string
+  payload: unknown
+}): WorkflowNodeDelta | null {
+  const p = (e.payload ?? {}) as Partial<WorkflowInstanceEvent>
+  const eventName = typeof p.event === 'string' && p.event !== '' ? p.event : e.event
+  if (eventName !== 'node.delta') return null
+  const inner = (p.payload ?? {}) as Record<string, unknown>
+  const nodeId = typeof inner.nodeId === 'string' ? inner.nodeId : ''
+  if (nodeId === '') return null
+  const kind = inner.kind === 'thinking' || inner.kind === 'text' ? inner.kind : null
+  if (kind == null) return null
+  return {
+    seq: typeof p.seq === 'string' && p.seq !== '' ? p.seq : (e.seq ?? ''),
+    ts: typeof p.ts === 'number' ? p.ts : (e.ts ?? 0),
+    nodeId,
+    agentId: typeof inner.agentId === 'string' ? inner.agentId : '',
+    kind,
+    content: typeof inner.content === 'string' ? inner.content : '',
+  }
+}
+
+/**
  * 订阅实例事件流（后端主动推送 + 拉取补齐）。
  *
  * 每批事件经 onEvents 回调（**先投递再判终停**——终态标记事件保证送达消费者）；
@@ -632,6 +695,8 @@ export function subscribeInstanceEvents(
       clearTimeout(retryTimer)
       retryTimer = null
     }
+    // 实例终态/删除 → 瞬态累积全清（closed 不清：重挂载续流，终态事件钩子另行收口）。
+    if (reason !== 'closed') clearInstanceDeltas(instanceId)
     ctx.sdk.stream.unsubInstanceStream(workerId, instanceId)
     disposables.forEach(d => d.dispose())
     if (reason !== 'closed') {
@@ -652,6 +717,14 @@ export function subscribeInstanceEvents(
     })
     if (fresh.length === 0) return
     cursor = fresh[fresh.length - 1].seq
+    // 瞬态累积的收口清理：node.output / node.error 落盘事件到达 = 该节点真记录已可
+    // 接管 → 清对应累积（新旧守卫见 nodeDeltaBuffer.clearNodeDelta——历史收口事件
+    // 经回放/补拉晚到时不误清新一轮运行的增量）。
+    for (const e of fresh) {
+      if (e.event !== 'node.output' && e.event !== 'node.error') continue
+      const nodeId = String((e.payload as { nodeId?: unknown } | null)?.nodeId ?? '')
+      if (nodeId !== '') clearNodeDelta(instanceId, nodeId, e.ts)
+    }
     onEvents(fresh)
     if (fresh.some(isTerminalInstanceEvent)) {
       stop('terminal')
@@ -695,6 +768,14 @@ export function subscribeInstanceEvents(
   const disposables = [
     ctx.sdk.stream.onInstanceStreamEvent(e => {
       if (closed || e.subjectId !== instanceId || e.workerId !== workerId) return
+      // 瞬态旁路：node.delta 只喂累积层 + 单独回调透出——绝不进 accept()/events 数组、
+      // 不推进游标（瞬态不落盘，进合流会造成重放污染与 seq 去重混乱）。
+      const delta = nodeDeltaFromStreamFrame(e)
+      if (delta) {
+        appendNodeDelta(instanceId, delta)
+        opts.onNodeDelta?.(delta)
+        return
+      }
       const item = eventFromStreamFrame(e)
       if (item) accept([item])
     }),
