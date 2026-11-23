@@ -21,6 +21,12 @@
  * 实例=复制工作流路径（instance.dataDir RPC 按需拉取+菜单打开预取，宿主「复制任务
  * 路径」同款链路）/取消（活跃时）/删除（行点击即打开实例页）。
  *
+ * 组级「批量删除」（宿主任务面板同款交互，作用域=单工作区组）：组头 ⋯ 菜单进入 →
+ * 组头工具位切「全选/删除(n)/取消」（▶/管理/⋯ 让位）、组内实例行出勾选行（活跃实例
+ * 禁勾「进行中不可删除」，保留「打开」逃生口，⋯ 行菜单隐藏）→ 确认弹窗 → **串行**
+ * 逐个 instance.delete（首个失败即停，已删的移出选中便于重试）；列表刷新后勾选自动
+ * 清理（实例消失/转活跃），批删组消失或组内无可删实例时自动退出批删模式。
+ *
  * 刷新模型（任务面板同款，推送驱动）：worker 侧定义/实例的每次落盘变更经 worker 级插件
  * 通知频道扇出 `plugin.workflow.changed`（架构 §5.2），宿主桥接为领域事件
  * `plugin-worker-event`，本面板订阅后按 kind 重拉对应列表（150ms 合并突发；kind=definition
@@ -34,7 +40,7 @@
  * parseImportedDefinition / lastRunDefinitionId。
  */
 import React from 'react'
-import { Button } from 'antd'
+import { Button, Checkbox } from 'antd'
 import type { PluginWorkspaceEntry } from '@everyagent/plugin-api'
 import { getPluginContext } from '../pluginRuntime'
 import { WORKFLOW_INSTANCE_TAB_TYPE, WORKFLOW_MANAGE_TAB_TYPE } from '../tabKeys'
@@ -350,7 +356,11 @@ function InstanceRow({
   inst,
   workspaceChip,
   busy,
+  batchActive,
+  batchSelected,
+  batchDeleting,
   onOpen,
+  onToggleSelect,
   onCopyPath,
   onCancel,
   onDelete,
@@ -359,7 +369,15 @@ function InstanceRow({
   /** 尾组「工作区缺失」里显示归属 id（正常分组下由组名承载归属，不显示）。 */
   workspaceChip?: string
   busy: boolean
+  /** 批量删除模式（仅当实例所属组是当前批删组时为 true，宿主任务面板同款）：行点击不再打开实例，改出勾选行。 */
+  batchActive: boolean
+  /** 批删模式下的勾选态。 */
+  batchSelected: boolean
+  /** 批量删除进行中（勾选禁用）。 */
+  batchDeleting: boolean
   onOpen: () => void
+  /** 批删模式下切换勾选（活跃实例不可勾）。 */
+  onToggleSelect: () => void
   onCopyPath: () => void
   onCancel: () => void
   onDelete: () => void
@@ -395,19 +413,49 @@ function InstanceRow({
       ? String((inst.error as { message?: unknown }).message ?? '')
       : ''
   return (
-    <div className="ui-row" style={cardStyle} onClick={onOpen} title={`实例 ${inst.id}\n点击打开实例运行页`}>
+    <div
+      className="ui-row"
+      style={cardStyle}
+      // 批删模式下点击行不再打开实例（勾选走行内 Checkbox，宿主任务面板同款）。
+      onClick={batchActive ? undefined : onOpen}
+      title={batchActive ? undefined : `实例 ${inst.id}\n点击打开实例运行页`}
+    >
+      {batchActive ? (
+        // 勾选行（批删模式独有）：活跃实例禁勾并说明「进行中不可删除」；
+        // 「打开」保留逃生口——批删模式下想看某个实例仍可一键直达。
+        <div style={cardBatchRowStyle} onClick={event => event.stopPropagation()}>
+          <label
+            style={{
+              ...checkboxLabelStyle,
+              ...(active ? disabledCheckboxLabelStyle : null),
+            }}
+          >
+            <Checkbox
+              checked={batchSelected}
+              disabled={active || batchDeleting}
+              onChange={onToggleSelect}
+            />
+            <span>{active ? '进行中不可删除' : '选择删除'}</span>
+          </label>
+          <Button type="text" size="small" onClick={onOpen}>
+            打开
+          </Button>
+        </div>
+      ) : null}
       <div style={cardMetaRowStyle}>
         <span style={cardTitleStyle}>{inst.definitionName || inst.definitionId}</span>
         <CardTime ms={inst.createdAt} label="创建于" />
         <span style={{ ...cardPillStyle, color: pillColor }}>{instanceStatusLabel(inst.status)}</span>
-        <RowActions
-          items={menuItems}
-          title="实例更多操作"
-          disabled={busy}
-          // 菜单一打开就预取路径:点击「复制工作流路径」时路径已就绪,
-          // 同步写入剪贴板不跨 await(非安全上下文下 execCommand 才认这个手势)。
-          onOpen={() => workflowGateway.prefetchInstanceDataDir(inst.id)}
-        />
+        {!batchActive ? (
+          <RowActions
+            items={menuItems}
+            title="实例更多操作"
+            disabled={busy}
+            // 菜单一打开就预取路径:点击「复制工作流路径」时路径已就绪,
+            // 同步写入剪贴板不跨 await(非安全上下文下 execCommand 才认这个手势)。
+            onOpen={() => workflowGateway.prefetchInstanceDataDir(inst.id)}
+          />
+        ) : null}
       </div>
       {varsText ? (
         // 运行参数行：只显示参数值（「；」分隔），单行不换行、溢出可见不截断
@@ -488,6 +536,17 @@ export default function SidebarPanel() {
   const [collapsedKeys, setCollapsedKeys] = React.useState<Set<string>>(() => new Set())
   /** 行级/动作级 busy 标记（`inst:<id>`）。 */
   const [busyKey, setBusyKey] = React.useState<string | null>(null)
+  /**
+   * 批量删除（宿主任务面板同款交互，作用域=单工作区组）：组头 ⋯ 进入 → 组头切
+   * 「全选/删除(n)/取消」、组内实例行出勾选（活跃实例不可选）→ 确认弹窗 → 串行
+   * 逐个 instance.delete。只作用于一个组，防跨组误删。
+   */
+  /** 当前处于批量删除模式的工作区组 key；null = 未启用。 */
+  const [batchGroupKey, setBatchGroupKey] = React.useState<string | null>(null)
+  /** 批删模式选中的实例 id（可能含其他组的残留，派生时按组过滤）。 */
+  const [selectedInstanceIds, setSelectedInstanceIds] = React.useState<string[]>([])
+  /** 批量删除执行中（勾选/退出/再删全部禁用）。 */
+  const [batchDeleting, setBatchDeleting] = React.useState(false)
 
   const toast = React.useCallback(
     (message: string, type?: 'success' | 'error' | 'info' | 'warning') => {
@@ -626,6 +685,111 @@ export default function SidebarPanel() {
       return next
     })
   }, [])
+
+  // ── 批量删除（宿主任务面板同款状态机：单组作用域 + 勾选 + 串行删除） ──
+
+  // 当前批删作用的工作区组：批量删除只针对该组实例（instance.delete 虽按全局
+  // instanceId 寻址，但选择范围锁定单组——与任务侧边栏同款纪律，防跨组误删）。
+  const batchGroup = React.useMemo(
+    () => (batchGroupKey ? groups?.find(group => group.key === batchGroupKey) ?? null : null),
+    [batchGroupKey, groups],
+  )
+
+  /** 当前批删组内可删除（非活跃）的实例。 */
+  const batchSelectableInstances = React.useMemo(
+    () => batchGroup?.instances.filter(inst => !instanceActive(inst.status)) ?? [],
+    [batchGroup],
+  )
+
+  /** 当前批删组内被选中的实例（删除按此执行）。 */
+  const batchSelectedInstances = React.useMemo(
+    () => batchGroup?.instances.filter(inst => selectedInstanceIds.includes(inst.id)) ?? [],
+    [batchGroup, selectedInstanceIds],
+  )
+
+  // 列表刷新（推送/轮询）后：选中的实例已被他端删除或转为活跃（不可删）时移出选中集合，
+  // 防勾选悬空（引用的实例已不存在）或勾住运行中实例。
+  React.useEffect(() => {
+    setSelectedInstanceIds(current =>
+      current.filter(id => {
+        const inst = (instances ?? []).find(item => item.id === id)
+        return Boolean(inst && !instanceActive(inst.status))
+      }),
+    )
+  }, [instances])
+
+  // 批删组消失（工作区注销/再注册）或组内无可删除实例时自动退出批量删除模式。
+  React.useEffect(() => {
+    if (!batchGroupKey) return
+    if (!batchGroup || batchSelectableInstances.length === 0) {
+      setBatchGroupKey(null)
+      setSelectedInstanceIds([])
+    }
+  }, [batchGroupKey, batchGroup, batchSelectableInstances])
+
+  const allSelectableChecked = batchSelectableInstances.length > 0
+    && batchSelectableInstances.every(inst => selectedInstanceIds.includes(inst.id))
+
+  const onToggleBatchSelectAll = React.useCallback(() => {
+    const ids = batchSelectableInstances.map(inst => inst.id)
+    setSelectedInstanceIds(current => {
+      const allChecked = ids.length > 0 && ids.every(id => current.includes(id))
+      return allChecked
+        ? current.filter(id => !ids.includes(id))
+        : [...new Set([...current, ...ids])]
+    })
+  }, [batchSelectableInstances])
+
+  const onToggleBatchInstance = (inst: WorkflowInstanceSummary) => {
+    if (instanceActive(inst.status) || batchDeleting) return
+    setSelectedInstanceIds(current =>
+      current.includes(inst.id)
+        ? current.filter(id => id !== inst.id)
+        : [...current, inst.id],
+    )
+  }
+
+  const onExitBatchMode = () => {
+    setBatchGroupKey(null)
+    setSelectedInstanceIds([])
+  }
+
+  /**
+   * 批量删除选中实例（宿主任务面板同款执行策略）：确认后**串行**逐个
+   * instance.delete，首个失败即停（剩余保留勾选便于重试），已删除的移出选中集合；
+   * 无论成败最后重拉列表校准（推送帧到达时再校准一次）。
+   */
+  const onDeleteBatchSelected = () => {
+    void withBusy('batch-delete', async () => {
+      if (batchSelectedInstances.length === 0) return
+      const ok = await confirmDialog(
+        '批量删除工作流实例',
+        `确定要删除选中组内的 ${batchSelectedInstances.length} 个实例吗？操作不可恢复。`,
+        '删除',
+      )
+      if (!ok) return
+      setBatchDeleting(true)
+      const deletedIds: string[] = []
+      try {
+        for (const inst of batchSelectedInstances) {
+          await workflowGateway.instanceDelete(inst.id)
+          deletedIds.push(inst.id)
+        }
+        setBatchGroupKey(null)
+        setSelectedInstanceIds([])
+        toast(`已删除 ${deletedIds.length} 个实例`, 'success')
+      } catch (err) {
+        toast(
+          `删除失败（已删 ${deletedIds.length} 个）：${rpcErrorMessage(err)}`,
+          'error',
+        )
+        setSelectedInstanceIds(current => current.filter(id => !deletedIds.includes(id)))
+      } finally {
+        setBatchDeleting(false)
+        reloadInstances()
+      }
+    })
+  }
 
   // ── 动作 ──
 
@@ -768,6 +932,7 @@ export default function SidebarPanel() {
             const groupDefCount = group.defs.length
             const groupEmpty = instances !== null && !instancesError && group.instances.length === 0
             const orphanChip = group.entry === null
+            const groupBatchActive = group.key === batchGroupKey
             return (
               <div key={group.key} style={groupSectionStyle}>
                 <CollapsibleHeader
@@ -776,46 +941,91 @@ export default function SidebarPanel() {
                   collapsed={collapsed}
                   onToggle={() => toggleCollapsed(group.key)}
                   tools={
-                    <>
-                      {group.entry ? (
-                        <>
-                          <Button
-                            type="text"
-                            style={toolbarButtonStyle}
-                            disabled={groupDefCount === 0}
-                            title={
-                              groupDefCount === 0
-                                ? '此工作区暂无工作流定义（到「管理」页新建或导入）'
-                                : '运行此工作区的工作流（选择定义、填写运行变量）'
-                            }
-                            aria-label="运行工作流"
-                            onClick={() => onRunGroup(group)}
-                          >
-                            <RunIcon size={13} />
-                          </Button>
-                          <Button
-                            type="text"
-                            style={toolbarButtonStyle}
-                            title="管理此工作区的工作流定义（新建 / 编辑 / 导入 / 导出 / 运行）"
-                            aria-label="管理工作流定义"
-                            onClick={() => group.entry && onOpenManage(group.entry.id as string)}
-                          >
-                            <ManageIcon size={13} />
-                          </Button>
-                        </>
-                      ) : null}
-                      <HeaderMenu
-                        title="更多操作"
-                        items={[
-                          {
-                            key: 'refresh',
-                            label: '刷新',
-                            icon: <RefreshIcon size={13} />,
-                            onSelect: renderAll,
-                          },
-                        ]}
-                      />
-                    </>
+                    groupBatchActive ? (
+                      // 批删模式独占组头工具位（▶/管理/⋯ 让位，退出后恢复）：
+                      // 全选 + 删除(n) + 取消，与任务侧边栏批删控件同构。
+                      <span style={batchControlsStyle}>
+                        {batchSelectableInstances.length > 0 ? (
+                          <label style={checkboxLabelStyle}>
+                            <Checkbox
+                              checked={allSelectableChecked}
+                              disabled={batchDeleting}
+                              onChange={onToggleBatchSelectAll}
+                            />
+                            <span>全选</span>
+                          </label>
+                        ) : null}
+                        <Button
+                          danger
+                          size="small"
+                          disabled={batchSelectedInstances.length === 0 || batchDeleting}
+                          onClick={onDeleteBatchSelected}
+                        >
+                          {batchDeleting
+                            ? '删除中…'
+                            : `删除${batchSelectedInstances.length > 0 ? ` (${batchSelectedInstances.length})` : ''}`}
+                        </Button>
+                        <Button type="text" size="small" disabled={batchDeleting} onClick={onExitBatchMode}>
+                          取消
+                        </Button>
+                      </span>
+                    ) : (
+                      <>
+                        {group.entry ? (
+                          <>
+                            <Button
+                              type="text"
+                              style={toolbarButtonStyle}
+                              disabled={groupDefCount === 0}
+                              title={
+                                groupDefCount === 0
+                                  ? '此工作区暂无工作流定义（到「管理」页新建或导入）'
+                                  : '运行此工作区的工作流（选择定义、填写运行变量）'
+                              }
+                              aria-label="运行工作流"
+                              onClick={() => onRunGroup(group)}
+                            >
+                              <RunIcon size={13} />
+                            </Button>
+                            <Button
+                              type="text"
+                              style={toolbarButtonStyle}
+                              title="管理此工作区的工作流定义（新建 / 编辑 / 导入 / 导出 / 运行）"
+                              aria-label="管理工作流定义"
+                              onClick={() => group.entry && onOpenManage(group.entry.id as string)}
+                            >
+                              <ManageIcon size={13} />
+                            </Button>
+                          </>
+                        ) : null}
+                        <HeaderMenu
+                          title="更多操作"
+                          items={[
+                            {
+                              key: 'refresh',
+                              label: '刷新',
+                              icon: <RefreshIcon size={13} />,
+                              onSelect: renderAll,
+                            },
+                            {
+                              key: 'batchDelete',
+                              label: '批量删除',
+                              danger: true,
+                              icon: <DeleteIcon size={13} />,
+                              // 组内实例全部活跃（含空组）/已在批删模式/有动作进行中时不可进入。
+                              disabled:
+                                group.instances.every(inst => instanceActive(inst.status))
+                                || batchGroupKey !== null
+                                || busyKey !== null,
+                              onSelect: () => {
+                                setSelectedInstanceIds([])
+                                setBatchGroupKey(group.key)
+                              },
+                            },
+                          ]}
+                        />
+                      </>
+                    )
                   }
                 />
                 {/* 实例平铺（无子区头/折叠/计数）；空态收一行弱文案。 */}
@@ -827,7 +1037,11 @@ export default function SidebarPanel() {
                         inst={inst}
                         workspaceChip={orphanChip ? inst.workspaceId : undefined}
                         busy={runBusy(`inst:${inst.id}`)}
+                        batchActive={groupBatchActive}
+                        batchSelected={selectedInstanceIds.includes(inst.id)}
+                        batchDeleting={batchDeleting}
                         onOpen={() => onOpenInstance(inst)}
+                        onToggleSelect={() => onToggleBatchInstance(inst)}
                         onCopyPath={() => onCopyInstancePath(inst)}
                         onCancel={() => onCancelInstance(inst)}
                         onDelete={() => onDeleteInstance(inst)}
@@ -936,6 +1150,42 @@ const groupToolsStyle: React.CSSProperties = {
   alignItems: 'center',
   gap: 2,
   flexShrink: 0,
+}
+
+/** 组头批量删除控件行（全选 + 删除(n) + 取消；批删模式独占组头工具位）。 */
+const batchControlsStyle: React.CSSProperties = {
+  marginLeft: 'auto',
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 6,
+  flexShrink: 0,
+}
+
+/** 勾选标签（全选/行内选择共用）：Checkbox + 说明文字，与任务侧边栏同构。 */
+const checkboxLabelStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 5,
+  fontSize: 'var(--text-xs)',
+  color: 'var(--text-secondary)',
+  cursor: 'pointer',
+  whiteSpace: 'nowrap',
+  minWidth: 0,
+}
+
+/** 活跃实例的禁用态勾选标签（不可删，弱化并去手势）。 */
+const disabledCheckboxLabelStyle: React.CSSProperties = {
+  color: 'var(--text-muted)',
+  cursor: 'default',
+}
+
+/** 行卡片勾选行（批删模式首行）：左=勾选+说明，右=「打开」逃生口。 */
+const cardBatchRowStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 8,
+  minWidth: 0,
 }
 
 const groupTasksStyle: React.CSSProperties = {
@@ -1124,8 +1374,14 @@ const manualCopyTextareaStyle: React.CSSProperties = {
  *    实例运行态翻转（running→waiting-user→done）→ 侧栏在 ~150ms 内自动更新，**无需手动
  *    刷新**（kind=definition 的推送只校准 ▶ 运行窗选项，不渲染定义行）；取消实例 → 状态
  *    药丸转琥珀「已取消」；删除 → 条目消失。
+ * 5b. **批量删除**：组头 ⋯ →「批量删除」→ 组头变「全选/删除/取消」、组内实例行出勾选行
+ *     （活跃实例禁勾、显示「进行中不可删除」；「打开」可直达实例页；行 ⋯ 菜单隐藏、
+ *     点行不再打开实例）→ 勾选若干 →「删除 (n)」→ 确认弹窗（不可恢复）→ 串行删除、
+ *     toast「已删除 N 个实例」、自动退出批删模式；「取消」直接退出不动数据；组内实例
+ *     全部活跃时菜单项禁用；删除途中 worker 报错 → 首错即停、已删计数、剩余保持勾选；
+ *    批删中他端删掉选中实例/实例转活跃 → 勾选自动清理；批删组消失（工作区注销）自动退出。
  * 6. 归属工作区未注册的实例收进尾组「工作区缺失」（只读，行内 chip 显示 workspaceId）；
- *    注册表变化后尾组条目回到对应工作区组。
+ *    注册表变化后尾组条目回到对应工作区组（尾组同样支持批量删除清理孤儿数据）。
  * 7. 行内时间：7 天内相对时间，点击切换绝对/相对，title 显示完整绝对时间。
  * 8. 滚动行为与任务侧边栏一致（SidebarScrollArea：滚动时浮现滑块、停后淡出）。
  */
