@@ -458,10 +458,7 @@ function ensureLogStyles(): void {
 .wf-log-line-text { color: var(--text-secondary, #aab3c2); }
 .wf-log-line-time { font-size: 11px; color: var(--text-faint, #525c6a); }
 .wf-log-line-detail { font-size: 12px; color: var(--text-muted, #6f7a8b); white-space: pre-wrap; word-break: break-word; }
-.wf-log-card { border: 1px solid var(--border-light, #1b202a); border-left: 3px solid var(--border-strong, #3b4658); border-radius: 8px; background: var(--bg-secondary, #11141b); overflow: hidden; }
-.wf-log-card--ok { border-left-color: var(--accent-green, #41d19c); }
-.wf-log-card--err { border-left-color: var(--accent-red, #ff6b6b); }
-.wf-log-card--run { border-left-color: var(--accent-blue, #61a5ff); }
+.wf-log-card { border: 1px solid var(--border-light, #1b202a); border-radius: 8px; background: var(--bg-secondary, #11141b); overflow: hidden; }
 .wf-log-card-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 7px 10px; border-bottom: 1px solid var(--border-light, #1b202a); background: var(--bg-tertiary, #171b24); }
 .wf-log-card-name { font-weight: 600; }
 .wf-log-card-id { font-size: 11px; color: var(--text-faint, #525c6a); }
@@ -548,7 +545,7 @@ function RunItem({
   const hasAnyOutput = out.stdout !== '' || out.stderr !== '' || out.text !== ''
 
   return (
-    <div className={`wf-log-card${failed ? ' wf-log-card--err' : running ? ' wf-log-card--run' : ' wf-log-card--ok'}`}>
+    <div className="wf-log-card">
       <div className="wf-log-card-head">
         <NodeTypeBadge type={asStr(rec.nodeType)} />
         <span className="wf-log-card-name">{asStr(rec.nodeName) || asStr(rec.nodeId)}</span>
