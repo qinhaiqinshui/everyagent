@@ -12,6 +12,11 @@
  * BAD_PARAMS（缺变量/模型配置不存在等）按后端 message 原样展示（已拼好定位列表）。
  * 模型配置存在性不做前端预校验（后端 run 时管——编辑器与运行窗之间可能改配置）。
  *
+ * 两级入口：定义级（openRunDialog，侧栏行菜单「运行」直入变量表单）与工作区级
+ * （openWorkspaceRunDialog，侧栏组头 ▶——先选定义〔默认=最近一次实例的定义，由
+ * SidebarPanel.lastRunDefinitionId 从实例列表算出〕，选中后内嵌同一变量表单；
+ * 切换定义即重挂载表单重置输入）。运行成功都 openTab 实例运行页。
+ *
  * 纯逻辑可测核（无插件 web 测试基建，导出保持可测，人工清单见文件尾注释）：
  * missingRequiredVariables / buildVariablesPayload。
  */
@@ -19,8 +24,13 @@ import React from 'react'
 import type { PluginDialogProps } from '@everyagent/plugin-api'
 import { getPluginContext, resolveWorkspaceRef } from '../pluginRuntime'
 import { WORKFLOW_INSTANCE_TAB_TYPE } from '../tabKeys'
-import { RunIcon, VariableIcon } from '../icons'
-import { rpcErrorMessage, workflowGateway, type WorkflowVariableDef } from '../workflowGateway'
+import { RunIcon, VariableIcon, WorkflowIcon } from '../icons'
+import {
+  rpcErrorMessage,
+  workflowGateway,
+  type WorkflowDefSummary,
+  type WorkflowVariableDef,
+} from '../workflowGateway'
 
 const RUN_DIALOG_STYLE_ID = 'wf-run-dialog-styles'
 
@@ -44,6 +54,7 @@ function ensureRunDialogStyles(): void {
 .wf-run-hint { font-size: 11px; color: var(--text-faint, #525c6a); margin: 0; line-height: 1.5; }
 .wf-run-error { background: var(--accent-red-dim, rgba(255,107,107,0.14)); border: 1px solid var(--accent-red, #ff6b6b); border-radius: 8px; padding: 8px 10px; color: var(--accent-red, #ff6b6b); font-size: 12.5px; white-space: pre-wrap; }
 .wf-run-footer { display: flex; justify-content: flex-end; gap: 8px; }
+.wf-run-picker { display: flex; flex-direction: column; gap: 12px; min-width: min(460px, 86vw); font-size: 13px; color: var(--text-primary, #eef1f5); }
 .wf-run-btn { display: inline-flex; align-items: center; gap: 5px; padding: 5px 14px; border: 1px solid var(--border-strong, #3b4658); border-radius: 6px; background: transparent; color: var(--text-secondary, #aab3c2); cursor: pointer; font-size: 12.5px; }
 .wf-run-btn:hover { color: var(--text-primary, #eef1f5); border-color: var(--accent-blue, #61a5ff); }
 .wf-run-btn-primary { background: var(--accent-green, #41d19c); border-color: var(--accent-green, #41d19c); color: #0b0d12; font-weight: 600; }
@@ -53,6 +64,7 @@ function ensureRunDialogStyles(): void {
 @media (max-width: 768px) {
   .wf-run-input { font-size: 16px; }
   .wf-run-body { min-width: min(440px, 92vw); gap: 10px; }
+  .wf-run-picker { min-width: min(440px, 92vw); gap: 10px; }
   .wf-run-btn { padding: 8px 16px; font-size: 13px; }
   .wf-run-footer { gap: 10px; }
 }
@@ -101,6 +113,8 @@ export function buildVariablesPayload(
 /** close 的收口值：{instanceId}=已成功启动；close(null)=取消。 */
 export interface RunDialogResult {
   instanceId: string
+  /** 工作区级入口补记：选中定义名（openTab 标题用；定义级入口不填）。 */
+  definitionName?: string
 }
 
 export interface RunDialogContentProps extends PluginDialogProps<RunDialogResult> {
@@ -290,6 +304,123 @@ export async function openRunDialog(
   return null
 }
 
+// ─── 工作区级运行（组头 ▶ 入口：先选定义，再填变量） ────────────────────────
+
+export interface WorkspaceRunDialogProps extends PluginDialogProps<RunDialogResult> {
+  /** 定义归属工作区（稳定 id；workflow.run 的 workspace 参数）。 */
+  workspace: string
+  /** 本工作区定义摘要列表（下拉数据源；调用方保证非空再开窗）。 */
+  defs: WorkflowDefSummary[]
+  /** 默认选中：最近一次实例的定义 id（不在 defs 中则退首个；缺省=首个）。 */
+  lastRunDefinitionId?: string
+}
+
+/**
+ * 工作区级运行窗：顶部定义下拉（默认选中最近运行的）→ 下方内嵌 RunDialogContent
+ * （选中定义的变量表单 + 底部运行/取消）。切换定义用 key 重挂载表单——输入、校验、
+ * busy 态全部重置，且 def.get 重拉最新声明（编辑器里刚改过也能反映）。
+ */
+export function WorkspaceRunDialogContent({
+  close,
+  workspace,
+  defs,
+  lastRunDefinitionId,
+}: WorkspaceRunDialogProps) {
+  React.useEffect(ensureRunDialogStyles, [])
+
+  const [definitionId, setDefinitionId] = React.useState(() => {
+    if (lastRunDefinitionId && defs.some(d => d.id === lastRunDefinitionId)) return lastRunDefinitionId
+    return defs[0]?.id ?? ''
+  })
+  const selected = defs.find(d => d.id === definitionId)
+
+  // 包一层 close：成功时补记选中定义名（openTab 标题用；取消原样透传）。
+  const closeWithDef = React.useCallback(
+    (result: RunDialogResult | null) => {
+      close(result && selected ? { ...result, definitionName: selected.name || selected.id } : result)
+    },
+    [close, selected],
+  )
+
+  if (!selected) {
+    return (
+      <div className="wf-run-picker">
+        <div className="wf-run-empty">该工作区暂无工作流定义——先点 ＋ 新建，或从 ⋯ 菜单导入。</div>
+        <div className="wf-run-footer">
+          <button type="button" className="wf-run-btn" onClick={() => close(null)}>
+            关闭
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="wf-run-picker">
+      <div className="wf-run-field">
+        <label>
+          <WorkflowIcon size={12} />
+          <span>工作流定义</span>
+        </label>
+        <select
+          className="wf-run-input"
+          value={definitionId}
+          onChange={e => setDefinitionId(e.target.value)}
+        >
+          {defs.map(d => (
+            <option key={d.id} value={d.id} title={d.id}>
+              {d.name || d.id}
+            </option>
+          ))}
+        </select>
+      </div>
+      <RunDialogContent
+        key={definitionId}
+        close={closeWithDef}
+        workspace={workspace}
+        definitionId={definitionId}
+      />
+    </div>
+  )
+}
+
+/**
+ * 打开工作区级运行窗（侧栏组头 ▶）；运行成功后 openTab 实例运行页。
+ * 返回实例 id；取消/失败启动返回 null。
+ */
+export async function openWorkspaceRunDialog(
+  workspace: string,
+  defs: WorkflowDefSummary[],
+  lastRunDefinitionId?: string,
+): Promise<string | null> {
+  const ctx = getPluginContext()
+  if (typeof ctx.ui.showDialog !== 'function') {
+    ctx.ui.showToast('当前宿主不支持插件对话框，无法打开运行窗口', 'error')
+    return null
+  }
+  const result = await ctx.ui.showDialog<RunDialogResult>({
+    title: '运行工作流',
+    description: '选择工作流定义并确认运行变量；实例创建后将自动打开实例运行页。',
+    Content: props => (
+      <WorkspaceRunDialogContent
+        {...props}
+        workspace={workspace}
+        defs={defs}
+        lastRunDefinitionId={lastRunDefinitionId}
+      />
+    ),
+  })
+  if (result?.instanceId) {
+    ctx.ui.openTab(
+      WORKFLOW_INSTANCE_TAB_TYPE,
+      { instanceId: result.instanceId, workspaceId: workspace },
+      `${result.definitionName ?? '工作流'} · ${result.instanceId}`,
+    )
+    return result.instanceId
+  }
+  return null
+}
+
 /*
  * ── 人工验证清单（步骤 9）─────────────────────────────────────────────────
  * 1. 侧边栏定义列表 →「运行」→ 对话框列出全部变量声明；required 标 *、
@@ -300,7 +431,16 @@ export async function openRunDialog(
  * 4. 模型配置故意填错运行 → 后端 BAD_PARAMS 的 message 完整展示在对话框红框内。
  * 5. Esc / 点遮罩 / 取消 → 对话框关闭，无实例创建。
  *
+ * ── 人工验证清单（工作区级入口 · 组头 ▶）────────────────────────────────
+ * 6. 组头 ▶（无定义时禁用）→ 弹窗顶部下拉列出本工作区全部定义；默认选中
+ *    「最近一次实例的定义」（SidebarPanel.lastRunDefinitionId：实例 createdAt
+ *    降序首个且定义仍存在；无实例/定义已删 → 首个定义）。
+ * 7. 切换下拉定义 → 下方变量表单整体重挂载：变量声明、默认值、已填输入全部
+ *    重置为该定义的最新声明（编辑器里刚改过变量也能反映）。
+ * 8. 底部「取消/开始运行」：取消关闭无实例；运行成功 → 关闭弹窗并 openTab
+ *    实例运行页（标题=`定义名 · 实例id`），侧栏实例列表出现新 running 实例。
+ *
  * ── 人工验证清单（移动端，视口 ≤768px）──────────────────────────────────
- * 6. 对话框宽度收窄至 92vw 不溢出；变量输入聚焦不触发 iOS 视口自动放大（16px）；
- *    底部「取消/开始运行」按钮触控目标加大，可单手点达。
+ * 9. 对话框宽度收窄至 92vw 不溢出；变量输入聚焦不触发 iOS 视口自动放大（16px）；
+ *    底部「取消/开始运行」按钮触控目标加大，可单手点达；定义下拉触控可点。
  */

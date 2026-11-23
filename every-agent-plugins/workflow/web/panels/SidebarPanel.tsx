@@ -5,14 +5,14 @@
  * 布局（任务面板同构）：
  * - SidebarScrollArea 滚动区（自宿主复制，CSS 类为宿主全局样式）；
  * - 分组卡片（padding 6 / radius-md / border-light / bg-primary）：组头=折叠箭头（仅点击图标
- *   折叠，rotate 过渡）+ 粗体组名 + 右侧图标按钮（＋ 新建 / ⋯ 导入·刷新）；
+ *   折叠，rotate 过渡）+ 粗体组名 + 右侧图标按钮（▶ 运行 / ＋ 新建 / ⋯ 导入·刷新）；
  * - 组内两段可折叠子区「定义」「实例」（箭头交互同组头）；
  * - 行卡片（.ui-row）=标题行（粗体单行名称 + hover 浮现的 ⋯「更多操作」菜单）+ 元数据行
  *   （等宽 id 省略 + 可点击切换的相对/绝对时间 + 状态药丸）+ 次要信息行。
  *
  * 与任务面板的一处刻意差异：空工作区也展示——任务在输入框创建、侧栏可隐藏空组；工作流
- * 的创建入口就在组头（＋ 直达，导入在 ⋯ 菜单，均需选定工作区），隐藏空组会让首个工作流
- * 无处可建。
+ * 的创建入口就在组头（▶ 运行〔有定义时可用〕、＋ 直达，导入在 ⋯ 菜单，均需选定工作区），
+ * 隐藏空组会让首个工作流无处可建。
  * 归属数据的工作区未注册时收进尾组「工作区缺失」（只读展示，无创建入口）。
  *
  * 行级操作收进 ⋯ 菜单（RowActions，复用宿主 .ui-row-actions 全局样式）：
@@ -46,7 +46,7 @@ import {
 } from '../workflowGateway'
 import SidebarScrollArea from '../SidebarScrollArea'
 import { HeaderMenu, RowActions } from '../Menu'
-import { openRunDialog } from './RunDialog'
+import { openRunDialog, openWorkspaceRunDialog } from './RunDialog'
 import {
   ChevronDownIcon,
   DeleteIcon,
@@ -160,6 +160,23 @@ export function instanceProgressText(
   if (entries.length === 0) return ''
   const done = entries.filter(s => s?.status === 'done').length
   return `${done}/${entries.length} 节点完成`
+}
+
+/**
+ * 「最后运行的」定义 id：实例按 createdAt 降序首个、且定义仍存在者；都无 →
+ * undefined。实例创建时间=运行发起时间（服务端事实源，比本地记忆多端一致）；
+ * 定义已删的实例跳过——下拉只列现存定义，选中项必须真实可运行。
+ */
+export function lastRunDefinitionId(
+  defs: WorkflowDefSummary[],
+  instances: WorkflowInstanceSummary[],
+): string | undefined {
+  const known = new Set(defs.map(d => d.id))
+  const byRecent = [...instances].sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0))
+  for (const inst of byRecent) {
+    if (inst.definitionId && known.has(inst.definitionId)) return inst.definitionId
+  }
+  return undefined
 }
 
 /** 定义名 → 导出文件名（`<name>.workflow.json`；剥文件系统非法字符）。 */
@@ -642,6 +659,18 @@ export default function SidebarPanel() {
     })
   }
 
+  /** 组头 ▶：工作区级运行窗（选定义→填变量→运行；默认选中最近一次实例的定义）。 */
+  const onRunGroup = (group: WorkspaceGroup) => {
+    const wsId = group.entry?.id as string | undefined
+    if (!wsId || group.defs.length === 0) return
+    void openWorkspaceRunDialog(wsId, group.defs, lastRunDefinitionId(group.defs, group.instances)).then(
+      id => {
+        // 本地立即重拉一次（推送帧到达时再校准）。
+        if (id) reloadInstances()
+      },
+    )
+  }
+
   const onExportDef = (def: WorkflowDefSummary) => {
     void withBusy(`def:${def.id}`, async () => {
       try {
@@ -802,15 +831,31 @@ export default function SidebarPanel() {
                   tools={
                     <>
                       {group.entry ? (
-                        <Button
-                          type="text"
-                          style={toolbarButtonStyle}
-                          title="在此工作区新建工作流定义（打开编辑器空白定义）"
-                          aria-label="新建工作流定义"
-                          onClick={() => group.entry && onNewDefinition(group.entry.id as string)}
-                        >
-                          <PlusIcon size={13} />
-                        </Button>
+                        <>
+                          <Button
+                            type="text"
+                            style={toolbarButtonStyle}
+                            disabled={groupDefCount === 0}
+                            title={
+                              groupDefCount === 0
+                                ? '此工作区暂无工作流定义'
+                                : '运行此工作区的工作流（选择定义、填写运行变量）'
+                            }
+                            aria-label="运行工作流"
+                            onClick={() => onRunGroup(group)}
+                          >
+                            <RunIcon size={13} />
+                          </Button>
+                          <Button
+                            type="text"
+                            style={toolbarButtonStyle}
+                            title="在此工作区新建工作流定义（打开编辑器空白定义）"
+                            aria-label="新建工作流定义"
+                            onClick={() => group.entry && onNewDefinition(group.entry.id as string)}
+                          >
+                            <PlusIcon size={13} />
+                          </Button>
+                        </>
                       ) : null}
                       <HeaderMenu
                         title="更多操作"
@@ -1186,9 +1231,9 @@ const confirmFooterStyle: React.CSSProperties = {
  * ── 人工验证清单（侧边栏，任务面板同构 · 工作区分组 · 推送驱动）────────────
  * 1. 打开侧边栏「工作流」：注册表里每个工作区一张分组卡片同时并陈（含空工作区，
  *    显示「暂无工作流——点 ＋ 新建…」），**无**顶部下拉/工具条；组序=注册表顺序。
- * 2. 组头：仅点击箭头折叠/展开（点组名不折叠）；右侧=＋ / ⋯（⋯ 内「导入工作流…」打开文件
- *    选择、「刷新」=全量重拉）。＋/导入落位本组工作区；导入残缺/非法 JSON → 本组「定义」
- *    段内红色逐项回显。
+ * 2. 组头：仅点击箭头折叠/展开（点组名不折叠）；右侧=▶ / ＋ / ⋯（⋯ 内「导入工作流…」
+ *    打开文件选择、「刷新」=全量重拉）。＋/导入落位本组工作区；导入残缺/非法 JSON →
+ *    本组「定义」段内红色逐项回显；▶ 打开工作区级运行窗（见 RunDialog 清单 §6-8）。
  * 3. 组内两段「定义」「实例」各有箭头可独立折叠；头带计数（实例含「k 活跃」）。
  * 4. 行卡片：hover 时右侧浮现 ⋯ 菜单；实例=取消实例（活跃时）/删除；定义=运行/编辑/导出 JSON/删除。
  *    点行打开实例页/编辑器（tab.data 正确）；导出下载 `<名称>.workflow.json`。
