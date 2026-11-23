@@ -3,10 +3,12 @@
  *
  * ── 数据装配 ──
  * - 挂载：instance.get（meta 全量，definitionSnapshot=画布数据源）+ instance.runLog 并拉；
- * - 事件流：subscribeInstanceEvents（gateway 长轮询订阅，afterSeq='0' 全量回放 + 实时
- *   增量，断线指数退避、终态自动停——本面板只消费）；收到 node.output/node.error/
+ * - 事件流：subscribeInstanceEvents（**后端主动推送**——订阅实例流频道收实时增量，
+ *   全量回放/断线补齐由 gateway 内部走 instance.events 拉取并按 seq 去重合流；
+ *   终态/他端删除自动停——本面板只消费）；收到 node.output/node.error/
  *   supervisor.decision（runs 记录已先于事件落盘）或终态事件 → 450ms 防抖重拉 meta+runs，
- *   详情面板与进度随事件自然保鲜，无空转定时器（仅运行中实例有 1s 计时 tick 刷时长）。
+ *   详情面板与进度随事件自然保鲜，无空转定时器（仅运行中实例有 1s 计时 tick 刷时长）、
+ *   **无手动刷新入口**（断线重连由宿主全局重连提示覆盖，恢复后自动续流）。
  * - 节点状态着色：**事件投影**（projectNodesFromEvents——node.started/output/error/
  *   skipped/wf.askUser 按序折叠；run 级留痕含 inputPreview/outputPreview/activatedEdges）
  *   + 终态 meta.nodeStates 补洞（worker 重启 activate 扫描改 meta 不补事件的场景）。
@@ -14,8 +16,8 @@
  *   画布 readonly 下节点点击本就回调 onSelect——零画布改动。
  *
  * ── UI 结构 ──
- * 顶栏：状态色点+定义名+变量摘要+时长+事件流连接状态+「运行图/运行日志」视图切换+
- * 刷新+取消（运行中）/删除（终态）；waiting-user 决策横幅（重试/跳过/终止/换输入重试
+ * 顶栏：状态色点+定义名+变量摘要+时长+事件流状态+「运行图/运行日志」视图切换+
+ * 取消（运行中）/删除（终态）；waiting-user 决策横幅（重试/跳过/终止/换输入重试
  * → gateway.decide）；主体两态：运行图（左画布+右节点详情面板：input 三视图/output
  * 全量/error/agent+usage/激活出边/该节点全部 run 记录列表可选看）或 RunLogPanel
  * （物流式时间线，见该文件头注释）。删除/NOT_FOUND 后居中终态占位。
@@ -74,7 +76,6 @@ import {
   DeleteIcon,
   EditIcon,
   LogIcon,
-  RefreshIcon,
   RetryIcon,
   SkipIcon,
   StopIcon,
@@ -1180,11 +1181,7 @@ export default function InstancePanel({ instanceId, workspaceId }: InstancePanel
         ? `耗时 ${elapsedText(meta.startedAt, meta.endedAt)}`
         : ''
   const pollChip =
-    pollState?.phase === 'backoff' ? (
-      <span className="wf-inst-chip wf-inst-chip--warn" title={pollState.error}>
-        事件流重连中（{Math.round(pollState.ms / 1000)}s）
-      </span>
-    ) : pollState?.phase === 'stopped' && pollState.reason === 'not-found' ? (
+    pollState?.phase === 'stopped' && pollState.reason === 'not-found' ? (
       <span className="wf-inst-chip wf-inst-chip--warn">实例已不存在</span>
     ) : null
 
@@ -1223,15 +1220,6 @@ export default function InstancePanel({ instanceId, workspaceId }: InstancePanel
           title="物流式运行时间线（runs + events）"
         >
           <LogIcon size={12} /> 运行日志
-        </button>
-        <button
-          type="button"
-          className="wf-inst-btn"
-          disabled={metaLoading}
-          title="重拉实例元数据与 runs 记录（事件流由长轮询维护）"
-          onClick={() => setReloadNonce(n => n + 1)}
-        >
-          <RefreshIcon size={12} /> {metaLoading ? '加载中…' : '刷新'}
         </button>
         {active ? (
           <button
@@ -1356,11 +1344,11 @@ export default function InstancePanel({ instanceId, workspaceId }: InstancePanel
  *    提交后横幅消失、实例回运行中、节点继续推进；后端拒绝（runNo 不匹配等）时红字回显。
  * 7. 取消（运行中顶栏按钮）：confirm → 状态转已取消、事件流停止（顶栏无重连提示）；
  *    终态实例顶栏显示「删除实例」，删除后页面转「实例已删除」占位。
- * 8. 断网/重启 worker：顶栏出现「事件流重连中（ns）」琥珀 chip（指数退避）；恢复后
- *    自动续流（游标不丢事件）。
+ * 8. 断网/重启 worker：宿主全局重连提示弹出；恢复后事件流自动续流（游标不丢事件，
+ *    onResubscribed 触发拉取补洞），节点着色/顶栏状态继续推进。
  * 9. 切「运行日志」视图：见 RunLogPanel 尾清单；两视图共享同一事件流，切换无重拉闪烁。
  * 10. 终态历史实例回放：打开即全量投影（事件回放+nodeStates 补洞），进度与侧栏一致；
- *     「刷新」按钮手动重拉 meta/runs。
+ *     顶栏无刷新按钮（meta/runs 由事件驱动防抖重拉，无手动入口）。
  *
  * ── 人工验证清单（移动端，视口 ≤768px）──────────────────────────────────
  * 11. 窄视口打开实例页：顶栏换行（变量摘要独占一行），画布占满全宽；单指拖动平移

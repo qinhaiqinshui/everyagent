@@ -6,9 +6,11 @@
  * 后端落位 workspaces/<wsId>/workflows/），经 pluginRuntime.resolveWorkspaceRef
  * 从注册表反查归属 worker；注册表无该 id 时回退 ctx.sdk.workerId（单 worker 兜底）。
  *
- * 步骤 9 起全量实现：def.* / run / instance.* 全部直连 + instance.events 的
- * **可取消长轮询订阅循环**（subscribeInstanceEvents，afterSeq 游标推进 + waitMs
- * + 断线退避重拉）。方法签名与「RPC 参数契约」表一致——步骤 10 只消费不再改本文件。
+ * 步骤 9 起全量实现：def.* / run / instance.* 全部直连；instance 事件流为
+ * **推送 + 拉取混合**（subscribeInstanceEvents）：实时增量经 ctx.sdk.stream 订阅
+ * 实例流频道（worker 侧落盘后扇出），历史回放/断线补齐走 instance.events RPC
+ * 单发拉取，两路按 seq（字符串雪花，单实例内严格递增）去重合流。方法签名与
+ * 「RPC 参数契约」表一致。
  */
 import { getPluginContext, resolveWorkspaceRef } from './pluginRuntime'
 
@@ -406,8 +408,9 @@ export const workflowGateway = {
 
   /**
    * workflow.instance.events {instanceId, afterSeq?, waitMs?(≤15000), limit?} →
-   * {events, nextSeq(string)}。长轮询原语（单发）；持续消费请用
-   * {@link subscribeInstanceEvents}（游标推进 + 退避重拉的订阅循环）。
+   * {events, nextSeq(string)}。单发拉取原语（waitMs 长轮询参数保留 wire 兼容，前端
+   * 推送模型下不再使用）；持续消费请用 {@link subscribeInstanceEvents}（实例流频道
+   * 推送 + 本方法回放/补齐按 seq 去重合流）。
    */
   async instanceEvents(
     instanceId: string,
@@ -456,31 +459,31 @@ export const workflowGateway = {
   },
 }
 
-// ─── instance.events 长轮询订阅循环（步骤 10 实例页消费；gateway 层单点封装） ──
+// ─── instance 事件流订阅（步骤 10 实例页消费；gateway 层单点封装） ──
 
 /**
- * 节流策略（对齐宿主 task.poll 前端消费纪律，见 task-packet-view.ts）：
- * - **游标只用服务端 nextSeq（字符串，未过滤推进口径）**——批内事件 seq 仅作缺省回退；
- *   空批时 nextSeq=afterSeq（活实例=等待超时无新事件，游标原地续拉；终态=已读到尾）。
- * - 长轮询 waitMs=8000（后端钳制 ≤15000；sdk.rpc 默认 30s 超时留半程余量）——服务端
- *   挂起即天然节流，成功路径**无额外客户端定时器**，拿到应答立即续拉。
- * - 断线/异常：指数退避 1s→2s→4s→8s→15s 封顶重拉（成功即清零），经 onState 回调
- *   暴露给 UI 做连接状态提示；NOT_FOUND（实例被删）直接终停。
+ * 订阅纪律（对齐宿主任务流混合模型：实时=推送、历史/补齐=拉取，架构 §7.13 广播形态）：
+ * - **先订阅后拉取**：先经 {@code ctx.sdk.stream.subInstanceStream} 订阅实例流频道
+ *   （worker 侧 WorkflowStore.appendEvent 落盘后经 EventSink.fanout 扇出，帧 payload
+ *   与 instance.events RPC 应答条目同形），再从初始游标全量拉取回放——两路重叠由
+ *   seq 去重吸收，不重不漏。
+ * - **seq 去重合流**：单实例内事件 seq（字符串雪花）严格递增（appendEvent 实例锁内
+ *   取号，文件序=seq 序）；推送帧与拉取批次按 BigInt 比较 `> 游标` 过滤后按序合流。
+ * - **订阅恢复即校准**：宿主在重连/worker 连接集变化/页面重新可见后重发订阅并回调
+ *   onResubscribed——本订阅据此从游标重拉补洞（推送是无背压广播，漏帧以磁盘事实源
+ *   + 拉取补齐为准；不设空转定时器）。
  * - **终态自动停**：观测到终态标记事件（wf.done / wf.cancelled / wf.status{终态}）
- *   即停——后端对终态实例立即返回当前尾，不停会退化成无 waitMs 的热转。
+ *   即停并退订（后端不再产出新事件）；**他端删除**经 plugin-worker-event
+ *   {kind:instance, action:deleted} 侦测（运行中实例不可删，删除只发生在终态后）。
+ * - NOT_FOUND（订阅时实例已不存在）直接终停。
  */
-const DEFAULT_EVENT_WAIT_MS = 8000
 
-/** 退避档位（ms；成功一次即清零回 0 档）。 */
-const EVENT_BACKOFF_SCHEDULE_MS = [1000, 2000, 4000, 8000, 15000]
-
-/** 订阅轮询状态：polling=正常长轮询中；backoff=异常退避等待；stopped=循环终停。 */
+/** 订阅状态：live=推送消费中；stopped=循环终停。 */
 export type WorkflowEventsPollState =
-  | { phase: 'polling' }
-  | { phase: 'backoff'; ms: number; error: string }
+  | { phase: 'live' }
   | { phase: 'stopped'; reason: 'terminal' | 'not-found' | 'closed' }
 
-/** 订阅句柄：close() 幂等（在途 RPC 的结果会被丢弃）。 */
+/** 订阅句柄：close() 幂等（退订频道、注销监听；在途结果会被丢弃）。 */
 export interface WorkflowEventsHandle {
   close(): void
   /** 当前游标（字符串雪花 seq；终停后不再推进）。 */
@@ -490,11 +493,7 @@ export interface WorkflowEventsHandle {
 export interface SubscribeWorkflowEventsOptions {
   /** 初始游标（缺省 '0' = 从头回放全部事件；翻历史场景由调用方传入已知游标）。 */
   afterSeq?: string
-  /** 长轮询等待毫秒（缺省 8000；勿超后端 15000 上限与 sdk.rpc 30s 超时的半程）。 */
-  waitMs?: number
-  /** 单批条数上限（缺省不传=后端缺省）。 */
-  limit?: number
-  /** 轮询状态回调（退避提示/终停原因；缺省忽略）。 */
+  /** 订阅状态回调（终停原因；缺省忽略）。 */
   onState?: (state: WorkflowEventsPollState) => void
 }
 
@@ -512,12 +511,29 @@ export function isTerminalInstanceEvent(e: WorkflowInstanceEvent): boolean {
   return false
 }
 
+/** 推送帧（PluginStreamEvent，payload 与 RPC 条目同形）→ WorkflowInstanceEvent。 */
+function eventFromStreamFrame(e: {
+  seq?: string
+  ts?: number
+  event: string
+  payload: unknown
+}): WorkflowInstanceEvent | null {
+  const p = (e.payload ?? {}) as Partial<WorkflowInstanceEvent>
+  const seq = typeof p.seq === 'string' && p.seq !== '' ? p.seq : (e.seq ?? '')
+  if (seq === '') return null
+  return {
+    seq,
+    ts: typeof p.ts === 'number' ? p.ts : (e.ts ?? 0),
+    event: typeof p.event === 'string' && p.event !== '' ? p.event : e.event,
+    payload: (p.payload ?? {}) as Record<string, unknown>,
+  }
+}
+
 /**
- * 订阅实例事件流（可取消的长轮询循环）。
+ * 订阅实例事件流（后端主动推送 + 拉取补齐）。
  *
  * 每批事件经 onEvents 回调（**先投递再判终停**——终态标记事件保证送达消费者）；
- * 游标经返回句柄只读暴露。close() 后在途 RPC/退避 sleep 的结果被丢弃（sleep 定时器
- * 被 clearTimeout，挂起的 Promise 永不 resolve、随闭包一并回收——标准可取消范式）。
+ * 游标经返回句柄只读暴露。close() 后在途拉取/推送帧的结果被丢弃。
  */
 export function subscribeInstanceEvents(
   instanceId: string,
@@ -526,63 +542,102 @@ export function subscribeInstanceEvents(
 ): WorkflowEventsHandle {
   let closed = false
   let cursor = opts.afterSeq ?? '0'
-  let backoffIndex = 0
-  let timer: ReturnType<typeof setTimeout> | null = null
+  let retryTimer: ReturnType<typeof setTimeout> | null = null
+  // worker 侧变更通知（他端删除侦测用；与 SidebarPanel.WORKFLOW_CHANGED_EVENT 同源）。
+  const ctx = getPluginContext()
+  const workerId = ctx.sdk.workerId
 
   const stop = (reason: 'terminal' | 'not-found' | 'closed'): void => {
     if (closed) return
     closed = true
-    if (timer) {
-      clearTimeout(timer)
-      timer = null
+    if (retryTimer != null) {
+      clearTimeout(retryTimer)
+      retryTimer = null
     }
-    opts.onState?.({ phase: 'stopped', reason })
+    ctx.sdk.stream.unsubInstanceStream(workerId, instanceId)
+    disposables.forEach(d => d.dispose())
+    if (reason !== 'closed') {
+      opts.onState?.({ phase: 'stopped', reason })
+    }
   }
 
-  const sleep = (ms: number): Promise<void> =>
-    new Promise<void>(resolve => {
-      timer = setTimeout(resolve, ms)
-    })
-
-  void (async () => {
-    while (!closed) {
+  /** 批量合流：严格递增 seq 过滤 → 按序投递 → 终态即停（先投递再判终停）。 */
+  const accept = (events: WorkflowInstanceEvent[]): void => {
+    if (closed || events.length === 0) return
+    const cursorBig = BigInt(cursor)
+    const fresh = events.filter(e => {
       try {
-        const res = await workflowGateway.instanceEvents(instanceId, {
-          afterSeq: cursor,
-          waitMs: opts.waitMs ?? DEFAULT_EVENT_WAIT_MS,
-          ...(opts.limit != null ? { limit: opts.limit } : {}),
-        })
+        return BigInt(e.seq) > cursorBig
+      } catch {
+        return false
+      }
+    })
+    if (fresh.length === 0) return
+    cursor = fresh[fresh.length - 1].seq
+    onEvents(fresh)
+    if (fresh.some(isTerminalInstanceEvent)) {
+      stop('terminal')
+    }
+  }
+
+  /**
+   * 从游标拉取补齐（初始回放 / 订阅恢复校准；无 waitMs——单发快照式）。瞬态失败
+   * 有界退避重试（1s→15s 共 5 档；终态/关闭即弃）；放弃后等下一次 onResubscribed
+   * 信号再校准——不设周期性空转定时器。NOT_FOUND（实例不存在）直接终停。
+   */
+  const pull = async (): Promise<void> => {
+    const delays = [1000, 2000, 4000, 8000, 15000]
+    for (let attempt = 0; ; attempt += 1) {
+      if (closed) return
+      try {
+        const res = await workflowGateway.instanceEvents(instanceId, { afterSeq: cursor })
         if (closed) return
-        if (backoffIndex > 0) {
-          backoffIndex = 0
-          opts.onState?.({ phase: 'polling' })
-        }
-        if (res.events.length > 0) {
-          // 未过滤口径游标优先（task.poll 同款纪律）；缺省回退批尾事件 seq。
-          cursor = res.nextSeq || res.events[res.events.length - 1].seq
-          onEvents(res.events)
-          if (res.events.some(isTerminalInstanceEvent)) {
-            stop('terminal')
-            return
-          }
-        } else if (res.nextSeq) {
-          // 空批推进（通常等于原游标；显式采纳服务端口径）。
-          cursor = res.nextSeq
-        }
-        // 立即续拉——服务端 waitMs 挂起即节流。
+        accept(res.events)
+        return
       } catch (err) {
         if (closed) return
         if (rpcErrorCode(err) === 'NOT_FOUND') {
           stop('not-found')
           return
         }
-        const ms = EVENT_BACKOFF_SCHEDULE_MS[Math.min(backoffIndex, EVENT_BACKOFF_SCHEDULE_MS.length - 1)]
-        backoffIndex += 1
-        opts.onState?.({ phase: 'backoff', ms, error: rpcErrorMessage(err) })
-        await sleep(ms)
+        if (attempt >= delays.length) return
+        const ms = delays[attempt]
+        await new Promise<void>(resolve => {
+          retryTimer = setTimeout(resolve, ms)
+        })
+        retryTimer = null
       }
     }
-  })()
+  }
+
+  // 1) 先订阅（后续增量经推送到达；重复/历史帧由 seq 去重吸收）。
+  ctx.sdk.stream.subInstanceStream(workerId, instanceId)
+
+  // 2) 推送帧监听（全部实例流频道统一扇出，按 worker/subject 过滤）。
+  const disposables = [
+    ctx.sdk.stream.onInstanceStreamEvent(e => {
+      if (closed || e.subjectId !== instanceId || e.workerId !== workerId) return
+      const item = eventFromStreamFrame(e)
+      if (item) accept([item])
+    }),
+    // 3) 订阅恢复（重连/可见性/worker 集变化）→ 从游标重拉补洞。
+    ctx.sdk.stream.onResubscribed(() => {
+      void pull()
+    }),
+    // 4) 他端删除侦测：plugin-worker-event{kind:instance, action:deleted, id} → 终停。
+    ctx.events.on('plugin-worker-event', payload => {
+      if (closed) return
+      const p = payload as { event?: unknown; data?: { kind?: unknown; action?: unknown; id?: unknown } | null }
+      if (p?.event !== 'plugin.workflow.changed') return
+      if (p.data?.kind === 'instance' && p.data?.action === 'deleted' && p.data?.id === instanceId) {
+        stop('not-found')
+      }
+    }),
+  ]
+
+  // 5) 全量回放（afterSeq='0' 起步；与并发推送帧 seq 去重合流）。
+  void pull()
+  opts.onState?.({ phase: 'live' })
 
   return {
     close: () => stop('closed'),

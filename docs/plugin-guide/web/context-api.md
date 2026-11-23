@@ -33,7 +33,7 @@ const ctx: PluginContext = {
 |---|---|---|---|
 | `ctx.pluginId` | `readonly string`（`index.ts:637`） | `pluginLoader.ts:384` | 等于 `plugin.list` 返回的 `id`（即 plugin.json 的 `id`） |
 | `ctx.extensionPath` | `readonly string`（`index.ts:638`） | `pluginLoader.ts`（`webEntryJsPath`） | `webMain` 换算出的产物路径（约定 `"web/index.ts"` → `'web/index.js'`；早期该值不被消费、恒为字面量），不是 URL、不是磁盘路径 |
-| `ctx.sdk` | `PluginSdk`（`index.ts:130-146`） | `pluginLoader.ts:205-229` | RPC 通道 + 工作区注册表快照 + 当前 worker id |
+| `ctx.sdk` | `PluginSdk`（`index.ts:141-190`） | `pluginLoader.ts`（`createPluginSdk`） | RPC 通道 + stream 订阅面（实例流频道推送，`sdk.stream`）+ 工作区注册表快照 + 当前 worker id |
 | `ctx.storage` | `PluginStorage`（`index.ts:200-204`） | `pluginLoader.ts:142-165` | localStorage，键前缀 `plugin:<pluginId>:`，值 JSON 序列化 |
 | `ctx.commands` | `CommandRegistry`（`index.ts:206-209`） | `pluginLoader.ts:167-189` | **本插件私有**的命令表（普通 `Map`），不跨插件、无宿主内置命令 |
 | `ctx.ui` | `UiRegistry`（`index.ts:808-853`） | `every-agent-web/src/plugin/PluginDispatcher.ts:218-401` | 19 个 `register*` + 8 个动作方法，详见 [UI 扩展点](ui-extensions.md) |

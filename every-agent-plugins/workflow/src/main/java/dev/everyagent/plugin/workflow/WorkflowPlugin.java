@@ -17,10 +17,13 @@ import java.util.Locale;
  * workflow 插件入口。
  *
  * <p>职责（模型/校验/存储层 + hidden 五工具 + 激活扫描 + <b>执行引擎</b>
- * （WorkflowRuntime/调度器/节点执行器）+ <b>RPC 面</b>（workflow.* 14 个方法））。本类 activate 做四件事：
+ * （WorkflowRuntime/调度器/节点执行器）+ <b>RPC 面</b>（workflow.* 14 个方法））。本类 activate 做五件事：
  * <ol>
  *   <li>构造 {@link WorkflowStore} 并执行 activate 扫描（建内存索引 + 非终态实例标
  *       failed("worker 重启中断")）；</li>
+ *   <li>接线存储变更通知：ChangeListener → worker 级插件频道扇出
+ *       {@code plugin.workflow.changed}（失效→重拉信号）；InstanceEventListener →
+ *       <b>实例流频道</b>扇出实例事件（实时增量推送，历史/补齐走 instance.events RPC）；</li>
  *   <li>构造 {@link WorkflowEngine}（workflow.run/cancel/decide/instance.events RPC 后端，
  *       经 {@link #engine()} 取用）；</li>
  *   <li>注册 {@link WorkflowRpc}（14 个 workflow.* 方法，
@@ -73,6 +76,22 @@ public class WorkflowPlugin implements EveryAgentPlugin {
                     .put("id", id == null ? "" : id), null);
         });
 
+        // 实例事件 → 实例流频道扇出（u.<K>.worker.<wid>.wf.<wi>.stream，Channels.workflowStream）：
+        // 帧事件名 = 实例事件名，payload 与 instance.events RPC 应答条目同形（seq 字符串防 2^53）；
+        // hub 只投已订阅连接（前端打开实例页即订阅）。低频元数据走广播扇出，无背压机——
+        // fanout 的 pub 非阻塞（出站满即丢帧），磁盘 events.jsonl 是事实源、补齐走 RPC 拉取。
+        store.addInstanceEventListener((workspaceId, instanceId, line) -> {
+            String wid = stream.workerId();
+            Long seq = parseSeq(line.seq());
+            stream.fanout(k -> Channels.workflowStream(k, wid, instanceId), line.event(), seq,
+                    Json.obj()
+                            .put("seq", line.seq() == null ? "0" : line.seq())
+                            .put("ts", line.ts() == null ? 0L : line.ts())
+                            .put("event", line.event() == null ? "" : line.event())
+                            .set("payload", line.payload() == null ? Json.obj() : line.payload()),
+                    null);
+        });
+
         // 执行引擎：调度器跑虚拟线程（start 异步开跑，不阻塞 RPC 线程）
         engine = new WorkflowEngine(store, ctx.services());
 
@@ -90,5 +109,17 @@ public class WorkflowPlugin implements EveryAgentPlugin {
             throw new IllegalStateException("插件未激活(引擎未构造)");
         }
         return e;
+    }
+
+    /** 字符串雪花 seq → Long（帧级 seq 携带；解析失败返回 null=不携带）。 */
+    private static Long parseSeq(String seq) {
+        if (seq == null || seq.isEmpty()) {
+            return null;
+        }
+        try {
+            return Long.parseLong(seq);
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 }

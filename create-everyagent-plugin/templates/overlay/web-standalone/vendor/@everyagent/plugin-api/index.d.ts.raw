@@ -141,6 +141,14 @@ export interface PluginFileStat {
 export interface PluginSdk {
   /** 调用 worker RPC（对标 vscode.commands.executeCommand）。 */
   rpc(workerId: string, method: string, params?: unknown): Promise<unknown>
+  /**
+   * worker 侧主动推送流的订阅面（stream 频道，架构 §7.13 广播形态）。
+   *
+   * 宿主实现持有「期望订阅」注册表：重连 / worker 连接集变化 / 页面重新可见时自动
+   * 重发订阅，并触发 {@link PluginSdkStream.onResubscribed}——订阅方应据此重拉校准
+   * （断线/隐藏期间的漏帧由磁盘事实源 + 插件自有 RPC 补齐）。
+   */
+  readonly stream: PluginSdkStream
   /** 当前工作区信息与多工作区注册表能力。 */
   readonly workspace: {
     /** 插件加载时所归属工作区的稳定 id。 */
@@ -156,6 +164,43 @@ export interface PluginSdk {
   readonly workerId: string
 }
 
+/** stream 频道推送的单条事件（worker 侧经 EventSink.fanout 扇出的 msg 帧业务视图）。 */
+export interface PluginStreamEvent {
+  /** 推送来源 worker（频道名 worker 段）。 */
+  workerId: string
+  /** 推送主体 id（如工作流 instanceId）。 */
+  subjectId: string
+  /** 事件名（worker 侧 fanout 的 event 字段）。 */
+  event: string
+  /** 帧序号（worker 侧携带时为字符串；可能缺省）。 */
+  seq?: string
+  /** 帧时间戳（epoch ms；可能缺省）。 */
+  ts?: number
+  /** 事件数据（形状由推送方插件与消费方约定）。 */
+  payload: unknown
+}
+
+/** SDK 的 stream 订阅面。 */
+export interface PluginSdkStream {
+  /**
+   * 订阅某台 worker 的实例流频道（`u.<K>.worker.<wid>.wf.<subjectId>.stream`，ownerKey
+   * 由宿主解析——插件不接触命名空间键）。幂等；worker 连接未建立时挂入期望集，连接
+   * 建立后自动补发。
+   */
+  subInstanceStream(workerId: string, subjectId: string): void
+  /** 退订实例流频道（幂等；同时从期望集移除，不再随重连补发）。 */
+  unsubInstanceStream(workerId: string, subjectId: string): void
+  /**
+   * 订阅实例流推送帧（全部实例流频道统一扇出，调用方按 workerId/subjectId 过滤）。
+   */
+  onInstanceStreamEvent(handler: (e: PluginStreamEvent) => void): Disposable
+  /**
+   * 订阅恢复通知：重连 / worker 连接集变化 / 页面重新可见导致订阅重发后触发——
+   * 订阅方应重拉校准（推送是无背压广播，漏帧以磁盘事实源为准）。
+   */
+  onResubscribed(handler: () => void): Disposable
+}
+
 /** 领域事件名（与宿主 DOMAIN_EVENTS 同名值，字符串字面量联合；全部有真实 emit）。 */
 export type PluginDomainEvent =
   | 'workspace-file-changed'
@@ -165,6 +210,7 @@ export type PluginDomainEvent =
   | 'task-deleted'
   | 'task-status-changed'
   | 'plugin-task-event'
+  | 'plugin-worker-event'
   | 'plugins-loaded'
   | 'workspace-tab-activated'
   | 'workspace-tab-closed'

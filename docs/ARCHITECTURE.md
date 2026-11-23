@@ -177,6 +177,7 @@ wss://hub:6101/ws
 | `u.<K>.worker.<id>.tasks` | 任务生命周期:`task.created` / `task.updated` / `task.deleted`(**worker 段必填**:一台 worker 的任务事件只进自己的频道,payload 另带 `workerId`) | 命名空间内任意角色 |
 | `u.<K>.worker.<id>.plugin` | **worker 级插件通知频道**(worker 段必填,与 `.tasks` 同理):插件 worker 侧把**非任务域**的数据变更以 `plugin.<pluginId>.<name>` 事件扇出到此(如 workflow 的 `plugin.workflow.changed{kind,action,workspaceId,id,workerId}`)。通知只作「失效→重拉」信号,不承载数据本体——数据真相源仍是 worker 磁盘,前端经该插件 RPC 全量拉取(与 `.tasks` 的 upsert 增量模型不同,故不入 taskStore)。hub 零状态只路由;前端宿主把帧桥接为领域事件 `plugin-worker-event{workerId,event,data}` 供插件 web 侧订阅 | 命名空间内任意角色 |
 | `u.<K>.worker.<id>.task.<taskId>.stream` | **运行中任务实时增量**(worker 定向推送,`ext.target=sessionId` 只投该会话;worker 段用于区分同 apiKey 下的不同 worker) | 命名空间内任意角色 |
+| `u.<K>.worker.<id>.wf.<instanceId>.stream` | **工作流实例事件实时增量**(workflow 插件经 `EventSink.fanout` 广播扇出,§7.13 广播形态;帧 `event`=实例事件名、`payload` 与 `workflow.instance.events` RPC 应答条目同形 `{seq,ts,event,payload}`,seq 字符串雪花且单实例内严格递增)。**无 subscriber 通知/无背压机**——低频元数据事件走广播即达,历史/断线补齐走 `workflow.instance.events` 拉取,前端按 seq 去重合流;worker 段语义同 tasks | 命名空间内任意角色 |
 | `u.<K>.term.<termId>.stream` | **内嵌终端实时输出**(worker 定向推送：event `term.output` payload `{data: base64}`；进程退出推 `term.exited`)。**不加 worker 段**:`termId` 由前端生成且 `term.open` RPC 已按 worker 定向,一台 worker 的 PTY 只对它自己可见,不构成串台 | 命名空间内任意角色 |
 
 > **stream 订阅通知**:前端 sub/unsub `u.<K>.worker.<id>.task.<taskId>.stream` 时,hub 发 `subscriber.join/subscriber.leave`(`payload={sessionId, taskId}`)——这是无状态 fire-and-forget 通知(hub 不存订阅簿),worker 据此按 (sessionId,taskId) 建/销 DataPusher(§7.13)。投递目标:**频道名带 worker 段时按 `ConnectionRegistry.findWorker(ownerKey, workerId)` 只投那一台**(worker 的 clientId 即其 workerId,§4.4);频道名无 worker 段时退化为投给该命名空间全部在线 worker。hub 只做「按频道名寻址连接」这一路由,不解释任务语义(§6.1 零状态红线不变)。
@@ -251,7 +252,7 @@ worker 端 `RpcDispatcher` 注册方法;应答回**请求来源连接**的 `evt`
 | `search` | **统一搜索入口(破坏性变更:取代已移除的 `fs.search`/`fs.find`/`task.search`,不保留兼容壳)**——**核心零类型感知**:只「遍历 `SearchProviderRegistry`(可选按 `kinds` 过滤)→ 触发 provider → 聚合」,类型清单完全来自注册表;入参仅 `workspace`(必带,沙箱 jailed)/`pattern`(核心不解释)/`kinds?`/`filters?`(**不透明参数袋**,key 为 `${kind}.${field}`,核心绝不解释内容);内置 `file-content`/`file-name`/`task` 三引擎均为 `SearchProvider`,与插件 provider 同权(§8.5);大结果复用 `rpc.data` 分批 |
 | `git.status` / `log` / `diff` / `show` / `commit` / `pull` / `push` / `discard` / `init` / `clone` / `remote.add` / `remote.list` | 工作区 git 快操作(git 插件注册,必带 workspace);由 `NativeGit` 调宿主原生 git argv 直传执行(§7.12);大型迁移(批量 checkout / 大仓库迁移)建为 Task,进度走任务流 |
 | `git.credential.save` | 保存 git 远端凭证(AES-GCM 加密落盘,§7.12;只写不读回) |
-| `workflow.*` | 工作流插件自注册的方法族:`def.list`/`def.get`/`def.save`/`def.delete`/`def.export`/`def.import`、`run`、`instance.list`/`instance.get`/`instance.runLog`/`instance.events`/`instance.cancel`/`instance.delete`/`instance.decide`;**写操作必带 workspace 参数**(同 `task.run` 纪律);数据住 `workspaces/<id>/workflows/`(§7.15),实例事件补齐走 `instance.events` 长轮询(插件自持事件日志,不占任务流频道) |
+| `workflow.*` | 工作流插件自注册的方法族:`def.list`/`def.get`/`def.save`/`def.delete`/`def.export`/`def.import`、`run`、`instance.list`/`instance.get`/`instance.runLog`/`instance.events`/`instance.cancel`/`instance.delete`/`instance.decide`;**写操作必带 workspace 参数**(同 `task.run` 纪律);数据住 `workspaces/<id>/workflows/`(§7.15);实例事件混合模型:实时增量由插件扇出到实例流频道(§5.2),历史/断线补齐走 `instance.events` 拉取,前端按 seq 去重合流(§7.13 广播形态) |
 | `slash.list` / `select` / `cancel` / `taskTokens.apply` / `taskTokens.list` | 斜杠命令清单与选中/取消、任务级 token 应用与现值拉取(§7.16) |
 | `mention.query` | `@` 文件搜索(后端子序列模糊匹配,独立于统一 `search`,不属搜索面板) |
 | `rpc.cancel` | 取消进行中的长 RPC(Future.cancel) |
@@ -580,6 +581,8 @@ wsl-bwrap 后端的 seccomp 内核级提权拦截已随 bwrap 后端删除而移
 - `mode='rounds'`:从尾部定位最近 count 个轮次起点,返回覆盖完整轮次的事件段(打开/重连秒拉尾段;只按 count 定位、忽略 beforeSeq);`mode='events'`:按 afterSeq(增量)/beforeSeq(上滚)+ limit 精确窗口,同给 = 开区间查询;`waitMs>0` 无增量时挂起虚拟线程等新事件(长轮询,与 askuser 同款底座)。
 - 回放只含持久事件(瞬态从未落盘):`message` 事件自带整轮 thinking + toolCalls,由它直接组装完成态。
 - **出网投影 + 分页游标**(4 出网口之一):应答经 `EgressProjector` 投影后下发(§5.3);字符串字段 **`nextSeq`** = **未过滤口径**的推进游标(批尾原始 seq,避免「过滤后空批 = 取完」的误判);`hasMore` 保持 raw 语义,`firstSeq`/`lastSeq` 同为 raw 口径且**一律字符串携带**——雪花大数以 JSON 数值下发会在 JS 侧丢精度,不得再作游标或比较键。
+
+**工作流实例事件 = 同一混合模型的广播形态**(频道 `u.<K>.worker.<id>.wf.<instanceId>.stream`,§5.2):实时增量由 workflow 插件在 events.jsonl **成功落盘后**经 `EventSink.fanout` 扇出(帧 event=实例事件名,payload 与 `workflow.instance.events` 应答条目同形);历史/断线补齐走该 RPC 拉取,前端先订阅后回放、按 seq(单实例内严格递增)去重合流。与任务流的两点刻意差异:① **无 subscriber 通知、无背压机**——实例事件是低频元数据(每节点运行数条),广播扇出(hub 只投已订阅连接)即达,不值得 DataPusher 的定向推送器与 credit 窗口;② **无出网投影**——插件事件无瞬态/过滤语义,落盘即出网。订阅恢复(重连/可见性/worker 集变化)由前端宿主统一重发并通知插件重拉校准;漏帧以磁盘事实源 + 拉取补齐(推送是无背压广播,不做跳号检测)。
 
 ### 7.14 子 Agent(进程内,模型工具)
 

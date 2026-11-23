@@ -39,6 +39,12 @@ import { workspaceRegistry } from '@/hub/workspaceRegistry'
 import { domainEventBus, DOMAIN_EVENTS } from '@/events/eventBus'
 import { workspaceGateway } from '@/platform/fs/workspaceGateway'
 import { pluginDispatcher } from './PluginDispatcher'
+import {
+  onInstanceStreamEvent,
+  onResubscribed,
+  subInstanceStream,
+  unsubInstanceStream,
+} from './pluginStreamBridge'
 import type {
   PluginContext,
   PluginModule,
@@ -220,6 +226,13 @@ function createPluginSdk(workerId: string, workspaceId: string, workspaceRoot: s
   return {
     rpc: async (targetWorkerId: string, method: string, params?: unknown) => {
       return hubSession.rpcTo(targetWorkerId || resolvePluginWorkerId(workerId), method, params as Record<string, unknown>)
+    },
+    // stream 频道订阅面：动态实例流频道的期望订阅注册表 + 帧桥接（pluginStreamBridge）。
+    stream: {
+      subInstanceStream: subInstanceStream,
+      unsubInstanceStream: unsubInstanceStream,
+      onInstanceStreamEvent: (handler) => onInstanceStreamEvent(handler),
+      onResubscribed: (handler) => onResubscribed(handler),
     },
     workspace: {
       id: workspaceId,

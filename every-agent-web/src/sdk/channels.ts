@@ -110,6 +110,14 @@ export const channels = {
   taskStream: (k: string, workerId: string, taskId: string) =>
     `u.${k}.worker.${workerId}.task.${taskId}.stream`,
   /**
+   * 工作流实例流频道(worker 段必填,与 Java plugin-api 的 Channels.workflowStream 逐字对齐):
+   * workflow 插件把实例事件(node.started / wf.status / …)经 EventSink.fanout 扇出到此,
+   * payload 与 workflow.instance.events RPC 应答条目同形;前端打开实例页订阅,
+   * 历史/断线补齐走 instance.events RPC 拉取按 seq 去重合流(§7.13 广播形态)。
+   */
+  workflowStream: (k: string, workerId: string, instanceId: string) =>
+    `u.${k}.worker.${workerId}.wf.${instanceId}.stream`,
+  /**
    * worker 级插件通知频道(worker 段必填,与 Java plugin-api 的 Channels.plugins 逐字对齐):
    * 插件 worker 侧把非任务域的数据变更以 plugin.<pluginId>.<name> 事件扇出到此,
    * 宿主桥接为领域事件 plugin-worker-event(架构 §5.2)。

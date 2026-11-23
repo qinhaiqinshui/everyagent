@@ -425,4 +425,30 @@ class WorkflowStoreTest {
                 "INSTANCE:DELETED:" + WS_A + ":" + meta.id(),
                 "DEFINITION:DELETED:" + WS_A + ":" + created.id());
     }
+
+    // ── 实例事件监听（实例流频道扇出的信号源） ──
+
+    @Test
+    void instanceEventListenerFiresOnAppendInOrderAndSurvivesListenerErrors() {
+        InstanceMeta meta = store.createInstance(store.saveDefinition(WS_A, sampleDef()), Map.of());
+        List<String> seen = new java.util.ArrayList<>();
+        store.addInstanceEventListener((ws, wiId, line) ->
+                seen.add(ws + ":" + wiId + ":" + line.event() + ":" + line.seq()));
+        // 先注册一个会抛错的监听器：异常被吞掉，不影响存储路径与后续监听器
+        store.addInstanceEventListener((ws, wiId, line) -> {
+            throw new IllegalStateException("监听器故意抛错");
+        });
+
+        EventLine first = store.appendEvent(WS_A, meta.id(), "node.started", Json.obj().put("nodeId", "wn_a"));
+        EventLine second = store.appendEvent(WS_A, meta.id(), "wf.status", Json.obj().put("status", "running"));
+
+        assertThat(seen).containsExactly(
+                WS_A + ":" + meta.id() + ":node.started:" + first.seq(),
+                WS_A + ":" + meta.id() + ":wf.status:" + second.seq());
+        // 事件确实落盘（监听器在成功落盘后回调；createInstance 自带的 wf.created 也应在盘）
+        assertThat(store.readEvents(WS_A, meta.id(), 0, 10)).extracting(EventLine::seq)
+                .endsWith(first.seq(), second.seq());
+        // seq 单实例内严格递增（前端去重合流的依赖）
+        assertThat(Long.parseLong(second.seq())).isGreaterThan(Long.parseLong(first.seq()));
+    }
 }

@@ -88,6 +88,9 @@ public final class WorkflowStore {
     /** 变更监听器（定义/实例落盘+索引变更后的回调；activate 时由插件接线到 stream 频道扇出）。 */
     private final List<ChangeListener> changeListeners = new CopyOnWriteArrayList<>();
 
+    /** 实例事件监听器（events.jsonl 追加成功后的回调；activate 时由插件接线到实例流频道扇出）。 */
+    private final List<InstanceEventListener> instanceEventListeners = new CopyOnWriteArrayList<>();
+
     /** 变更种类：定义 / 实例。 */
     public enum ChangeKind { DEFINITION, INSTANCE }
 
@@ -106,6 +109,18 @@ public final class WorkflowStore {
         void onChanged(ChangeKind kind, ChangeAction action, String workspaceId, String id);
     }
 
+    /**
+     * 实例事件追加监听（实例流频道扇出的信号源）：events.jsonl 行<b>成功落盘且内存尾部已
+     * 更新后</b>在 appendEvent 的实例锁内回调——同实例事件按落盘序严格有序，消费方无需重排。
+     *
+     * <p>监听器抛出的异常被吞掉只记日志——扇出绝不反向影响存储路径；实现须轻量非阻塞
+     * （fanout 的 pub 非阻塞、出站队列满即丢帧，磁盘日志才是事实源）。
+     */
+    @FunctionalInterface
+    public interface InstanceEventListener {
+        void onEvent(String workspaceId, String instanceId, EventLine line);
+    }
+
     public WorkflowStore(WorkspaceManager workspaces) {
         this.workspaces = workspaces;
         this.systemDir = workspaces.systemDir();
@@ -115,6 +130,13 @@ public final class WorkflowStore {
     public void addChangeListener(ChangeListener listener) {
         if (listener != null) {
             changeListeners.add(listener);
+        }
+    }
+
+    /** 注册实例事件监听器（无注销：生命周期与插件一致）。 */
+    public void addInstanceEventListener(InstanceEventListener listener) {
+        if (listener != null) {
+            instanceEventListeners.add(listener);
         }
     }
 
@@ -635,7 +657,8 @@ public final class WorkflowStore {
     /**
      * 追加实例事件（单 writer 串行：实例内一把小锁；seq=SnowflakeId.next() 字符串化，
      * <b>取号在锁内</b>——events.jsonl 的文件序与 seq 序一致，afterSeq 游标无回读死角）。
-     * 同时维护内存尾部（{@link #tailEvents}）。
+     * 同时维护内存尾部（{@link #tailEvents}）并通知 {@link InstanceEventListener}
+     * （实例流频道扇出；仍在锁内回调 = 同实例推送序与落盘序一致）。
      */
     public EventLine appendEvent(String workspaceId, String instanceId, String event, JsonNode payload) {
         String k = key(workspaceId, instanceId);
@@ -656,7 +679,23 @@ public final class WorkflowStore {
             while (tail.size() > TAIL_MAX) {
                 tail.pollFirst();
             }
+            notifyInstanceEvent(workspaceId, instanceId, line);
             return line;
+        }
+    }
+
+    /** 实例事件扇出通知（成功落盘后调用；监听器异常吞掉只记日志，不影响存储路径）。 */
+    private void notifyInstanceEvent(String workspaceId, String instanceId, EventLine line) {
+        if (instanceEventListeners.isEmpty()) {
+            return;
+        }
+        for (InstanceEventListener listener : instanceEventListeners) {
+            try {
+                listener.onEvent(workspaceId, instanceId, line);
+            } catch (RuntimeException e) {
+                log.warn("[workflow] 实例事件监听器抛错(instance={} event={}): {}",
+                        instanceId, line.event(), e.toString());
+            }
         }
     }
 

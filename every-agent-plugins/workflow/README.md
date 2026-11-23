@@ -49,8 +49,10 @@ workflow 插件
 - **RPC 面**（`rpc/`）：`workflow.*` 14 方法——`def.list`/`def.get`/`def.save`/`def.delete`/
   `def.export`/`def.import`、`run`、`instance.list`/`instance.get`/`instance.runLog`/
   `instance.events`/`instance.cancel`/`instance.delete`/`instance.decide`；**写操作必带
-  workspace 参数**（同 `task.run` 纪律）；实例事件补齐走 `instance.events` 长轮询
-  （插件自持事件日志，不占任务流频道）。
+  workspace 参数**（同 `task.run` 纪律）；实例事件混合模型：实时增量经 `EventSink.fanout`
+  扇出到实例流频道 `u.<K>.worker.<wid>.wf.<wiId>.stream`（store 落盘后通知监听器，
+  同实例锁内回调=推送序与落盘序一致），历史/断线补齐走 `instance.events` RPC 拉取，
+  前端先订阅后回放、按 seq 去重合流。
 - **hidden 五工具**（`WorkflowToolProvider` + `skill/workflow-tools/skill.md`）：
   `workflow_create/get/update/delete/list`，只服务普通任务的 AI（工作流自己的 agent
   不携带，`appliesTo` 排除），模型经 skill 文档按名调用。

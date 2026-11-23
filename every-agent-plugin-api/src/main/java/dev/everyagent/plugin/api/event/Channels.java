@@ -52,6 +52,24 @@ public final class Channels {
     }
 
     /**
+     * 工作流实例流频道(worker 段必填),形如 {@code u.<K>.worker.<id>.wf.<instanceId>.stream}。
+     *
+     * <p>实例事件的实时增量由 workflow 插件经 {@code EventSink.fanout} 扇出到本频道(hub 只投
+     * 已订阅连接);历史/断线补齐走 {@code workflow.instance.events} RPC 拉取,前端按 seq
+     * (字符串雪花,单实例内严格递增)去重合流——同任务流混合模型的广播形态(§7.13)。帧
+     * {@code event} = 实例事件名(node.started / wf.status / …),{@code payload} 与
+     * instance.events RPC 应答条目同形({@code {seq,ts,event,payload}})。
+     *
+     * <p>与 tasks 频道同理必须带 worker 段:一台 worker 的实例事件只进自己的频道,不混进
+     * 同一 apiKey 下另一台 worker 的前端视图(§4.3/§5.2)。实例事件为低频元数据(每节点运行
+     * 数条),走广播扇出而非 DataPusher 定向推送——无背压/credit 机,落盘永不阻塞、丢帧由
+     * 磁盘事实源 + 拉取补齐兜底。
+     */
+    public static String workflowStream(String k, String workerId, String instanceId) {
+        return "u." + k + ".worker." + workerId + ".wf." + instanceId + ".stream";
+    }
+
+    /**
      * worker 级插件通知频道(worker 段必填),形如 {@code u.<K>.worker.<id>.plugin}(架构 §5.2)。
      *
      * <p>插件把<b>非任务域</b>的数据变更以 {@code plugin.<pluginId>.<name>} 事件扇出到此
