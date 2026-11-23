@@ -55,7 +55,10 @@ export const workflowEditorTabType: UiWorkspaceTabTypeDefinition = {
   getSidebarActivityId: () => 'workflow',
 }
 
-// ─── workflow-instance 标签类型（占位注册；步骤 10 填充实现） ───────────────
+// ─── workflow-instance 标签类型（实例运行页，步骤 10） ─────────────────────
+
+/** 实例运行页面板（懒加载：画布/日志视图较重，不拖慢插件初始激活）。 */
+const LazyInstancePanel = createLazyRouteComponent(() => import('./panels/InstancePanel'))
 
 export const workflowInstanceTabType: UiWorkspaceTabTypeDefinition = {
   tabTypeKey: WORKFLOW_INSTANCE_TAB_TYPE,
@@ -63,24 +66,10 @@ export const workflowInstanceTabType: UiWorkspaceTabTypeDefinition = {
   renderTab: (tab: PluginWorkspaceTab, _ctx: WorkspaceTabRenderContext): ReactNode => {
     const data = tabData(tab, WORKFLOW_INSTANCE_TAB_TYPE)
     return (
-      <div
-        style={{
-          height: '100%',
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
-          gap: 8,
-          background: 'var(--bg-primary, #0b0d12)',
-          color: 'var(--text-muted, #6f7a8b)',
-          fontSize: 13,
-          lineHeight: 1.8,
-        }}
-      >
-        <div style={{ fontWeight: 600, color: 'var(--text-secondary, #aab3c2)' }}>实例运行页（步骤 10 落地）</div>
-        <div>instanceId：{data.instanceId || '（未携带）'}</div>
-        <div>将复用 WorkflowCanvas（mode=readonly，节点按状态着色）+ instance.events 长轮询 + 决策按钮。</div>
-      </div>
+      <LazyInstancePanel
+        instanceId={data.instanceId ?? ''}
+        workspaceId={data.workspaceId || undefined}
+      />
     )
   },
   renderIcon: () => <WorkflowIcon size={15} />,

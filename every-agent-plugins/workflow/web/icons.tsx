@@ -325,3 +325,35 @@ export function RefreshIcon({ size = 16, style, className, color }: IconProps) {
     </Svg>
   )
 }
+
+// ── 实例运行页（步骤 10） ─────────────────────────────────────────────────
+
+/** 运行日志/时间线（实例页「运行图 / 运行日志」视图切换）。 */
+export function LogIcon({ size = 16, style, className, color }: IconProps) {
+  return (
+    <Svg size={size} style={style} className={className} color={color}>
+      <path d="M2.8 3.6H5M2.8 8H5M2.8 12.4H5" />
+      <path d="M7.2 3.6H13.2M7.2 8H13.2M7.2 12.4H10.4" />
+    </Svg>
+  )
+}
+
+/** 重试（waiting-user 决策按钮）。 */
+export function RetryIcon({ size = 16, style, className, color }: IconProps) {
+  return (
+    <Svg size={size} style={style} className={className} color={color}>
+      <path d="M3.2 6.2A5.3 5.3 0 1 1 2.9 9.8" />
+      <path d="M2.9 3.2L3.2 6.4L6.4 6" />
+    </Svg>
+  )
+}
+
+/** 跳过（waiting-user 决策按钮）。 */
+export function SkipIcon({ size = 16, style, className, color }: IconProps) {
+  return (
+    <Svg size={size} style={style} className={className} color={color}>
+      <path d="M3.4 4L7.6 8L3.4 12" />
+      <path d="M8.4 4L12.6 8L8.4 12" />
+    </Svg>
+  )
+}
