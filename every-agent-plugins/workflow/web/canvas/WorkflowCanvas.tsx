@@ -3,14 +3,20 @@
  *
  * 能力（数据驱动，位置即 NodeDef.x/y——位置存定义）：
  * - 节点矩形（类型图标 + 标题 + 简略信息）+ 贝塞尔边（from 右锚点 → to 左锚点）；
- * - 选中态（节点/边高亮）、背景点击取消选中；
- * - mode='edit'：节点拖拽（mousedown→window mousemove 改 x/y）、从右锚点拖出连线
- *   到目标节点（mouseup 命中测试）、Delete 删除由宿主面板处理（本组件只回调选中）；
- * - mode='readonly'：禁一切交互（实例视图复用基座，步骤 10）；
+ * - 选中态（节点/边高亮）、背景点按取消选中；
+ * - mode='edit'：节点拖拽（pointerdown→capture→pointermove 改 x/y）、从右锚点拖出
+ *   连线到目标节点（pointerup 命中测试）、Delete 删除由宿主面板处理（本组件只回调
+ *   选中）；触屏可用——拖拽目标挂 touch-action:none 阻断浏览器滚动抢占手势，
+ *   背景仍可单指平移画布（滚动容器原生滚动）；
+ * - mode='readonly'：禁一切编辑交互（实例视图复用基座，步骤 10；tap 选中可用）；
  * - 运行态着色/动画：node.status → renderStates 色彩（TaskStatusDot 色彩语言）。
  *
  * 坐标系：svg 与定义坐标 1:1（无缩放），外层 div 滚动平移；client → svg 坐标经
  * getBoundingClientRect 换算（无 viewBox 缩放故为线性平移）。
+ *
+ * 指针实现：pointerdown 上对 svg setPointerCapture，后续 pointermove/up/cancel
+ * 挂在 svg 的 React props 上（capture 重定向后事件仍派发到 svg 并冒泡）——
+ * 不再用 window mousemove/mouseup（触屏不可用，且多画布实例并存时全局监听易串扰）。
  */
 import React from 'react'
 import { nodeTypeGlyph } from '../icons'
@@ -80,6 +86,8 @@ function ensureCanvasStyles(): void {
 .wf-node-hit { cursor: grab; }
 .wf-node-hit:active { cursor: grabbing; }
 .wf-anchor-out { cursor: crosshair; }
+/* 触屏：编辑态节点/锚点为拖拽手势目标，阻断浏览器滚动抢占；背景保持单指平移画布。 */
+.wf-node-hit, .wf-anchor-out { touch-action: none; -webkit-user-select: none; user-select: none; }
 @keyframes wf-status-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 .wf-status-running { animation: wf-status-pulse 1.1s ease-in-out infinite; }
 @keyframes wf-edge-flow { to { stroke-dashoffset: -14; } }
@@ -105,10 +113,10 @@ export default function WorkflowCanvas({
   ensureCanvasStyles()
   const svgRef = React.useRef<SVGSVGElement | null>(null)
   const scrollRef = React.useRef<HTMLDivElement | null>(null)
-  /** 拖拽态（window listener 闭包持有，不进 state 防重渲染抖动）。 */
-  const dragRef = React.useRef<{ id: string; dx: number; dy: number } | null>(null)
+  /** 拖拽态（pointer capture 期间由 svg 的 move/up/cancel 处理器消费，不进 state 防重渲染抖动）。 */
+  const dragRef = React.useRef<{ id: string; dx: number; dy: number; pointerId: number } | null>(null)
   /** 连线态源节点（pendingEdge state 只为渲染预览线）。 */
-  const connectRef = React.useRef<{ from: string } | null>(null)
+  const connectRef = React.useRef<{ from: string; pointerId: number } | null>(null)
   const [pendingEdge, setPendingEdge] = React.useState<{ from: string; x: number; y: number } | null>(null)
   const [hoverAnchor, setHoverAnchor] = React.useState<string | null>(null)
 
@@ -127,6 +135,19 @@ export default function WorkflowCanvas({
     return { x: clientX - rect.left, y: clientY - rect.top }
   }, [])
 
+  /** pointerdown 上捕获指针到 svg：后续 move/up/cancel 持续派发（触屏手指移出元素不丢事件）。 */
+  const capturePointer = React.useCallback((event: React.PointerEvent): boolean => {
+    const svg = svgRef.current
+    if (!svg) return false
+    try {
+      svg.setPointerCapture(event.pointerId)
+    } catch {
+      // 指针已释放等异常：放弃捕获，交互自然终止（up 处理器空转一次）。
+      return false
+    }
+    return true
+  }, [])
+
   // 可视中心回写：palette「新节点落画布中心」的落点依据（滚动容器视口几何）。
   React.useLayoutEffect(() => {
     const el = scrollRef.current
@@ -139,63 +160,76 @@ export default function WorkflowCanvas({
   })
 
   /** 节点主体按下：选中 + （edit）启动拖拽。 */
-  const handleNodeMouseDown = (event: React.MouseEvent, node: CanvasNodeView) => {
+  const handleNodePointerDown = (event: React.PointerEvent, node: CanvasNodeView) => {
     if (event.button !== 0) return
     onSelect({ kind: 'node', id: node.id })
     if (!editable || !onNodeMove) return
     event.preventDefault()
+    if (!capturePointer(event)) return
     const p = toSvgPoint(event.clientX, event.clientY)
-    dragRef.current = { id: node.id, dx: p.x - node.x, dy: p.y - node.y }
-    const onMove = (ev: MouseEvent) => {
-      const d = dragRef.current
-      if (!d) return
-      const q = toSvgPoint(ev.clientX, ev.clientY)
-      onNodeMove(d.id, Math.max(0, Math.round(q.x - d.dx)), Math.max(0, Math.round(q.y - d.dy)))
-    }
-    const onUp = () => {
-      dragRef.current = null
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup', onUp)
-    }
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
+    dragRef.current = { id: node.id, dx: p.x - node.x, dy: p.y - node.y, pointerId: event.pointerId }
   }
 
-  /** 右锚点按下：启动连线（预览线跟随光标，mouseup 命中目标节点即回调）。 */
-  const handleAnchorMouseDown = (event: React.MouseEvent, node: CanvasNodeView) => {
+  /** 右锚点按下：启动连线（预览线跟随指针，pointerup 命中目标节点即回调）。 */
+  const handleAnchorPointerDown = (event: React.PointerEvent, node: CanvasNodeView) => {
     if (!editable || !onCreateEdge || event.button !== 0) return
     event.preventDefault()
     event.stopPropagation()
-    connectRef.current = { from: node.id }
+    if (!capturePointer(event)) return
+    connectRef.current = { from: node.id, pointerId: event.pointerId }
     const p = toSvgPoint(event.clientX, event.clientY)
     setPendingEdge({ from: node.id, x: p.x, y: p.y })
-    const onMove = (ev: MouseEvent) => {
-      const c = connectRef.current
-      if (!c) return
-      const q = toSvgPoint(ev.clientX, ev.clientY)
+  }
+
+  /** svg 上的拖拽/连线移动（capture 重定向后仍冒泡到 svg 的 React props）。 */
+  const handleSvgPointerMove = (event: React.PointerEvent) => {
+    const d = dragRef.current
+    if (d && onNodeMove && d.pointerId === event.pointerId) {
+      const q = toSvgPoint(event.clientX, event.clientY)
+      onNodeMove(d.id, Math.max(0, Math.round(q.x - d.dx)), Math.max(0, Math.round(q.y - d.dy)))
+    }
+    const c = connectRef.current
+    if (c && c.pointerId === event.pointerId) {
+      const q = toSvgPoint(event.clientX, event.clientY)
       setPendingEdge({ from: c.from, x: q.x, y: q.y })
     }
-    const onUp = (ev: MouseEvent) => {
-      const c = connectRef.current
+  }
+
+  /** 拖拽/连线收口（连线做目标命中测试；去重/自环由命中排除）。 */
+  const handleSvgPointerUp = (event: React.PointerEvent) => {
+    const d = dragRef.current
+    if (d && d.pointerId === event.pointerId) {
+      dragRef.current = null
+    }
+    const c = connectRef.current
+    if (c && c.pointerId === event.pointerId) {
       connectRef.current = null
       setPendingEdge(null)
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup', onUp)
-      if (!c) return
-      const q = toSvgPoint(ev.clientX, ev.clientY)
-      // 命中测试：点落在某节点矩形内（非源节点、且不与既有同向边重复）。
-      const target = nodes.find(
-        n => n.id !== c.from
-          && q.x >= n.x && q.x <= n.x + NODE_W
-          && q.y >= n.y && q.y <= n.y + NODE_H,
-      )
-      const duplicated = target && edges.some(e => e.from === c.from && e.to === target.id)
-      if (target && !duplicated) {
-        onCreateEdge(c.from, target.id)
+      if (onCreateEdge) {
+        const q = toSvgPoint(event.clientX, event.clientY)
+        // 命中测试：点落在某节点矩形内（非源节点、且不与既有同向边重复）。
+        const target = nodes.find(
+          n => n.id !== c.from
+            && q.x >= n.x && q.x <= n.x + NODE_W
+            && q.y >= n.y && q.y <= n.y + NODE_H,
+        )
+        const duplicated = target && edges.some(e => e.from === c.from && e.to === target.id)
+        if (target && !duplicated) {
+          onCreateEdge(c.from, target.id)
+        }
       }
     }
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
+  }
+
+  /** 指针中断（触屏来电/手势被系统接管等）：静默终止交互，不留半截预览线。 */
+  const handleSvgPointerCancel = (event: React.PointerEvent) => {
+    const d = dragRef.current
+    if (d && d.pointerId === event.pointerId) dragRef.current = null
+    const c = connectRef.current
+    if (c && c.pointerId === event.pointerId) {
+      connectRef.current = null
+      setPendingEdge(null)
+    }
   }
 
   // ── 边几何 ──
@@ -225,8 +259,8 @@ export default function WorkflowCanvas({
       className={`wf-canvas-scroll${className ? ` ${className}` : ''}`}
       style={style}
       ref={scrollRef}
-      onMouseDown={(e) => {
-        // 背景空白处点击：取消选中（拖拽滚动条不触发——mousedown 目标是 svg 才算）
+      onPointerDown={(e) => {
+        // 背景空白处点按：取消选中（滚动条拖动/背景平移不触发——target 是 svg 空白才算）
         if (e.target === svgRef.current || (e.target as Element).classList?.contains('wf-canvas-surface')) {
           onSelect(null)
         }
@@ -238,6 +272,9 @@ export default function WorkflowCanvas({
         width={CANVAS_W}
         height={CANVAS_H}
         style={{ display: 'block' }}
+        onPointerMove={handleSvgPointerMove}
+        onPointerUp={handleSvgPointerUp}
+        onPointerCancel={handleSvgPointerCancel}
       >
         <defs>
           {/* 箭头 marker 按 stroke 色预置（marker 不吃引用方 CSS 继承）。 */}
@@ -278,14 +315,14 @@ export default function WorkflowCanvas({
           const markerId = selected ? 'wf-arrow-sel' : visual.markerId
           return (
             <g key={edge.id}>
-              {/* 宽透明命中线： easier click target */}
+              {/* 宽透明命中线： easier click target（tap 同样命中） */}
               <path
                 d={d}
                 fill="none"
                 stroke="transparent"
                 strokeWidth={16}
                 style={{ pointerEvents: 'stroke', cursor: editable ? 'pointer' : 'default' }}
-                onMouseDown={(e) => {
+                onPointerDown={(e) => {
                   if (e.button !== 0) return
                   e.stopPropagation()
                   onSelect({ kind: 'edge', id: edge.id })
@@ -350,7 +387,7 @@ export default function WorkflowCanvas({
               key={node.id}
               transform={`translate(${node.x}, ${node.y})`}
               className={editable ? 'wf-node-hit' : undefined}
-              onMouseDown={(e) => handleNodeMouseDown(e, node)}
+              onPointerDown={(e) => handleNodePointerDown(e, node)}
             >
               {/* 选中光环 */}
               {selected ? (
@@ -426,24 +463,35 @@ export default function WorkflowCanvas({
                   style={{ fill: visual.badgeFill, pointerEvents: 'none' }}
                 />
               ) : null}
-              {/* 右侧出锚点（edit 限定；hover 加深） */}
+              {/* 右侧出锚点（edit 限定；hover/触按加深；外层透明大圆扩触屏命中区） */}
               {editable ? (
-                <circle
+                <g
                   className="wf-anchor-out"
-                  cx={NODE_W}
-                  cy={NODE_H / 2}
-                  r={hoverAnchor === node.id ? 6 : 4.5}
-                  style={{
-                    fill: hoverAnchor === node.id
-                      ? 'var(--accent-blue, #61a5ff)'
-                      : 'var(--bg-secondary, #11141b)',
-                    stroke: 'var(--accent-blue, #61a5ff)',
-                    strokeWidth: 1.5,
-                  }}
-                  onMouseEnter={() => setHoverAnchor(node.id)}
-                  onMouseLeave={() => setHoverAnchor(cur => (cur === node.id ? null : cur))}
-                  onMouseDown={(e) => handleAnchorMouseDown(e, node)}
-                />
+                  onPointerEnter={() => setHoverAnchor(node.id)}
+                  onPointerLeave={() => setHoverAnchor(cur => (cur === node.id ? null : cur))}
+                  onPointerDown={(e) => handleAnchorPointerDown(e, node)}
+                >
+                  <circle
+                    cx={NODE_W}
+                    cy={NODE_H / 2}
+                    r={hoverAnchor === node.id ? 6 : 4.5}
+                    style={{
+                      fill: hoverAnchor === node.id
+                        ? 'var(--accent-blue, #61a5ff)'
+                        : 'var(--bg-secondary, #11141b)',
+                      stroke: 'var(--accent-blue, #61a5ff)',
+                      strokeWidth: 1.5,
+                      pointerEvents: 'none',
+                    }}
+                  />
+                  <circle
+                    cx={NODE_W}
+                    cy={NODE_H / 2}
+                    r={14}
+                    fill="transparent"
+                    style={{ pointerEvents: 'all' }}
+                  />
+                </g>
               ) : null}
               {/* 左侧入锚点（视觉提示，非交互） */}
               {editable ? (

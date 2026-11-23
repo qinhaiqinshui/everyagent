@@ -41,6 +41,7 @@ import {
 import SidebarScrollArea from '../SidebarScrollArea'
 import { RowActions } from '../Menu'
 import { openRunDialog } from './RunDialog'
+import { useIsMobile } from '../useIsMobile'
 import {
   ChevronDownIcon,
   DeleteIcon,
@@ -404,6 +405,11 @@ interface WorkspaceOption {
 
 export default function SidebarPanel() {
   const ctx = getPluginContext()
+  // ── 移动端（≤768px）：触控目标加大；工作区下拉 16px 防 iOS 聚焦自动放大。
+  const isMobile = useIsMobile()
+  const toolbarBtnStyle = isMobile ? { ...toolbarButtonStyle, width: 30, height: 30, minWidth: 30 } : toolbarButtonStyle
+  const chevronBtnStyle = isMobile ? { ...groupChevronButtonStyle, padding: 6 } : groupChevronButtonStyle
+  const wsSelectStyle = isMobile ? { ...selectStyle, fontSize: 16, padding: '5px 6px' } : selectStyle
 
   const [workspaces, setWorkspaces] = React.useState<WorkspaceOption[]>([])
   const [selectedWs, setSelectedWs] = React.useState('')
@@ -645,7 +651,7 @@ export default function SidebarPanel() {
   ) => (
     <div style={groupHeaderStyle}>
       <span
-        style={groupChevronButtonStyle}
+        style={chevronBtnStyle}
         title={collapsed ? '展开' : '折叠'}
         role="button"
         aria-expanded={!collapsed}
@@ -668,7 +674,7 @@ export default function SidebarPanel() {
         {/* ── 工具条：工作区过滤 + 刷新（功能项；任务侧边栏无对应物） ── */}
         <div style={toolbarStyle}>
           <select
-            style={selectStyle}
+            style={wsSelectStyle}
             value={selectedWs}
             title="按工作区过滤实例与定义列表"
             onChange={e => setSelectedWs(e.target.value)}
@@ -682,7 +688,7 @@ export default function SidebarPanel() {
           </select>
           <Button
             type="text"
-            style={toolbarButtonStyle}
+            style={toolbarBtnStyle}
             title="立即刷新实例与定义列表"
             aria-label="立即刷新实例与定义列表"
             onClick={() => {
@@ -735,7 +741,7 @@ export default function SidebarPanel() {
             <>
               <Button
                 type="text"
-                style={toolbarButtonStyle}
+                style={toolbarBtnStyle}
                 disabled={runBusy('import')}
                 title={`导入 .workflow.json（落入${selectedWs ? '当前所选工作区' : '插件归属工作区'}）`}
                 aria-label="导入工作流定义"
@@ -745,7 +751,7 @@ export default function SidebarPanel() {
               </Button>
               <Button
                 type="text"
-                style={toolbarButtonStyle}
+                style={toolbarBtnStyle}
                 title="新建工作流定义（打开编辑器空白定义）"
                 aria-label="新建工作流定义"
                 onClick={onNewDefinition}
@@ -1088,4 +1094,10 @@ const confirmFooterStyle: React.CSSProperties = {
  *     显示工作区归属 chip；注册表变化后下拉自动更新、失效选择回落「全部」。
  * 11. 工作区缺失的定义/实例显示「⚠ 工作区缺失」琥珀色标记（数据保留可查看）。
  * 12. 滚动行为与任务侧边栏一致（SidebarScrollArea：滚动时浮现滑块、停后淡出）。
+ *
+ * ── 人工验证清单（移动端，视口 ≤768px）──────────────────────────────────
+ * 13. ⋯ 菜单按钮常显（不依赖 hover），触控目标 ≥30px；菜单条目可点、点外部关闭。
+ * 14. 工作区下拉聚焦不触发 iOS 视口自动放大（16px 字号）；刷新/导入/＋ 按钮与
+ *     组头折叠箭头触控目标加大，点按不误触。
+ * 15. 列表区随 SidebarScrollArea 原生触摸滚动；行点击打开实例页/编辑器。
  */

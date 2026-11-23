@@ -49,6 +49,13 @@ function ensureRunDialogStyles(): void {
 .wf-run-btn-primary { background: var(--accent-green, #41d19c); border-color: var(--accent-green, #41d19c); color: #0b0d12; font-weight: 600; }
 .wf-run-btn-primary:disabled { opacity: 0.55; cursor: not-allowed; }
 .wf-run-missing { font-size: 11.5px; color: var(--accent-amber, #f7bd54); margin: 0; }
+/* ── 移动端（≤768px）：输入 16px 防 iOS 聚焦自动放大；按钮触控目标加大 ── */
+@media (max-width: 768px) {
+  .wf-run-input { font-size: 16px; }
+  .wf-run-body { min-width: min(440px, 92vw); gap: 10px; }
+  .wf-run-btn { padding: 8px 16px; font-size: 13px; }
+  .wf-run-footer { gap: 10px; }
+}
 `
   document.head.appendChild(style)
 }
@@ -292,4 +299,8 @@ export async function openRunDialog(
  *    tab.data.instanceId 正确），侧边栏实例列表出现 running 实例。
  * 4. 模型配置故意填错运行 → 后端 BAD_PARAMS 的 message 完整展示在对话框红框内。
  * 5. Esc / 点遮罩 / 取消 → 对话框关闭，无实例创建。
+ *
+ * ── 人工验证清单（移动端，视口 ≤768px）──────────────────────────────────
+ * 6. 对话框宽度收窄至 92vw 不溢出；变量输入聚焦不触发 iOS 视口自动放大（16px）；
+ *    底部「取消/开始运行」按钮触控目标加大，可单手点达。
  */

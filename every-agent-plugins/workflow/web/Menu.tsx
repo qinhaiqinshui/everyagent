@@ -166,7 +166,8 @@ export function MenuList({
 /**
  * 移动端按钮常显：宿主全局 CSS 在 ≤768px 隐藏 .ui-row-actions（宿主列表行
  * 靠长按手势 openMenu 补救，本复制版无长按句柄），这里对插件侧行菜单放行
- * 常显，保证移动端行操作（取消/删除/运行…）仍可触达。
+ * 常显，保证移动端行操作（取消/删除/运行…）仍可触达；同时放大触发按钮
+ * 满足触控目标（≥30px）。
  */
 const MOBILE_ACTIONS_STYLE_ID = 'wf-row-actions-mobile-style'
 
@@ -177,7 +178,8 @@ function ensureMobileActionsStyles(): void {
   style.textContent = `
 @media (max-width: 768px) {
   .wf-row-actions-visible { opacity: 1 !important; visibility: visible !important; }
-  .wf-row-actions-visible .ui-row-actions__trigger { display: inline-flex; }
+  .wf-row-actions-visible .ui-row-actions__trigger { display: inline-flex; min-width: 30px; min-height: 30px; }
+  .wf-row-actions-visible .ui-menu__item { min-height: 36px; }
 }
 `
   document.head.appendChild(style)

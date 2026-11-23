@@ -486,6 +486,16 @@ function ensureLogStyles(): void {
 .wf-log-exit { font-size: 11px; border-radius: 4px; padding: 0 6px; border: 1px solid var(--text-muted, #6f7a8b); color: var(--text-muted, #6f7a8b); align-self: flex-start; }
 .wf-log-exit--ok { color: var(--accent-green, #41d19c); border-color: var(--accent-green, #41d19c); }
 .wf-log-exit--bad { color: var(--accent-red, #ff6b6b); border-color: var(--accent-red, #ff6b6b); }
+/* ── 移动端（≤768px）：头部说明换行不挤占按钮；列表/卡片内边距收窄 ── */
+@media (max-width: 768px) {
+  .wf-log-head { flex-wrap: wrap; padding: 8px 10px; gap: 6px; }
+  .wf-log-hint { flex-basis: 100%; }
+  .wf-log-btn { padding: 6px 12px; }
+  .wf-log-list { padding: 10px 10px 24px 8px; }
+  .wf-log-card-head { padding: 6px 8px; gap: 6px; }
+  .wf-log-card-body { padding: 6px 8px 8px; }
+  .wf-log-pre { max-height: 220px; }
+}
 `
   document.head.appendChild(style)
 }
@@ -719,4 +729,8 @@ export default function RunLogPanel({ meta, runs, events, loading, loadError, on
  * 8. 取消实例：出现「实例已取消（操作者：user）」行；被中断节点无收口卡片
  *    （其合成卡片保持运行中态——与引擎「中断如实呈现」口径一致）。
  * 9. 终态实例回放：整页历史完整（wf.created → … → wf.done/failed/cancelled 收尾）。
+ *
+ * ── 人工验证清单（移动端，视口 ≤768px）──────────────────────────────────
+ * 10. 头部说明文字换行到按钮下方不遮挡；时间线卡片头/正文收窄内边距仍可读；
+ *     stdout/stderr pre 块可纵向滚动（max-height 220px），长文本自动折行。
  */

@@ -12,6 +12,10 @@
  * 中 = WorkflowCanvas(mode=edit)；右 = 属性面板（选中节点 → 类型特定字段；选中边 →
  * 七种出边条件编辑器）。顶部工具栏：定义名/描述 + 保存（def.save）+ 校验错误列表。
  *
+ * 移动端（≤768px，useIsMobile）：左右栏退化为滑入抽屉（遮罩 + 关闭按钮，工具栏
+ * 「组件/属性」按钮切换）；选中节点/边自动弹右抽屉（palette 添加节点亦然）；
+ * 画布占满全宽。桌面布局不受影响（抽屉样式全部收在 @media 块内）。
+ *
  * 往返自测口径（无插件 web 测试基建，人工验证）：见文件底部注释「人工验证清单」。
  */
 import React from 'react'
@@ -21,6 +25,7 @@ import WorkflowCanvas, {
   type CanvasSelection,
 } from '../canvas/WorkflowCanvas'
 import { getPluginContext, resolveWorkspaceRef } from '../pluginRuntime'
+import { useIsMobile } from '../useIsMobile'
 import {
   WorkflowValidationError,
   conditionLabel,
@@ -40,6 +45,7 @@ import { modelConfigOptionLabel, refreshModelConfigs, type WorkflowModelConfig }
 import {
   AgentIcon,
   AiNodeIcon,
+  CloseIcon,
   CommandNodeIcon,
   ConditionIcon,
   DeleteIcon,
@@ -105,6 +111,34 @@ function ensureEditorStyles(): void {
 .wf-editor-prop-title { font-size: 13px; font-weight: 600; margin: 0 0 2px; }
 .wf-editor-prop-sub { font-size: 11px; color: var(--text-faint, #525c6a); margin: 0 0 10px; }
 .wf-editor-divider { border-top: 1px solid var(--border-light, #1b202a); margin: 12px 0; }
+.wf-editor-mask { position: absolute; inset: 0; background: rgba(4, 6, 10, 0.5); z-index: 24; }
+.wf-editor-drawer-close { display: none; }
+.wf-editor-toolbar-label { white-space: nowrap; }
+/* ── 移动端（≤768px）：左右栏退化滑入抽屉；输入 16px 防 iOS 聚焦自动放大 ── */
+@media (max-width: 768px) {
+  .wf-editor-input, .wf-editor-select, .wf-editor-textarea { font-size: 16px; }
+  .wf-editor-toolbar { padding: 8px 10px; gap: 6px; }
+  .wf-editor-toolbar-label { display: none; }
+  .wf-editor-toolbar .wf-editor-input { flex: 1 1 100%; min-width: 0; }
+  .wf-editor-body { position: relative; }
+  .wf-editor-left, .wf-editor-right {
+    position: absolute; top: 0; bottom: 0; z-index: 30;
+    max-width: 88vw; box-shadow: 0 0 24px rgba(0, 0, 0, 0.4);
+    transition: transform 0.2s ease;
+  }
+  .wf-editor-left { left: 0; width: min(304px, 88vw); border-right: 1px solid var(--border, #2a303b); transform: translateX(-102%); }
+  .wf-editor-right { right: 0; width: min(336px, 92vw); border-left: 1px solid var(--border, #2a303b); transform: translateX(102%); }
+  .wf-editor-left.wf-editor-drawer--open, .wf-editor-right.wf-editor-drawer--open { transform: none; }
+  .wf-editor-drawer-close {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 32px; height: 32px; margin: 0 0 6px; border: none; border-radius: 8px;
+    background: transparent; color: var(--text-muted, #6f7a8b); cursor: pointer; align-self: flex-end;
+  }
+  .wf-editor-drawer-close:active { color: var(--text-primary, #eef1f5); background: var(--bg-hover, #202631); }
+  .wf-editor-icon-btn { width: 32px; height: 32px; }
+  .wf-editor-btn { padding: 6px 12px; }
+  .wf-editor-canvas-hint { left: 8px; right: 8px; }
+}
 `
   document.head.appendChild(style)
 }
@@ -182,6 +216,9 @@ export default function DefinitionEditorPanel({
   const [resolvedWorker, setResolvedWorker] = React.useState(workerId ?? '')
   const [fallbackTokenLabel, setFallbackTokenLabel] = React.useState('')
   const viewportCenterRef = React.useRef<{ x: number; y: number } | null>(null)
+  // ── 移动端抽屉（≤768px）：left=palette/变量/策略/agents，right=属性面板。
+  const isMobile = useIsMobile()
+  const [mobileDrawer, setMobileDrawer] = React.useState<'none' | 'left' | 'right'>('none')
 
   // ── 加载：defGet（新建=空白定义）+ config.get 重拉（插件收不到 config.changed，每次打开重拉）。
   React.useEffect(() => {
@@ -237,6 +274,12 @@ export default function DefinitionEditorPanel({
     setSaveError(null)
   }, [])
 
+  // ── 选中入口（统一置 dirty 之外还驱动移动端抽屉：选中即弹属性面板）。
+  const handleSelect = React.useCallback((sel: CanvasSelection) => {
+    setSelection(sel)
+    if (sel) setMobileDrawer(isMobile ? 'right' : 'none')
+  }, [isMobile])
+
   const patchNode = React.useCallback((id: string, patch: Partial<WorkflowNodeDef>) => {
     updateDef(d => ({ ...d, nodes: (d.nodes ?? []).map(n => (n.id === id ? { ...n, ...patch } : n)) }))
   }, [updateDef])
@@ -268,8 +311,8 @@ export default function DefinitionEditorPanel({
       }
       return { ...d, nodes: [...(d.nodes ?? []), base] }
     })
-    setSelection({ kind: 'node', id })
-  }, [updateDef])
+    handleSelect({ kind: 'node', id })
+  }, [updateDef, handleSelect])
 
   // ── 连线（画布锚点拖出 → 目标节点）：去重/自环由画布命中测试排除，条件缺省 always。
   const createEdge = React.useCallback((from: string, to: string) => {
@@ -278,8 +321,8 @@ export default function DefinitionEditorPanel({
       ...d,
       edges: [...(d.edges ?? []), { id, from, to, condition: { type: 'always' } }],
     }))
-    setSelection({ kind: 'edge', id })
-  }, [updateDef])
+    handleSelect({ kind: 'edge', id })
+  }, [updateDef, handleSelect])
 
   // ── 删除选中（节点连带引用它的边；start 节点禁删——校验器要求唯一 start）。
   const deleteSelection = React.useCallback(() => {
@@ -299,8 +342,8 @@ export default function DefinitionEditorPanel({
     } else {
       updateDef(d => ({ ...d, edges: (d.edges ?? []).filter(e => e.id !== selection.id) }))
     }
-    setSelection(null)
-  }, [selection, def, updateDef, ui])
+    handleSelect(null)
+  }, [selection, def, updateDef, ui, handleSelect])
 
   // Delete 键删除（输入控件聚焦时不拦截）；用 ref 防闭包过期。
   const deleteRef = React.useRef<() => void>(() => {})
@@ -384,25 +427,48 @@ export default function DefinitionEditorPanel({
     <div className="wf-editor-root">
       {/* ── 顶部工具栏 ── */}
       <div className="wf-editor-toolbar">
-        <span style={{ color: 'var(--text-faint, #525c6a)', fontSize: 12 }}>
+        <span
+          className="wf-editor-toolbar-label"
+          style={{ color: 'var(--text-faint, #525c6a)', fontSize: 12 }}
+        >
           {definitionId ? `定义 ${definitionId}` : '新建定义'}
           {resolvedWorker ? ` · ${resolvedWorker}` : ''}
         </span>
         <input
           className="wf-editor-input"
-          style={{ width: 200 }}
+          style={isMobile ? { flex: '1 1 100%' } : { width: 200 }}
           value={def.name}
           placeholder="定义名"
           onChange={e => updateDef(d => ({ ...d, name: e.target.value }))}
         />
         <input
           className="wf-editor-input"
-          style={{ flex: 1, minWidth: 160 }}
+          style={isMobile ? { flex: '1 1 100%' } : { flex: 1, minWidth: 160 }}
           value={def.description ?? ''}
           placeholder="描述（可选）"
           onChange={e => updateDef(d => ({ ...d, description: e.target.value }))}
         />
         {dirty ? <span title="有未保存更改" style={{ color: 'var(--accent-amber, #f7bd54)' }}>●</span> : null}
+        {isMobile ? (
+          <>
+            <button
+              type="button"
+              className={`wf-editor-btn${mobileDrawer === 'left' ? ' wf-editor-btn-primary' : ''}`}
+              title="节点组件与变量/策略/agents（移动端抽屉）"
+              onClick={() => setMobileDrawer(d => (d === 'left' ? 'none' : 'left'))}
+            >
+              组件
+            </button>
+            <button
+              type="button"
+              className={`wf-editor-btn${mobileDrawer === 'right' ? ' wf-editor-btn-primary' : ''}`}
+              title="选中节点/边的属性面板（移动端抽屉）"
+              onClick={() => setMobileDrawer(d => (d === 'right' ? 'none' : 'right'))}
+            >
+              属性
+            </button>
+          </>
+        ) : null}
         <button className="wf-editor-btn wf-editor-btn-primary" onClick={() => void handleSave()} disabled={saving}>
           {saving ? '保存中…' : '保存'}
         </button>
@@ -421,8 +487,18 @@ export default function DefinitionEditorPanel({
       ) : null}
 
       <div className="wf-editor-body">
-        {/* ── 左栏：palette + 变量/策略/agents ── */}
-        <div className="wf-editor-left">
+        {/* ── 移动端抽屉遮罩 ── */}
+        {isMobile && mobileDrawer !== 'none' ? (
+          <div className="wf-editor-mask" onClick={() => setMobileDrawer('none')} />
+        ) : null}
+
+        {/* ── 左栏：palette + 变量/策略/agents（移动端=左滑抽屉） ── */}
+        <div className={`wf-editor-left${isMobile && mobileDrawer === 'left' ? ' wf-editor-drawer--open' : ''}`}>
+          {isMobile ? (
+            <button type="button" className="wf-editor-drawer-close" title="收起面板" onClick={() => setMobileDrawer('none')}>
+              <CloseIcon size={16} />
+            </button>
+          ) : null}
           <div style={{ fontSize: 11.5, color: 'var(--text-muted, #6f7a8b)' }}>添加节点</div>
           <button className="wf-editor-palette-btn" onClick={() => addNode('command')} title="添加命令节点">
             <CommandNodeIcon size={15} /> 命令节点
@@ -447,20 +523,27 @@ export default function DefinitionEditorPanel({
               edges={canvasEdges}
               mode="edit"
               selection={selection}
-              onSelect={setSelection}
+              onSelect={handleSelect}
               onNodeMove={(id, x, y) => patchNode(id, { x, y })}
               onCreateEdge={createEdge}
               viewportCenterRef={viewportCenterRef}
               style={{ position: 'absolute', inset: 0 }}
             />
             <div className="wf-editor-canvas-hint">
-              拖动节点移动 · 从右侧锚点拖出连线 · 点击选中 · Delete 删除（连线标签为出边条件）
+              {isMobile
+                ? '拖动节点移动 · 从右侧锚点拖出连线 · 点按选中后可在「属性」面板编辑与删除 · 空白处拖动平移画布'
+                : '拖动节点移动 · 从右侧锚点拖出连线 · 点击选中 · Delete 删除（连线标签为出边条件）'}
             </div>
           </div>
         </div>
 
-        {/* ── 右栏：属性面板 ── */}
-        <div className="wf-editor-right">
+        {/* ── 右栏：属性面板（移动端=右滑抽屉） ── */}
+        <div className={`wf-editor-right${isMobile && mobileDrawer === 'right' ? ' wf-editor-drawer--open' : ''}`}>
+          {isMobile ? (
+            <button type="button" className="wf-editor-drawer-close" title="收起面板" onClick={() => setMobileDrawer('none')}>
+              <CloseIcon size={16} />
+            </button>
+          ) : null}
           {selectedNode ? (
             <NodePropertySection
               node={selectedNode}
@@ -483,9 +566,15 @@ export default function DefinitionEditorPanel({
             />
           ) : (
             <div className="wf-editor-hint" style={{ marginTop: 8 }}>
-              点击节点或边编辑属性；从节点右侧锚点拖出连线；Delete 键或删除按钮移除选中项。
-              <br />
-              节点位置（x/y）随定义保存。
+              {isMobile ? (
+                <>点按节点或边后在此编辑属性、删除选中项；从「组件」抽屉可添加节点。</>
+              ) : (
+                <>
+                  点击节点或边编辑属性；从节点右侧锚点拖出连线；Delete 键或删除按钮移除选中项。
+                  <br />
+                  节点位置（x/y）随定义保存。
+                </>
+              )}
             </div>
           )}
         </div>
@@ -1110,4 +1199,14 @@ function EdgePropertySection({
  * 7. 关闭标签页 → 重新从侧边栏/定义列表打开同一定义 → 节点位置/连线/条件/命令/
  *    agent/input/变量/onError/supervisor/agents 全部还原（def.get 原样回读）。
  * 8. 反向校验：删掉 command 内容保存 → 出现红色逐项错误列表（后端校验器返回）。
+ *
+ * ── 人工验证清单（移动端，视口 ≤768px / 手机或桌面窄窗）──────────────────
+ * 9. 窄视口打开编辑器：画布占满全宽；工具栏只剩 定义名/描述/组件/属性/保存（定义
+ *    id 标签隐藏），输入占满整行。
+ * 10. 「组件」→ 左抽屉滑入（palette/变量/策略/agents 可滚动）；点遮罩或 × 收起。
+ * 11. 触屏拖动节点改位置（不触发页面滚动）；从锚点（扩大命中区）拖出连线落到目标
+ *     节点；背景单指拖动平移画布。
+ * 12. 点按节点/边 → 右「属性」抽屉自动滑入；属性面板「删除节点/边」按钮可用
+ *     （触屏无 Delete 键）；点遮罩收起后选中光环仍在，再点「属性」可重开。
+ * 13. 聚焦输入框不触发 iOS 视口自动放大（16px 字号）；保存/校验错误流程同桌面。
  */

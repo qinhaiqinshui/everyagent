@@ -19,6 +19,8 @@
  * → gateway.decide）；主体两态：运行图（左画布+右节点详情面板：input 三视图/output
  * 全量/error/agent+usage/激活出边/该节点全部 run 记录列表可选看）或 RunLogPanel
  * （物流式时间线，见该文件头注释）。删除/NOT_FOUND 后居中终态占位。
+ * 移动端（≤768px，useIsMobile）：右侧详情面板退化为底部抽屉——点按节点/边自动滑出
+ * （带 × 关闭），画布保持可见；桌面布局不变（样式收在 @media 块内）。
  *
  * ── 纯逻辑可测核（无插件 web 测试基建，导出保持可测） ──
  * projectNodesFromEvents / mergeTerminalNodeStates / deriveInstanceStatus /
@@ -66,7 +68,9 @@ import RunLogPanel, {
   runOutputOf,
   runSupervisorOf,
 } from './RunLogPanel'
+import { useIsMobile } from '../useIsMobile'
 import {
+  CloseIcon,
   DeleteIcon,
   EditIcon,
   LogIcon,
@@ -424,6 +428,38 @@ function ensureInstanceStyles(): void {
 .wf-inst-runrow-time { color: var(--text-faint, #525c6a); font-size: 11px; }
 .wf-inst-runrow-dur { color: var(--text-secondary, #aab3c2); font-size: 11px; }
 .wf-inst-hintcard { color: var(--text-faint, #525c6a); font-size: 12px; line-height: 1.7; padding: 4px 2px; }
+.wf-inst-side-close { display: none; }
+/* ── 移动端（≤768px）：详情面板退化底部抽屉；顶栏紧凑换行；输入 16px 防 iOS 缩放 ── */
+@media (max-width: 768px) {
+  .wf-inst-textarea { font-size: 16px; }
+  .wf-inst-top { padding: 6px 10px; gap: 6px; }
+  .wf-inst-name { max-width: 150px; }
+  .wf-inst-vars { max-width: 100%; flex: 1 1 100%; order: 9; }
+  .wf-inst-time { order: 8; }
+  .wf-inst-spacer { flex: 0 0 0; width: 0; }
+  .wf-inst-btn, .wf-inst-toggle { padding: 6px 10px; font-size: 12px; }
+  .wf-inst-body { position: relative; }
+  .wf-inst-canvas-hint { left: 8px; right: 8px; }
+  .wf-inst-side {
+    position: absolute; left: 0; right: 0; bottom: 0; z-index: 20;
+    width: auto; max-height: 70%;
+    border-left: none; border-top: 1px solid var(--border, #2a303b);
+    border-radius: 14px 14px 0 0;
+    box-shadow: 0 -14px 34px rgba(0, 0, 0, 0.42);
+    transform: translateY(103%);
+    transition: transform 0.22s ease;
+  }
+  .wf-inst-side.wf-inst-side--open { transform: none; }
+  .wf-inst-side-close {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 34px; height: 34px; border: none; border-radius: 8px;
+    background: transparent; color: var(--text-muted, #6f7a8b); cursor: pointer;
+    position: absolute; top: 8px; right: 10px; z-index: 1;
+  }
+  .wf-inst-side-close:active { color: var(--text-primary, #eef1f5); background: var(--bg-hover, #202631); }
+  .wf-inst-side .wf-sidecard:first-child .wf-sidecard-head { padding-right: 44px; }
+  .wf-inst-pre { max-height: 200px; }
+}
 `
   document.head.appendChild(style)
 }
@@ -848,6 +884,9 @@ export default function InstancePanel({ instanceId, workspaceId }: InstancePanel
   const [selection, setSelection] = React.useState<CanvasSelection>(null)
   const [detailRunNo, setDetailRunNo] = React.useState<number | null>(null)
   const [view, setView] = React.useState<'canvas' | 'log'>('canvas')
+  // ── 移动端（≤768px）：节点/边详情面板为底部抽屉，点选自动滑出。
+  const isMobile = useIsMobile()
+  const [sheetOpen, setSheetOpen] = React.useState(false)
   const [pollState, setPollState] = React.useState<WorkflowEventsPollState | null>(null)
   const [deciding, setDeciding] = React.useState<string | null>(null)
   const [decideError, setDecideError] = React.useState<string | null>(null)
@@ -1003,6 +1042,13 @@ export default function InstancePanel({ instanceId, workspaceId }: InstancePanel
 
   const selectedNode = selection?.kind === 'node' ? (definition?.nodes ?? []).find(n => n.id === selection.id) ?? null : null
   const selectedEdge = selection?.kind === 'edge' ? (definition?.edges ?? []).find(e => e.id === selection.id) ?? null : null
+
+  // ── 选中入口（画布点选）：移动端联动底部抽屉开合（清选=收起）。
+  const handleSelect = React.useCallback((sel: CanvasSelection) => {
+    setSelection(sel)
+    setSheetOpen(sel !== null)
+  }, [])
+
   const selectedNodeRuns = React.useMemo(
     () => runs.filter(r => asStr(r.nodeId) === selectedNode?.id),
     [runs, selectedNode?.id],
@@ -1244,14 +1290,27 @@ export default function InstancePanel({ instanceId, workspaceId }: InstancePanel
                 edges={canvasEdges}
                 mode="readonly"
                 selection={selection}
-                onSelect={setSelection}
+                onSelect={handleSelect}
                 style={{ position: 'absolute', inset: 0 }}
               />
               <div className="wf-inst-canvas-hint">
                 点击节点/边查看详情 · 绿=完成 蓝=运行 红=失败 黄=等待决策 灰=跳过/未运行 · 副标题=最新输出摘要
               </div>
             </div>
-            <div className="wf-inst-side">
+            <div
+              className={`wf-inst-side${isMobile && sheetOpen ? ' wf-inst-side--open' : ''}`}
+              style={isMobile && !sheetOpen ? { pointerEvents: 'none' } : undefined}
+            >
+              {isMobile ? (
+                <button
+                  type="button"
+                  className="wf-inst-side-close"
+                  title="收起详情"
+                  onClick={() => setSheetOpen(false)}
+                >
+                  <CloseIcon size={16} />
+                </button>
+              ) : null}
               {selectedNode ? (
                 <NodeDetail
                   node={selectedNode}
@@ -1302,4 +1361,11 @@ export default function InstancePanel({ instanceId, workspaceId }: InstancePanel
  * 9. 切「运行日志」视图：见 RunLogPanel 尾清单；两视图共享同一事件流，切换无重拉闪烁。
  * 10. 终态历史实例回放：打开即全量投影（事件回放+nodeStates 补洞），进度与侧栏一致；
  *     「刷新」按钮手动重拉 meta/runs。
+ *
+ * ── 人工验证清单（移动端，视口 ≤768px）──────────────────────────────────
+ * 11. 窄视口打开实例页：顶栏换行（变量摘要独占一行），画布占满全宽；单指拖动平移
+ *     画布；tap 节点/边 → 底部抽屉滑出详情（× 收起），再 tap 其他节点切换内容。
+ * 12. 决策横幅（askUser）：按钮触控目标可点，「换输入重试」textarea 聚焦不触发
+ *     iOS 视口放大；提交后抽屉/横幅状态正确流转。
+ * 13. 「运行日志」视图在窄屏可读（时间线卡片换行、pre 块可滚动）。
  */

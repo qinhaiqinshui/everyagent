@@ -54,12 +54,16 @@ workflow 插件
 - **hidden 五工具**（`WorkflowToolProvider` + `skill/workflow-tools/skill.md`）：
   `workflow_create/get/update/delete/list`，只服务普通任务的 AI（工作流自己的 agent
   不携带，`appliesTo` 排除），模型经 skill 文档按名调用。
-- **前端界面**（`web/`）：自研 SVG 画布（拖拽/连线/条件标签/运行态着色）+ 定义编辑器
+- **前端界面**（`web/`）：自研 SVG 画布（拖拽/连线/条件标签/运行态着色，Pointer
+  Events 统一鼠标/触屏——节点拖拽、锚点连线、背景平移触屏可用）+ 定义编辑器
   （palette/节点属性面板/七种边条件/运行变量/出错策略/Agents 总表，输入模板用宿主
   RichComposer）+ 侧边栏（实例/定义双区列表、运行对话框、导入导出）+ 实例运行页
   （只读画布实时投影、askUser 决策横幅、事件流断线重连）+ 运行日志页（物流式时间线：
-  命令 stdout/stderr、AI 输入输出、督导介入链）。人工验证清单汇总见
-  [MANUAL-TEST.md](MANUAL-TEST.md)。
+  命令 stdout/stderr、AI 输入输出、督导介入链）。**移动端适配**（≤768px，插件自持
+  `useIsMobile`，断点对齐宿主）：编辑器左右栏/实例页详情面板退化为滑入抽屉与底部
+  抽屉（选中自动弹出、×/遮罩收起）、侧边栏行操作 ⋯ 菜单常显并放大触控目标、输入框
+  16px 防 iOS 聚焦自动放大；桌面布局不变（移动样式全部收在各面板 `@media` 块内）。
+  人工验证清单汇总见 [MANUAL-TEST.md](MANUAL-TEST.md)。
 - **设计决策**：
   - **命令节点不经 PermissionGate**——与 git/term 同级信任：工作流是用户显式编排的
     受控操作（命令固定写进 definition.json、可审查），不是模型即兴决定；执行走
