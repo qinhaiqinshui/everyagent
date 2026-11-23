@@ -661,8 +661,8 @@ worker 的运行期责任链统一为 filter 形态（`result = next(ctx)`）：
   - **per-run 数据通道（单例无状态的代价）**：per-call 链 ctx 的 ExecContext 槽位取自 **prompt options 的框架 `ToolContext` map**（`AgentRunner` 组装 prompt 时下行 `RunContext` 四件套：agentId + agent 级 emitter + `ExecContext` + `ToolOutcomeLog`）——框架原生通道，`buildToolContext` 原样透传给工具回调；map 无该键（单测/裸用）时切口退化为纯框架路径。**ThreadLocal 依旧禁用**（reactive 流的工具执行可能切换线程）。
   - **internal 依赖策略**：照抄块唯一抄不掉的 internal 依赖收敛到唯一包装类（不用反射；internal 类变动 = 编译红灯显性可见）。
   - **红线豁免记录（用户确认）**：照抄框架循环体+插切口 = 自持循环的**轻量形态**（类注释标明来源版本，Spring AI 升级时 diff 框架源码对齐），豁免「不得手搓工具调用循环」红线；豁免范围仅限该照抄块。
-  - **装配**：worker 配置直接 `new PerCallToolCallingManager(...)`（异常处理器/回调解析器/limits 显式传构造，行为逐位保真；内置 `ToolEventInterceptor` 同处注册）；`AgentBuilder` 装配简化为 `LoopRepeatGuardToolManager(PerCall)` 两层装饰。
-  - **现役链序**（order 升序 = 下行执行序，上行逆序）：`rg-hint`(0，最外层，上行最后——看到全部改写后的最终文本)→ `unattended`(100，ask_user 合成)→ `file-change`(400，上行一阶段记账，§7.15.2)→ `tool-events`(500，发射点：`tool.started` 下行瞬态 + `tool.result` 上行落盘/callId 写账；在 secret-redaction 外层故结果串已是掩码后文本)→ `secret-redaction`(900，最内层结果改写，上行第一个拿到原始串)→ 链尾（框架执行/合成短路）。
+  - **装配**：worker 配置直接 `new PerCallToolCallingManager(...)`（异常处理器/回调解析器/limits 显式传构造，行为逐位保真；内置 `ToolArgumentsGuardInterceptor` 与 `ToolEventInterceptor` 同处注册）；`AgentBuilder` 装配简化为 `LoopRepeatGuardToolManager(PerCall)` 两层装饰。
+  - **现役链序**（order 升序 = 下行执行序，上行逆序）：`rg-hint`(0，最外层，上行最后——看到全部改写后的最终文本)→ `tool-args-guard`(50，参数护栏：对照 `ToolDefinition.inputSchema()` 的 `required` 清单，必填缺失或为 JSON null 一律 `synthesize` 失败串回灌模型、跳过真实调用，并附「疑似改名」提示；多余键只提示不拦；**不变式：必填参数缺失绝不进入工具**——Spring AI 2.0.1 的 `MethodToolCallback` 对缺参零校验、形参以 null 直入，框架升级后此护栏仍须保留)→ `unattended`(100，ask_user 合成)→ `file-change`(400，上行一阶段记账，§7.15.2)→ `tool-events`(500，发射点：`tool.started` 下行瞬态 + `tool.result` 上行落盘/callId 写账；在 secret-redaction 外层故结果串已是掩码后文本)→ `secret-redaction`(900，最内层结果改写，上行第一个拿到原始串)→ 链尾（框架执行/合成短路）。
 - **`LoopRepeatGuardToolManager` 保持装饰器（零改动）**：核心守卫不是插件扩展点，且需在 `executeToolCalls` 处合成工具结果回传模型，与插件链职责不同；死循环检测语义单位 = 轮不是调用，批级挂载对其正确粒度（有意不做 per-call）。已知边界：守卫 WARN 轮的合成提醒不经 per-call 链 → 无 `tool.started`/`tool.result` 事件（前端调用行停留无结果态）。
 - **行为零变化**：短路/放行/兜底语义逐项等价（迁移映射表见当时提交）。
 

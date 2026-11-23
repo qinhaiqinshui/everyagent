@@ -3,6 +3,7 @@ package dev.everyagent.worker.config;
 import dev.everyagent.plugin.api.spi.SandboxBackend.Access;
 import dev.everyagent.worker.agent.PerCallToolCallingManager;
 import dev.everyagent.worker.agent.ToolCallLimits;
+import dev.everyagent.worker.agent.ToolArgumentsGuardInterceptor;
 import dev.everyagent.worker.agent.ToolEventInterceptor;
 import dev.everyagent.worker.modules.SkillExposureStore;
 import dev.everyagent.worker.os.SandboxPathRegistry;
@@ -59,11 +60,12 @@ public class WorkerBeanConfiguration {
      * MissingToolCallbackResolver 兜底,resolutionFallback=true)/limits(maxCallsPerTool=200,
      * maxTotalToolCalls=500,behavior=THROW 与 builder 缺省一致)/resolutionFallbackEnabled。
      * per-call 切口的拦截链经 {@link ToolExecutionInterceptorRegistry} 查得;
-     * 内置发射节点(tool.started/tool.result)在此注册。per-run 上下文由 AgentRunner
-     * 经 prompt options 的 toolContext 下行,不依赖 ThreadLocal。
+     * 内置节点在此注册:参数护栏(必填缺失合成失败,先于真实执行)+ 发射节点(tool.started/tool.result)。
+     * per-run 上下文由 AgentRunner 经 prompt options 的 toolContext 下行,不依赖 ThreadLocal。
      */
     @Bean
     public ToolCallingManager toolCallingManager(ToolExecutionInterceptorRegistry interceptorRegistry) {
+        interceptorRegistry.register(new ToolArgumentsGuardInterceptor());
         interceptorRegistry.register(new ToolEventInterceptor());
         ToolCallLimits limits = new ToolCallLimits(200, Map.of(), Set.of(), 500,
                 ToolCallLimitBehavior.THROW);

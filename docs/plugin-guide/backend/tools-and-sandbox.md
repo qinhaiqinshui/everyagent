@@ -194,7 +194,7 @@ public interface ToolExecutionInterceptor {
 | 下行改写入参 | `next.proceed(包装后的 ctx)` | 想改真实执行所见的 prompt/chatResponse，就包一个新 `ToolExecutionContext` 传下去——链尾用的是**你传下去的那个 ctx**（`delegate.executeToolCalls(c.prompt(), c.chatResponse())`，`ToolExecutionChainExecutor.java:34`） | **无内置范例，未实测** |
 | 上行（`next.proceed` 返回之后） | 拿返回的 `ToolExecutionResult` 重建 | **改写结果**：重建 `conversationHistory` 里的 `ToolResponseMessage` 后返回新结果——落盘/推送/回灌模型三路全覆盖 | secret-redaction 掩码凭据（`every-agent-plugins/secret-redaction/src/main/java/dev/everyagent/plugin/secretredaction/SecretRedactionInterceptor.java:62-130`） |
 
-**order 语义**：升序 = 执行序（洋葱模型：order 小的在外层，先下行、后上行）；float 允许任意插位；同 order 按注册顺序（稳定排序，`ToolExecutionChainExecutor.java:31`）。现役整条链只有两环：unattended=100（最外层）、secret-redaction=900（最内层、紧贴真实执行，`SecretRedactionInterceptor.java:62` 类注释给出取值理由：在权限门/审计之后、事件发射之前）。
+**order 语义**：升序 = 执行序（洋葱模型：order 小的在外层，先下行、后上行）；float 允许任意插位；同 order 按注册顺序（稳定排序，`ToolExecutionChainExecutor.java:31`）。现役链序（架构 §7.14.3）：rg-hint=0 → tool-args-guard=50（worker 内置参数护栏：必填参数缺失时 `synthesize` 失败串、跳过真实调用——你的插件工具若把本应可选的参数漏标 `required = false`，模型省略该参数时会在这里被拦下）→ unattended=100 → file-change=400 → tool-events=500 → secret-redaction=900（最内层、紧贴真实执行，`SecretRedactionInterceptor.java:62` 类注释给出取值理由：在权限门/审计之后、事件发射之前）。
 
 ### 2.3 消费链路
 

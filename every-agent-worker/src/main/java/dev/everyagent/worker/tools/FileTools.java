@@ -206,15 +206,20 @@ public class FileTools {
             resultConverter = PlainTextToolCallResultConverter.class)
     public String create_file(
             @ToolParam(description = "文件路径(相对任务工作区根)") String path,
-            @ToolParam(description = "要写入文件的新内容") String content) throws IOException {
+            @ToolParam(description = "要写入文件的新内容(参数名 content)") String content) throws IOException {
         if (path == null || path.trim().isEmpty()) {
             throw new IllegalArgumentException("path 不能为空");
         }
-        String finalContent = content == null ? "" : content;
-        if (finalContent.indexOf('\0') >= 0) {
+        if (content == null) {
+            // 必填参数缺失不得默认为空:框架对缺参零校验(content 键写错即 null 直入),
+            // 静默创建空文件 = 数据事故(护栏 ToolArgumentsGuardInterceptor 之前的最后防线)
+            throw new IllegalArgumentException(
+                    "缺少参数 content(create_file 的参数名必须精确为 path / content),拒绝创建空文件");
+        }
+        if (content.indexOf('\0') >= 0) {
             throw new IllegalArgumentException("内容疑似二进制(含 NUL 字节),不支持文本写入");
         }
-        finalContent = EolAgnosticText.toLf(finalContent); // 新文件默认 LF,与 read_file 输出一致
+        String finalContent = EolAgnosticText.toLf(content); // 新文件默认 LF,与 read_file 输出一致
         // 加锁并二次校验存在性:「不存在才创建」在并发下必须原子,否则两个 create_file 会互相覆盖
         ReentrantLock lock = fs.pathLock(path);
         lock.lock();
@@ -234,12 +239,13 @@ public class FileTools {
     @Tool(description = "更新已有文件:把文件中唯一出现的 oldcontent 整体原位替换为 content。"
             + "文件不存在、oldcontent 缺失或不唯一时均报错。匹配对行尾(CRLF/LF)宽容,"
             + "插入内容按文件主导行尾转写,源文件其余部分逐字节保留。"
-            + "写入为原子替换并做落盘校验,不会因中断留下截断文件。",
+            + "写入为原子替换并做落盘校验,不会因中断留下截断文件。"
+            + "三个参数名必须精确为 path / oldcontent / content,缺 content 直接报错。",
             resultConverter = PlainTextToolCallResultConverter.class)
     public String update_file(
             @ToolParam(description = "文件路径(相对任务工作区根)") String path,
             @ToolParam(description = "文件中被整体替换为 content 的旧内容,必须在文件中唯一出现") String oldcontent,
-            @ToolParam(description = "替换 oldcontent 后写入的新内容") String content) throws IOException {
+            @ToolParam(description = "替换 oldcontent 后写入的新内容(参数名 content)") String content) throws IOException {
         if (path == null || path.trim().isEmpty()) {
             throw new IllegalArgumentException("path 不能为空");
         }
@@ -248,6 +254,12 @@ public class FileTools {
         }
         if (oldcontent == null || oldcontent.isEmpty()) {
             throw new IllegalArgumentException("oldcontent 不能为空");
+        }
+        if (content == null) {
+            // 必填参数缺失不得默认为「替换为空」:框架对缺参零校验(content 键写错即 null 直入),
+            // 静默删空旧内容 + 返回「已更新」= 数据事故(护栏 ToolArgumentsGuardInterceptor 之前的最后防线)
+            throw new IllegalArgumentException(
+                    "缺少参数 content(update_file 的参数名必须精确为 path / oldcontent / content),拒绝替换");
         }
         // read-modify-write 整体串行:并发写入者(主/派发 agent、并发工具调用)不得各自基于旧快照
         // 写回,否则会丢失更新甚至写回截断内容。
@@ -274,7 +286,7 @@ public class FileTools {
             int start = span[0];
             int end = span[1];
             String eol = span[2] == 1 ? "\r\n" : "\n";
-            String newContent = EolAgnosticText.fromLf(EolAgnosticText.toLf(content == null ? "" : content), eol);
+            String newContent = EolAgnosticText.fromLf(EolAgnosticText.toLf(content), eol);
             String replaced = existing.substring(0, start) + newContent + existing.substring(end);
             fs.writeText(task, agentId, path, replaced, false);
             // 写盘成功后锁内回调文件写监听器:携带写前/写后<b>全文</b>(update_file 的入参

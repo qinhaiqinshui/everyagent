@@ -34,7 +34,7 @@ has_children: false
 | # | 注册方法（一行签名） | 详解 | 内置范例 |
 |---|---|---|---|
 | 1 | `void registerToolProvider(ToolProvider p)` | [工具 §1](../backend/tools-and-sandbox.md#1-toolprovider--给-ai-注入工具) | subagent、sandbox-windows-codex/mic、sandbox-wsl-ubuntu |
-| 2 | `void registerToolExecutionInterceptor(ToolExecutionInterceptor i)` | [工具 §2](../backend/tools-and-sandbox.md#2-toolexecutioninterceptor--工具执行拦截链) | secret-redaction(900)、unattended(100) |
+| 2 | `void registerToolExecutionInterceptor(ToolExecutionInterceptor i)` | [工具 §2](../backend/tools-and-sandbox.md#2-toolexecutioninterceptor--工具执行拦截链) | tool-args-guard(50)、unattended(100)、secret-redaction(900) |
 | 3 | `void registerSandboxProvider(SandboxProvider p)` | [工具 §3](../backend/tools-and-sandbox.md#3-sandboxprovider--沙箱后端) | sandbox-wsl-ubuntu(priority 10)、codex(8)、mic(5) |
 | 4 | `void registerFileReadHandler(FileReadHandler h)` | [工具 §4](../backend/tools-and-sandbox.md#4-filereadhandler--read_file-按扩展名接管) | image-vision（read_file 图片接管） |
 | 5 | `void registerAdvisorProvider(AdvisorProvider p)` | [advisors §1](../backend/advisors.md#1-advisorprovider--向-agent-链注入-advisor) | 12 插件 13 provider（system-info、git、context-compression…） |
@@ -271,7 +271,7 @@ has_children: false
 |---|---|---|---|
 | AdvisorProvider | int，升序=外→内；锚点 `TCA = ToolCallingAdvisor.DEFAULT_ORDER = HP+300 = -2147483348` | HP+50 system-info、HP+60 agents-md、HP+140 git、HP+150 SlashTokenResolve、**TCA 工具循环本体**、TCA+30~+500 重试/护栏/压缩/附件注入（TCA+450，须留在循环内侧）/限流、`0`=TokenCalibration（⚠️ 绝对值，实际最内层） | [advisors §2.2](../backend/advisors.md#22-内置-advisor-链完整-order-表)、[§2.4](../backend/advisors.md#24-420-850-的源码验证结论与计划口径不符如实更正) |
 | TaskLifecycleNode | float 洋葱；**临界段 [420,850] 落入即 WARN 拒绝** | 插件节点 15 / 40 / 870 / 877 / 950 | [任务 §2.3](../backend/task-and-rpc.md#23-完整节点-order-占用表worker-内置-26--插件-5共-31)、[§2.5](../backend/task-and-rpc.md#25-临界段-420850-专节) |
-| ToolExecutionInterceptor | int | unattended=100、secret-redaction=900 | [工具 §2](../backend/tools-and-sandbox.md#2-toolexecutioninterceptor--工具执行拦截链) |
+| ToolExecutionInterceptor | int | tool-args-guard=50、unattended=100、secret-redaction=900 | [工具 §2](../backend/tools-and-sandbox.md#2-toolexecutioninterceptor--工具执行拦截链) |
 
 另两套小坐标系：SandboxProvider priority（wsl 10 / codex 8(Windows) / mic 5，[工具 §3](../backend/tools-and-sandbox.md#3-sandboxprovider--沙箱后端)）；AuthorizationHandler float 决议链（ai-review 100f → unattended 200f → 内置 human 300f 终结，[advisors §7](../backend/advisors.md#7-authorizationhandler--授权决议链节点)）。
 

@@ -1,7 +1,9 @@
 package dev.everyagent.worker.tools;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -99,6 +101,20 @@ class FileToolsWriteListenerTest {
         assertThrows(IllegalArgumentException.class,
                 () -> tools().update_file("f.md", "不存在的旧内容", "x"));
         assertEquals(List.of(), calls, "失败写不回调(不落假变更)");
+    }
+
+    @Test
+    void nullContentIsRejectedNeverTreatedAsEmpty() throws Exception {
+        // 2026-12 t_jrm6 事故:模型把 content 写成 newcontent → 框架按名取参得 null →
+        // 旧实现把 null 当空串执行,旧内容被原地删空且返回「已更新」。工具层最后防线:null 必拒。
+        Files.writeString(dir.resolve("f.md"), "头\n中\n尾\n", StandardCharsets.UTF_8);
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> tools().update_file("f.md", "中", null));
+        assertTrue(ex.getMessage().contains("content"), ex.getMessage());
+        assertEquals("头\n中\n尾\n", Files.readString(dir.resolve("f.md")), "文件必须逐字节不变");
+        assertThrows(IllegalArgumentException.class, () -> tools().create_file("empty.md", null));
+        assertFalse(Files.exists(dir.resolve("empty.md")), "不得创建空文件");
+        assertEquals(List.of(), calls, "拒绝路径零写盘零回调");
     }
 
     @Test
