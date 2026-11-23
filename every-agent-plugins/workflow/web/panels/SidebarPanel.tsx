@@ -27,7 +27,7 @@
  * window.confirm）；toast 走 ctx.ui.showToast。
  *
  * 纯逻辑可测核（无插件 web 测试基建，导出保持可测、供 ManagePanel 复用，人工清单见文件尾注释）：
- * formatTimestamp / formatRelativeTime / instanceProgressText / exportFileName /
+ * formatTimestamp / formatRelativeTime / exportFileName /
  * parseImportedDefinition / lastRunDefinitionId。
  */
 import React from 'react'
@@ -143,20 +143,6 @@ export function formatRelativeTime(ms?: number | null): string | null {
   const days = Math.floor(hours / 24)
   if (days <= 7) return `${days} 天前`
   return null
-}
-
-/**
- * 实例进度文案：nodeStates 投影「n/m 节点完成」（n=status==='done' 计数，m=投影
- * 总节点数；运行中实例 nodeStates=null → 空串）。skipped 节点不计完成（口径保守）。
- */
-export function instanceProgressText(
-  nodeStates?: Record<string, { runCount?: number; status?: string; lastRunNo?: number }> | null,
-): string {
-  if (!nodeStates) return ''
-  const entries = Object.values(nodeStates)
-  if (entries.length === 0) return ''
-  const done = entries.filter(s => s?.status === 'done').length
-  return `${done}/${entries.length} 节点完成`
 }
 
 /**
@@ -296,7 +282,6 @@ function InstanceRow({
   onDelete: () => void
 }): React.ReactElement {
   const active = instanceActive(inst.status)
-  const progress = instanceProgressText(inst.nodeStates)
   const pillColor = (INSTANCE_STATUS_PILL_COLOR as Record<string, string>)[inst.status] ?? 'var(--text-muted)'
   const menuItems = [
     ...(active
@@ -330,11 +315,9 @@ function InstanceRow({
         <CardTime ms={inst.createdAt} label="创建于" />
         <span style={{ ...cardPillStyle, color: pillColor }}>{instanceStatusLabel(inst.status)}</span>
       </div>
-      {progress || inst.durationMs || workspaceChip ? (
+      {workspaceChip ? (
         <div style={cardSubRowStyle}>
-          {inst.durationMs ? <span>耗时 {Math.round(inst.durationMs / 1000)}s</span> : null}
-          {progress ? <span>{progress}</span> : null}
-          {workspaceChip ? <span style={chipStyle} title={inst.workspaceId}>{workspaceChip}</span> : null}
+          <span style={chipStyle} title={inst.workspaceId}>{workspaceChip}</span>
         </div>
       ) : null}
       {errorMessage ? (
@@ -889,7 +872,7 @@ const cardPillStyle: React.CSSProperties = {
   whiteSpace: 'nowrap',
 }
 
-/** 次要信息行（实例=耗时/进度）。 */
+/** 次要信息行（尾组「工作区缺失」的归属 chip；正常分组不渲染）。 */
 const cardSubRowStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
