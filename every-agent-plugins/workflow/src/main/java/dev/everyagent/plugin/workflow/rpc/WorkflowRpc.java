@@ -203,7 +203,7 @@ public final class WorkflowRpc {
 
     // ══════════════════════════ 实例 ══════════════════════════
 
-    /** workflow.instance.list {workspace?, definitionId?} → {instances:[摘要]}：createdAt 倒序，含终态 nodeStates 投影与工作区缺失标记。 */
+    /** workflow.instance.list {workspace?, definitionId?} → {instances:[摘要]}：createdAt 倒序，含终态 nodeStates 投影、运行变量与工作区缺失标记。 */
     public void instanceList(RpcContext ctx) {
         String ws = optWorkspace(ctx);
         String definitionId = blankToNull(ctx.optStrParam("definitionId", null));
@@ -224,6 +224,10 @@ public final class WorkflowRpc {
             }
             if (m.nodeStates() != null) {
                 n.set("nodeStates", Json.toJson(m.nodeStates()));
+            }
+            // 运行变量（侧栏列表行展示参数值；非空才带，避免空表噪声）。
+            if (m.variables() != null && !m.variables().isEmpty()) {
+                n.set("variables", Json.toJson(m.variables()));
             }
             instances.add(n);
         }

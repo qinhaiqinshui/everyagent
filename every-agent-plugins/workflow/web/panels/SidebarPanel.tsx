@@ -10,6 +10,7 @@
  * - 组内实例行**直接平铺**（无子区头、无折叠、无计数——数量与状态在行卡片药丸自明）；
  * - 行卡片（.ui-row）=**单行**：粗体工作流名（弹性占位、悬浮 title 见实例 id）+
  *   可点击切换的相对/绝对时间 + 状态药丸 + hover 浮现的 ⋯「更多操作」菜单；
+ *   有运行参数时另起一行只显示参数值（「；」分隔，单行溢出可见不截断）；
  *   失败实例追加错误行，尾组「工作区缺失」追加归属 chip 行。
  *
  * 与任务面板的一处刻意差异：空工作区也展示——任务在输入框创建、侧栏可隐藏空组；工作流
@@ -28,7 +29,7 @@
  * window.confirm）；toast 走 ctx.ui.showToast。
  *
  * 纯逻辑可测核（无插件 web 测试基建，导出保持可测、供 ManagePanel 复用，人工清单见文件尾注释）：
- * formatTimestamp / formatRelativeTime / exportFileName /
+ * formatTimestamp / formatRelativeTime / instanceVariablesText / exportFileName /
  * parseImportedDefinition / lastRunDefinitionId。
  */
 import React from 'react'
@@ -147,11 +148,23 @@ export function formatRelativeTime(ms?: number | null): string | null {
 }
 
 /**
+ * 实例运行参数展示文案：按参数名字典序稳定排序，只取值（不显示参数名），
+ * 「；」分隔；空值参数跳过；无参数 → 空串（调用方据此隐藏该行）。
+ */
+export function instanceVariablesText(variables?: Record<string, string> | null): string {
+  if (!variables) return ''
+  return Object.keys(variables)
+    .sort()
+    .map(name => String(variables[name] ?? ''))
+    .filter(value => value !== '')
+    .join('；')
+}
+
+/**
  * 「最后运行的」定义 id：实例按 createdAt 降序首个、且定义仍存在者；都无 →
  * undefined。实例创建时间=运行发起时间（服务端事实源，比本地记忆多端一致）；
  * 定义已删的实例跳过——下拉只列现存定义，选中项必须真实可运行。
- */
-export function lastRunDefinitionId(
+ */export function lastRunDefinitionId(
   defs: WorkflowDefSummary[],
   instances: WorkflowInstanceSummary[],
 ): string | undefined {
@@ -284,6 +297,7 @@ function InstanceRow({
 }): React.ReactElement {
   const active = instanceActive(inst.status)
   const pillColor = (INSTANCE_STATUS_PILL_COLOR as Record<string, string>)[inst.status] ?? 'var(--text-muted)'
+  const varsText = instanceVariablesText(inst.variables)
   const menuItems = [
     ...(active
       ? [{
@@ -313,6 +327,11 @@ function InstanceRow({
         <span style={{ ...cardPillStyle, color: pillColor }}>{instanceStatusLabel(inst.status)}</span>
         <RowActions items={menuItems} title="实例更多操作" disabled={busy} />
       </div>
+      {varsText ? (
+        // 运行参数行：只显示参数值（「；」分隔），单行不换行、溢出可见不截断
+        // （显示不下就露出多少算多少——title 悬浮可看全量）。
+        <div style={cardVarsStyle} title={varsText}>{varsText}</div>
+      ) : null}
       {workspaceChip ? (
         <div style={cardSubRowStyle}>
           <span style={chipStyle} title={inst.workspaceId}>{workspaceChip}</span>
@@ -836,6 +855,20 @@ const cardMetaRowStyle: React.CSSProperties = {
   minWidth: 0,
 }
 
+/**
+ * 运行参数行：只显示参数值（「；」分隔）。刻意 nowrap + 溢出可见——显示不下
+ * 也不截断（无 ellipsis/overflow:hidden），能显示多少就显示多少；完整内容
+ * 在行悬浮 title。
+ */
+const cardVarsStyle: React.CSSProperties = {
+  fontSize: 'var(--text-xs)',
+  color: 'var(--text-muted)',
+  whiteSpace: 'nowrap',
+  overflow: 'visible',
+  textOverflow: 'clip',
+  minWidth: 0,
+}
+
 const cardTimeStyle: React.CSSProperties = {
   fontSize: 'var(--text-xs)',
   color: 'var(--text-muted)',
@@ -931,7 +964,8 @@ const confirmFooterStyle: React.CSSProperties = {
  *    （每工作区一个，重复点击聚焦；见 ManagePanel 尾部清单）。
  * 3. 组内实例行**直接平铺**（无「实例」子区头、无折叠箭头、无计数）。
  * 4. 实例行卡片（**单行**）：粗体工作流名 + 创建时间 + 状态药丸 + hover 浮现 ⋯ 菜单
- *    （取消实例〔活跃时〕/删除；行悬浮 title 显示实例 id）；点行打开实例页（tab.data 正确）。
+ *    （取消实例〔活跃时〕/删除；行悬浮 title 显示实例 id）；点行打开实例页（tab.data 正确）；
+ *    带运行参数的实例在下行只显示参数值（「；」分隔、单行不截断溢出可见），无参数不占行。
  * 5. **推送**：在管理页/编辑器保存定义 / 另一端运行工作流 / AI 调 workflow_create 工具 /
  *    实例运行态翻转（running→waiting-user→done）→ 侧栏在 ~150ms 内自动更新，**无需手动
  *    刷新**（kind=definition 的推送只校准 ▶ 运行窗选项，不渲染定义行）；取消实例 → 状态

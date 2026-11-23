@@ -134,6 +134,8 @@ export interface WorkflowInstanceSummary {
   durationMs: number | null
   error?: unknown
   nodeStates?: Record<string, { runCount?: number; status?: string; lastRunNo?: number }> | null
+  /** 运行参数（name → value；后端非空才带，侧栏列表行展示参数值用）。 */
+  variables?: Record<string, string> | null
   workspaceMissing?: boolean
 }
 

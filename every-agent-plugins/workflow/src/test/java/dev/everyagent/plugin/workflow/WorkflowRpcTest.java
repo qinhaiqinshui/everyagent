@@ -515,9 +515,9 @@ class WorkflowRpcTest {
         String id1 = runToTerminal(d1, Map.of()).id();
         Thread.sleep(5);
         String id2 = runToTerminal(d2, Map.of()).id();
-        // 未注册工作区的实例（store 直建，列表打缺失标记）
+        // 未注册工作区的实例（store 直建，列表打缺失标记）；带运行变量（列表摘要应透出）
         Definition other = save("ws_other", DefinitionValidatorTest.node("s", "start"));
-        String id3 = store.createInstance(other, Map.of()).id();
+        String id3 = store.createInstance(other, Map.of("mode", "quick", "lang", "zh")).id();
 
         Call all = call(p());
         rpc.instanceList(all);
@@ -527,6 +527,9 @@ class WorkflowRpcTest {
         // createdAt 倒序：id3（最后创建）在最前
         assertThat(items.get(0).path("id").asString()).isEqualTo(id3);
         assertThat(items.get(0).path("workspaceMissing").asBoolean()).isTrue();
+        // 运行变量非空才带：id3 透出 name→value，空变量的 id1/id2 不带该字段
+        assertThat(items.get(0).path("variables").path("mode").asString()).isEqualTo("quick");
+        assertThat(items.get(0).path("variables").path("lang").asString()).isEqualTo("zh");
         JsonNode done = items.stream()
                 .filter(n -> n.path("id").asString().equals(id1)).findFirst().orElseThrow();
         assertThat(done.path("definitionId").asString()).isEqualTo(d1.id());
@@ -536,6 +539,7 @@ class WorkflowRpcTest {
         assertThat(done.path("endedAt").asLong()).isPositive();
         assertThat(done.path("durationMs").asLong()).isPositive();
         assertThat(done.path("nodeStates")).isNotEmpty();
+        assertThat(done.path("variables").isMissingNode()).isTrue();
         assertThat(done.path("workspaceMissing").asBoolean()).isFalse();
 
         // definitionId 过滤
