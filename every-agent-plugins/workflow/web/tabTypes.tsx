@@ -1,9 +1,11 @@
 /**
- * workflow 插件的工作区标签类型定义（workflow-editor / workflow-instance）。
+ * workflow 插件的工作区标签类型定义（workflow-editor / workflow-instance /
+ * workflow-manage）。
  *
  * tab.data 参数约定见 index.ts 头注释（openTab 的 data 袋，宿主透明中转）：
  * - workflow-editor：{ workspaceId, definitionId?, workspaceRoot?, workerId? }
  * - workflow-instance：{ instanceId, workspaceId? }
+ * - workflow-manage：{ workspaceId }（每个工作区一个管理标签页，重复打开聚焦）
  */
 import type {
   PluginWorkspaceTab,
@@ -12,7 +14,11 @@ import type {
 } from '@everyagent/plugin-api'
 import type { ReactNode } from 'react'
 import { WorkflowIcon } from './icons'
-import { WORKFLOW_EDITOR_TAB_TYPE, WORKFLOW_INSTANCE_TAB_TYPE } from './tabKeys'
+import {
+  WORKFLOW_EDITOR_TAB_TYPE,
+  WORKFLOW_INSTANCE_TAB_TYPE,
+  WORKFLOW_MANAGE_TAB_TYPE,
+} from './tabKeys'
 import { createLazyRouteComponent } from './lazy'
 
 /** 定义编辑器面板（懒加载：编辑器较重，不拖慢插件初始激活）。 */
@@ -80,5 +86,28 @@ export const workflowInstanceTabType: UiWorkspaceTabTypeDefinition = {
     return data.instanceId ? `工作流实例 ${data.instanceId}` : '工作流实例'
   },
   getCloseAriaLabel: (tab: PluginWorkspaceTab) => `关闭工作流实例 ${tab.title ?? ''}`,
+  getSidebarActivityId: () => 'workflow',
+}
+
+// ─── workflow-manage 标签类型（工作区级定义管理页） ─────────────────────────
+
+/** 定义管理页面板（懒加载：列表 + 行操作 + JSON 查看，不拖慢插件初始激活）。 */
+const LazyManagePanel = createLazyRouteComponent(() => import('./panels/ManagePanel'))
+
+export const workflowManageTabType: UiWorkspaceTabTypeDefinition = {
+  tabTypeKey: WORKFLOW_MANAGE_TAB_TYPE,
+  pluginId: 'workflow',
+  renderTab: (tab: PluginWorkspaceTab, _ctx: WorkspaceTabRenderContext): ReactNode => {
+    const data = tabData(tab, WORKFLOW_MANAGE_TAB_TYPE)
+    return <LazyManagePanel workspaceId={data.workspaceId ?? ''} />
+  },
+  renderIcon: () => <WorkflowIcon size={15} />,
+  getLabel: (tab: PluginWorkspaceTab) =>
+    pluginTabMatches(tab, WORKFLOW_MANAGE_TAB_TYPE) ? (tab.title ?? '管理工作流') : '',
+  getTitle: (tab: PluginWorkspaceTab) => {
+    const data = tabData(tab, WORKFLOW_MANAGE_TAB_TYPE)
+    return data.workspaceId ? `管理工作流（${data.workspaceId}）` : '管理工作流'
+  },
+  getCloseAriaLabel: (tab: PluginWorkspaceTab) => `关闭管理工作流 ${tab.title ?? ''}`,
   getSidebarActivityId: () => 'workflow',
 }

@@ -326,6 +326,17 @@ export function RefreshIcon({ size = 16, style, className, color }: IconProps) {
   )
 }
 
+/** 管理列表（侧栏组头「管理」入口：三行清单卡片，末行收短）。 */
+export function ManageIcon({ size = 16, style, className, color }: IconProps) {
+  return (
+    <Svg size={size} style={style} className={className} color={color}>
+      <rect x="2.4" y="2.4" width="11.2" height="3.2" rx="1" />
+      <rect x="2.4" y="6.4" width="11.2" height="3.2" rx="1" />
+      <rect x="2.4" y="10.4" width="7.4" height="3.2" rx="1" />
+    </Svg>
+  )
+}
+
 /** 「更多操作」（⋯，行级菜单触发；与宿主 AppGlyphs 同构）。 */
 export function MoreHorizontalIcon({ size = 16, style, className, color }: IconProps) {
   return (

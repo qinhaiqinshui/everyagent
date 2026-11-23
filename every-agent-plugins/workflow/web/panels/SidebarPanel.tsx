@@ -1,42 +1,42 @@
 /**
  * 工作流侧边栏面板——与任务侧边栏（宿主 TasksPanel）同一布局范式：**按注册表工作区分组**，
- * 每个工作区一张分组卡片，组内上=定义、下=实例；全部工作区同时并陈，无工作区过滤下拉。
+ * 每个工作区一张分组卡片，组内只展示**运行实例**（定义不在侧栏展示——定义的增删改查/
+ * 导入/导出/运行全部收敛到管理标签页 workflow-manage，经组头「管理」按钮进入）。
  *
  * 布局（任务面板同构）：
  * - SidebarScrollArea 滚动区（自宿主复制，CSS 类为宿主全局样式）；
  * - 分组卡片（padding 6 / radius-md / border-light / bg-primary）：组头=折叠箭头（仅点击图标
- *   折叠，rotate 过渡）+ 粗体组名 + 右侧图标按钮（▶ 运行 / ＋ 新建 / ⋯ 导入·刷新）；
- * - 组内两段可折叠子区「定义」「实例」（箭头交互同组头）；
+ *   折叠，rotate 过渡）+ 粗体组名 + 右侧图标按钮（▶ 运行 / 管理 / ⋯ 刷新）；
+ * - 组内「实例」可折叠子区（箭头交互同组头）；
  * - 行卡片（.ui-row）=标题行（粗体单行名称 + hover 浮现的 ⋯「更多操作」菜单）+ 元数据行
  *   （等宽 id 省略 + 可点击切换的相对/绝对时间 + 状态药丸）+ 次要信息行。
  *
  * 与任务面板的一处刻意差异：空工作区也展示——任务在输入框创建、侧栏可隐藏空组；工作流
- * 的创建入口就在组头（▶ 运行〔有定义时可用〕、＋ 直达，导入在 ⋯ 菜单，均需选定工作区），
- * 隐藏空组会让首个工作流无处可建。
+ * 的定义创建入口在管理页（组头「管理」直达），隐藏空组会让首个工作流无处可建。
  * 归属数据的工作区未注册时收进尾组「工作区缺失」（只读展示，无创建入口）。
  *
  * 行级操作收进 ⋯ 菜单（RowActions，复用宿主 .ui-row-actions 全局样式）：
- * 实例=取消（活跃时）/删除；定义=运行/编辑/导出/删除（行点击即打开实例页/编辑器）。
+ * 实例=取消（活跃时）/删除（行点击即打开实例页）。
  *
  * 刷新模型（任务面板同款，推送驱动）：worker 侧定义/实例的每次落盘变更经 worker 级插件
  * 通知频道扇出 `plugin.workflow.changed`（架构 §5.2），宿主桥接为领域事件
- * `plugin-worker-event`，本面板订阅后按 kind 重拉对应列表（150ms 合并突发）；面板再展示
+ * `plugin-worker-event`，本面板订阅后按 kind 重拉对应列表（150ms 合并突发；kind=definition
+ * 仍重拉 defs——组头 ▶ 运行窗的定义选项依赖它，只是不再渲染定义行）；面板再展示
  * / 注册表变化时重拉；另留 60s 低频兜底轮询（重连窗口内丢帧的唯一补救——插件无重连信号）。
  * 手动刷新收进组头 ⋯。busy 标记防重入；confirm 走 ctx.ui.showDialog（缺席降级
  * window.confirm）；toast 走 ctx.ui.showToast。
  *
- * 纯逻辑可测核（无插件 web 测试基建，导出保持可测，人工清单见文件尾注释）：
+ * 纯逻辑可测核（无插件 web 测试基建，导出保持可测、供 ManagePanel 复用，人工清单见文件尾注释）：
  * formatTimestamp / formatRelativeTime / instanceProgressText / exportFileName /
- * parseImportedDefinition。
+ * parseImportedDefinition / lastRunDefinitionId。
  */
 import React from 'react'
 import { Button } from 'antd'
 import type { PluginWorkspaceEntry } from '@everyagent/plugin-api'
 import { getPluginContext } from '../pluginRuntime'
-import { WORKFLOW_EDITOR_TAB_TYPE, WORKFLOW_INSTANCE_TAB_TYPE } from '../tabKeys'
+import { WORKFLOW_INSTANCE_TAB_TYPE, WORKFLOW_MANAGE_TAB_TYPE } from '../tabKeys'
 import { statusVisual, type RenderStatus, type StatusVisual } from '../canvas/renderStates'
 import {
-  WorkflowValidationError,
   rpcErrorMessage,
   workflowGateway,
   type WorkflowDefSummary,
@@ -46,17 +46,14 @@ import {
 } from '../workflowGateway'
 import SidebarScrollArea from '../SidebarScrollArea'
 import { HeaderMenu, RowActions } from '../Menu'
-import { openRunDialog, openWorkspaceRunDialog } from './RunDialog'
+import { openWorkspaceRunDialog } from './RunDialog'
 import {
   ChevronDownIcon,
   DeleteIcon,
-  DownloadIcon,
-  EditIcon,
-  PlusIcon,
+  ManageIcon,
   RefreshIcon,
   RunIcon,
   StopIcon,
-  UploadIcon,
 } from '../icons'
 
 // ─── 常量与映射 ────────────────────────────────────────────────────────────
@@ -347,74 +344,6 @@ function InstanceRow({
   )
 }
 
-function DefinitionRow({
-  def,
-  workspaceChip,
-  busy,
-  onEdit,
-  onRun,
-  onExport,
-  onDelete,
-}: {
-  def: WorkflowDefSummary
-  /** 尾组「工作区缺失」里显示归属 id。 */
-  workspaceChip?: string
-  busy: boolean
-  onEdit: () => void
-  onRun: () => void
-  onExport: () => void
-  onDelete: () => void
-}): React.ReactElement {
-  const menuItems = [
-    {
-      key: 'run',
-      label: '运行',
-      icon: <RunIcon size={13} />,
-      onSelect: onRun,
-    },
-    {
-      key: 'edit',
-      label: '编辑',
-      icon: <EditIcon size={13} />,
-      onSelect: onEdit,
-    },
-    {
-      key: 'export',
-      label: '导出 JSON',
-      icon: <DownloadIcon size={13} />,
-      onSelect: onExport,
-    },
-    {
-      key: 'delete',
-      label: '删除',
-      danger: true,
-      icon: <DeleteIcon size={13} />,
-      onSelect: onDelete,
-    },
-  ]
-  return (
-    <div className="ui-row" style={cardStyle} onClick={onEdit} title={`定义 ${def.id}\n点击打开编辑器`}>
-      <div style={cardHeaderStyle}>
-        <span style={cardTitleStyle}>{def.name || def.id}</span>
-        <RowActions items={menuItems} title="定义更多操作" disabled={busy} />
-      </div>
-      <div style={cardMetaRowStyle}>
-        <span style={cardIdStyle} title={def.id}>{def.id}</span>
-        <CardTime ms={def.updatedAt} label="更新于" />
-        <span style={cardPillStyle}>{def.nodeCount} 节点</span>
-      </div>
-      {def.description || workspaceChip ? (
-        <div style={cardSubRowStyle}>
-          {def.description ? (
-            <span style={cardSubTextStyle} title={def.description}>{def.description}</span>
-          ) : null}
-          {workspaceChip ? <span style={chipStyle} title={def.workspaceId}>{workspaceChip}</span> : null}
-        </div>
-      ) : null}
-    </div>
-  )
-}
-
 // ─── 折叠头（组头 / 子区头共用一套交互：仅点击箭头折叠） ──────────────────────
 
 function CollapsibleHeader({
@@ -478,15 +407,10 @@ export default function SidebarPanel() {
   const [instances, setInstances] = React.useState<WorkflowInstanceSummary[] | null>(null)
   const [defsError, setDefsError] = React.useState<string | null>(null)
   const [instancesError, setInstancesError] = React.useState<string | null>(null)
-  /** 导入校验错误（回显在目标工作区分组内；null=无）。 */
-  const [importError, setImportError] = React.useState<{ workspaceId: string; items: string[] } | null>(null)
-  /** 折叠键集合（组 ws:<id>；子区 ws:<id>/defs、ws:<id>/inst）；不在集合=展开。 */
+  /** 折叠键集合（组 ws:<id>；子区 ws:<id>/inst）；不在集合=展开。 */
   const [collapsedKeys, setCollapsedKeys] = React.useState<Set<string>>(() => new Set())
-  /** 行级/动作级 busy 标记（'import' / `def:<id>` / `inst:<id>`）。 */
+  /** 行级/动作级 busy 标记（`inst:<id>`）。 */
   const [busyKey, setBusyKey] = React.useState<string | null>(null)
-  const fileInputRef = React.useRef<HTMLInputElement | null>(null)
-  /** 导入目标工作区（点组头「导入」时记下，文件选择器 change 时取用）。 */
-  const importTargetRef = React.useRef<string>('')
 
   const toast = React.useCallback(
     (message: string, type?: 'success' | 'error' | 'info' | 'warning') => {
@@ -600,15 +524,14 @@ export default function SidebarPanel() {
         instances: (instances ?? []).filter(i => i.workspaceId === id),
       }
     })
-    const orphanedDefs = (defs ?? []).filter(d => !known.has(d.workspaceId) || d.workspaceMissing)
     const orphanedInstances = (instances ?? []).filter(i => !known.has(i.workspaceId) || i.workspaceMissing)
-    if (orphanedDefs.length > 0 || orphanedInstances.length > 0) {
+    if (orphanedInstances.length > 0) {
       out.push({
         key: 'ws:__missing__',
         label: '工作区缺失',
         labelTitle: '归属工作区未注册（数据保留，重新注册后自动回归）',
         entry: null,
-        defs: orphanedDefs,
+        defs: [],
         instances: orphanedInstances,
       })
     }
@@ -640,23 +563,10 @@ export default function SidebarPanel() {
     }
   }
 
-  const onNewDefinition = (wsId: string) => {
-    ctx.ui.openTab(WORKFLOW_EDITOR_TAB_TYPE, { workspaceId: wsId, definitionId: '' }, '工作流（新建）')
-  }
-
-  const onEditDef = (def: WorkflowDefSummary) => {
-    ctx.ui.openTab(
-      WORKFLOW_EDITOR_TAB_TYPE,
-      { workspaceId: def.workspaceId, definitionId: def.id },
-      def.name || def.id,
-    )
-  }
-
-  const onRunDef = (def: WorkflowDefSummary) => {
-    void openRunDialog(def.workspaceId, def.id, def.name).then(id => {
-      // 本地立即重拉一次（推送帧到达时再校准）。
-      if (id) reloadInstances()
-    })
+  /** 组头「管理」：打开本工作区的定义管理标签页（标签 id=workflow-manage:<wsId>，
+   *  同一工作区重复打开聚焦同一标签；定义的增删改查/导入/导出/运行都在该页）。 */
+  const onOpenManage = (wsId: string) => {
+    ctx.ui.openTab(WORKFLOW_MANAGE_TAB_TYPE, { workspaceId: wsId }, '管理工作流')
   }
 
   /** 组头 ▶：工作区级运行窗（选定义→填变量→运行；默认选中最近一次实例的定义）。 */
@@ -669,57 +579,6 @@ export default function SidebarPanel() {
         if (id) reloadInstances()
       },
     )
-  }
-
-  const onExportDef = (def: WorkflowDefSummary) => {
-    void withBusy(`def:${def.id}`, async () => {
-      try {
-        const full = await workflowGateway.defExport(def.workspaceId, def.id)
-        downloadDefinitionJson(full)
-        toast(`已导出 ${exportFileName(def.name ?? '')}`, 'success')
-      } catch (err) {
-        toast(`导出失败：${rpcErrorMessage(err)}`, 'error')
-      }
-    })
-  }
-
-  const onDeleteDef = (def: WorkflowDefSummary) => {
-    void withBusy(`def:${def.id}`, async () => {
-      const ok = await confirmDialog(
-        '删除工作流定义',
-        `将删除「${def.name || def.id}」（${def.id}）。历史实例持定义快照、不受影响。此操作不可撤销。`,
-        '删除',
-      )
-      if (!ok) return
-      try {
-        await workflowGateway.defDelete(def.workspaceId, def.id)
-        toast('定义已删除', 'success')
-      } catch (err) {
-        toast(`删除失败：${rpcErrorMessage(err)}`, 'error')
-      } finally {
-        reloadDefs()
-      }
-    })
-  }
-
-  const onImportFile = (file: File, wsId: string) => {
-    void withBusy('import', async () => {
-      try {
-        const text = await file.text()
-        const definition = parseImportedDefinition(text)
-        const { id } = await workflowGateway.defImport(wsId, definition)
-        setImportError(null)
-        toast(`已导入为 ${id}`, 'success')
-      } catch (err) {
-        if (err instanceof WorkflowValidationError) {
-          setImportError({ workspaceId: wsId, items: err.items.length > 0 ? err.items : [err.message] })
-        } else {
-          setImportError({ workspaceId: wsId, items: [rpcErrorMessage(err)] })
-        }
-      } finally {
-        reloadDefs()
-      }
-    })
   }
 
   const onOpenInstance = (inst: WorkflowInstanceSummary) => {
@@ -776,15 +635,14 @@ export default function SidebarPanel() {
 
   // ── 渲染 ──
 
-  /** 子区（组内「定义」/「实例」段）：折叠箭头 + 标签 + 计数 → 行卡片列表 / 单行空态。 */
+  /** 子区（组内「实例」段）：折叠箭头 + 标签 + 计数 → 行卡片列表 / 单行空态。 */
   const renderSubSection = (
     groupKey: string,
-    section: 'defs' | 'inst',
+    section: 'inst',
     label: string,
     count: string,
     emptyText: string,
     rows: React.ReactNode,
-    extra?: React.ReactNode,
   ) => {
     const key = `${groupKey}/${section}`
     const collapsed = collapsedKeys.has(key)
@@ -793,7 +651,6 @@ export default function SidebarPanel() {
         <CollapsibleHeader sub label={label} count={count} collapsed={collapsed} onToggle={() => toggleCollapsed(key)} />
         {collapsed ? null : (
           <div style={groupTasksStyle}>
-            {extra}
             {rows}
             {emptyText ? <div style={subEmptyStyle}>{emptyText}</div> : null}
           </div>
@@ -805,7 +662,7 @@ export default function SidebarPanel() {
   return (
     <div style={shellStyle}>
       <SidebarScrollArea style={listStyle}>
-        {defsError ? <div style={errorStyle}>定义列表加载失败：{defsError}</div> : null}
+        {defsError ? <div style={errorStyle}>定义列表加载失败（组头「运行」暂不可用）：{defsError}</div> : null}
         {instancesError ? <div style={errorStyle}>实例列表加载失败：{instancesError}</div> : null}
         {groups === null ? (
           <div style={emptyStyle}>正在加载…</div>
@@ -816,9 +673,7 @@ export default function SidebarPanel() {
             const collapsed = collapsedKeys.has(group.key)
             const groupDefCount = group.defs.length
             const groupInstCount = group.instances.length
-            const bothEmpty =
-              defs !== null && instances !== null && !defsError && !instancesError
-              && groupDefCount === 0 && groupInstCount === 0
+            const groupEmpty = instances !== null && !instancesError && groupInstCount === 0
             const running = group.instances.filter(i => instanceActive(i.status)).length
             const orphanChip = group.entry === null
             return (
@@ -838,7 +693,7 @@ export default function SidebarPanel() {
                             disabled={groupDefCount === 0}
                             title={
                               groupDefCount === 0
-                                ? '此工作区暂无工作流定义'
+                                ? '此工作区暂无工作流定义（到「管理」页新建或导入）'
                                 : '运行此工作区的工作流（选择定义、填写运行变量）'
                             }
                             aria-label="运行工作流"
@@ -849,30 +704,17 @@ export default function SidebarPanel() {
                           <Button
                             type="text"
                             style={toolbarButtonStyle}
-                            title="在此工作区新建工作流定义（打开编辑器空白定义）"
-                            aria-label="新建工作流定义"
-                            onClick={() => group.entry && onNewDefinition(group.entry.id as string)}
+                            title="管理此工作区的工作流定义（新建 / 编辑 / 导入 / 导出 / 运行）"
+                            aria-label="管理工作流定义"
+                            onClick={() => group.entry && onOpenManage(group.entry.id as string)}
                           >
-                            <PlusIcon size={13} />
+                            <ManageIcon size={13} />
                           </Button>
                         </>
                       ) : null}
                       <HeaderMenu
                         title="更多操作"
                         items={[
-                          // 导入收进 ⋯ 菜单（低频动作，给 ＋ 新建让位；落位本组工作区）。
-                          ...(group.entry
-                            ? [{
-                                key: 'import',
-                                label: '导入工作流…',
-                                icon: <UploadIcon size={13} />,
-                                disabled: runBusy('import'),
-                                onSelect: () => {
-                                  importTargetRef.current = group.entry?.id as string
-                                  fileInputRef.current?.click()
-                                },
-                              }]
-                            : []),
                           {
                             key: 'refresh',
                             label: '刷新',
@@ -884,84 +726,39 @@ export default function SidebarPanel() {
                     </>
                   }
                 />
-                {collapsed ? null : bothEmpty ? (
+                {collapsed ? null : groupEmpty ? (
                   <div style={emptyStyle}>
-                    {group.entry ? '暂无工作流——点 ＋ 新建，或从 ⋯ 菜单导入 .workflow.json。' : '暂无数据。'}
+                    {group.entry ? '暂无运行实例——点右上「管理」新建或运行工作流。' : '暂无数据。'}
                   </div>
                 ) : (
-                  <>
-                    {renderSubSection(
-                      group.key,
-                      'defs',
-                      '定义',
-                      defs === null ? '…' : String(groupDefCount),
-                      groupDefCount === 0 && defs !== null && !defsError ? '暂无定义' : '',
-                      group.defs.map(def => (
-                        <DefinitionRow
-                          key={def.id}
-                          def={def}
-                          workspaceChip={orphanChip ? def.workspaceId : undefined}
-                          busy={runBusy(`def:${def.id}`)}
-                          onEdit={() => onEditDef(def)}
-                          onRun={() => onRunDef(def)}
-                          onExport={() => onExportDef(def)}
-                          onDelete={() => onDeleteDef(def)}
-                        />
-                      )),
-                      importError && group.entry?.id === importError.workspaceId ? (
-                        <div style={errorStyle}>
-                          导入失败：
-                          <ul style={{ margin: '2px 0 0', paddingInlineStart: 16 }}>
-                            {importError.items.map((item, i) => (
-                              <li key={i}>{item}</li>
-                            ))}
-                          </ul>
-                        </div>
-                      ) : null,
-                    )}
-                    {renderSubSection(
-                      group.key,
-                      'inst',
-                      '实例',
-                      instances === null
-                        ? '…'
-                        : `${groupInstCount}${running > 0 ? `（${running} 活跃）` : ''}`,
-                      groupInstCount === 0 && instances !== null && !instancesError
-                        ? '暂无运行实例——从上方定义的 ⋯ 菜单点「运行」开始。'
-                        : '',
-                      group.instances.map(inst => (
-                        <InstanceRow
-                          key={inst.id}
-                          inst={inst}
-                          workspaceChip={orphanChip ? inst.workspaceId : undefined}
-                          busy={runBusy(`inst:${inst.id}`)}
-                          onOpen={() => onOpenInstance(inst)}
-                          onCancel={() => onCancelInstance(inst)}
-                          onDelete={() => onDeleteInstance(inst)}
-                        />
-                      )),
-                    )}
-                  </>
+                  renderSubSection(
+                    group.key,
+                    'inst',
+                    '实例',
+                    instances === null
+                      ? '…'
+                      : `${groupInstCount}${running > 0 ? `（${running} 活跃）` : ''}`,
+                    groupInstCount === 0 && instances !== null && !instancesError
+                      ? '暂无运行实例——从「管理」页运行工作流后在此查看。'
+                      : '',
+                    group.instances.map(inst => (
+                      <InstanceRow
+                        key={inst.id}
+                        inst={inst}
+                        workspaceChip={orphanChip ? inst.workspaceId : undefined}
+                        busy={runBusy(`inst:${inst.id}`)}
+                        onOpen={() => onOpenInstance(inst)}
+                        onCancel={() => onCancelInstance(inst)}
+                        onDelete={() => onDeleteInstance(inst)}
+                      />
+                    )),
+                  )
                 )}
               </div>
             )
           })
         )}
       </SidebarScrollArea>
-
-      {/* 导入文件选择（隐藏；处理后清值，同文件重复导入也触发 change）。 */}
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept=".json,application/json"
-        style={{ display: 'none' }}
-        onChange={e => {
-          const file = e.target.files?.[0]
-          const wsId = importTargetRef.current
-          e.target.value = ''
-          if (file && wsId) onImportFile(file, wsId)
-        }}
-      />
     </div>
   )
 }
@@ -1154,7 +951,7 @@ const cardPillStyle: React.CSSProperties = {
   whiteSpace: 'nowrap',
 }
 
-/** 次要信息行（实例=耗时/进度；定义=描述）。 */
+/** 次要信息行（实例=耗时/进度）。 */
 const cardSubRowStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
@@ -1163,13 +960,6 @@ const cardSubRowStyle: React.CSSProperties = {
   minWidth: 0,
   fontSize: 'var(--text-xs)',
   color: 'var(--text-muted)',
-}
-
-const cardSubTextStyle: React.CSSProperties = {
-  minWidth: 0,
-  overflow: 'hidden',
-  textOverflow: 'ellipsis',
-  whiteSpace: 'nowrap',
 }
 
 const cardErrorStyle: React.CSSProperties = {
@@ -1228,19 +1018,22 @@ const confirmFooterStyle: React.CSSProperties = {
 }
 
 /*
- * ── 人工验证清单（侧边栏，任务面板同构 · 工作区分组 · 推送驱动）────────────
+ * ── 人工验证清单（侧边栏 · 工作区分组 · 只展示实例 · 管理页承载定义）──────────
  * 1. 打开侧边栏「工作流」：注册表里每个工作区一张分组卡片同时并陈（含空工作区，
- *    显示「暂无工作流——点 ＋ 新建…」），**无**顶部下拉/工具条；组序=注册表顺序。
- * 2. 组头：仅点击箭头折叠/展开（点组名不折叠）；右侧=▶ / ＋ / ⋯（⋯ 内「导入工作流…」
- *    打开文件选择、「刷新」=全量重拉）。＋/导入落位本组工作区；导入残缺/非法 JSON →
- *    本组「定义」段内红色逐项回显；▶ 打开工作区级运行窗（见 RunDialog 清单 §6-8）。
- * 3. 组内两段「定义」「实例」各有箭头可独立折叠；头带计数（实例含「k 活跃」）。
- * 4. 行卡片：hover 时右侧浮现 ⋯ 菜单；实例=取消实例（活跃时）/删除；定义=运行/编辑/导出 JSON/删除。
- *    点行打开实例页/编辑器（tab.data 正确）；导出下载 `<名称>.workflow.json`。
- * 5. **推送**：在编辑器保存定义 / 另一端运行工作流 / AI 调 workflow_create 工具 / 实例运行态
- *    翻转（running→waiting-user→done）→ 侧栏在 ~150ms 内自动更新，**无需手动刷新**；
- *    取消实例 → 状态药丸转琥珀「已取消」；删除 → 条目消失。
- * 6. 归属工作区未注册的定义/实例收进尾组「工作区缺失」（只读，行内 chip 显示 workspaceId）；
+ *    显示「暂无运行实例——点右上「管理」新建或运行工作流。」），**无**顶部下拉/工具条，
+ *    **无定义子区**（定义只在管理标签页展示）；组序=注册表顺序。
+ * 2. 组头：仅点击箭头折叠/展开（点组名不折叠）；右侧=▶ / 管理 / ⋯（⋯ 内仅「刷新」；
+ *    **无 ＋ 新建、无导入**——两者都在管理页）。▶ 打开工作区级运行窗（选定义→填变量，
+ *    无定义时禁用；见 RunDialog 清单 §6-8）；「管理」打开 workflow-manage 标签页
+ *    （每工作区一个，重复点击聚焦；见 ManagePanel 尾部清单）。
+ * 3. 组内「实例」段：箭头可独立折叠；头带计数（含「k 活跃」）。
+ * 4. 实例行卡片：hover 时右侧浮现 ⋯ 菜单=取消实例（活跃时）/删除；点行打开实例页
+ *    （tab.data 正确）。
+ * 5. **推送**：在管理页/编辑器保存定义 / 另一端运行工作流 / AI 调 workflow_create 工具 /
+ *    实例运行态翻转（running→waiting-user→done）→ 侧栏在 ~150ms 内自动更新，**无需手动
+ *    刷新**（kind=definition 的推送只校准 ▶ 运行窗选项，不渲染定义行）；取消实例 → 状态
+ *    药丸转琥珀「已取消」；删除 → 条目消失。
+ * 6. 归属工作区未注册的实例收进尾组「工作区缺失」（只读，行内 chip 显示 workspaceId）；
  *    注册表变化后尾组条目回到对应工作区组。
  * 7. 行内时间：7 天内相对时间，点击切换绝对/相对，title 显示完整绝对时间。
  * 8. 滚动行为与任务侧边栏一致（SidebarScrollArea：滚动时浮现滑块、停后淡出）。
