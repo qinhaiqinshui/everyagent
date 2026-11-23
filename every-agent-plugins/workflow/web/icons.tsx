@@ -326,6 +326,17 @@ export function RefreshIcon({ size = 16, style, className, color }: IconProps) {
   )
 }
 
+/** 「更多操作」（⋯，行级菜单触发；与宿主 AppGlyphs 同构）。 */
+export function MoreHorizontalIcon({ size = 16, style, className, color }: IconProps) {
+  return (
+    <Svg size={size} style={style} className={className} color={color}>
+      <circle cx="3.2" cy="8" r="1.1" fill="currentColor" />
+      <circle cx="8" cy="8" r="1.1" fill="currentColor" />
+      <circle cx="12.8" cy="8" r="1.1" fill="currentColor" />
+    </Svg>
+  )
+}
+
 // ── 实例运行页（步骤 10） ─────────────────────────────────────────────────
 
 /** 运行日志/时间线（实例页「运行图 / 运行日志」视图切换）。 */
@@ -357,3 +368,14 @@ export function SkipIcon({ size = 16, style, className, color }: IconProps) {
     </Svg>
   )
 }
+
+/** 关闭（移动端抽屉/底板的关闭按钮）。 */
+export function CloseIcon({ size = 16, style, className, color }: IconProps) {
+  return (
+    <Svg size={size} style={style} className={className} color={color}>
+      <path d="M4 4L12 12" />
+      <path d="M12 4L4 12" />
+    </Svg>
+  )
+}
+

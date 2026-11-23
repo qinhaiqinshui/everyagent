@@ -1,25 +1,30 @@
 /**
- * 工作流侧边栏面板（步骤 9 主体）：上=实例列表、下=定义列表。
+ * 工作流侧边栏面板：上=实例列表、下=定义列表。
  *
+ * 布局与视觉与任务侧边栏（宿主 TasksPanel）对齐：
+ * - SidebarScrollArea 滚动区（自宿主复制的滑块行为，CSS 类为宿主全局样式）；
+ * - 实例/定义各为一张分组卡片（padding 6 / radius-md / border-light / bg-primary），
+ *   组头=折叠箭头（仅点击图标折叠，rotate 过渡）+ 粗体组名 + 计数 + 右侧图标按钮；
+ * - 行卡片（.ui-row）=标题行（粗体单行名称 + hover 浮现的 ⋯「更多操作」菜单）+
+ *   元数据行（等宽 id 省略 + 可点击切换的相对/绝对时间 + 状态药丸）+ 次要信息行。
  * - 顶部工具条：工作区选择下拉（ctx.sdk.workspace.list 注册表；缺省「全部」——
- *   实例/定义按所选工作区服务端过滤，列表行仍带 workspaceId 归属展示）。
- * - 实例区（可折叠）：instance.list 拉取（挂载 + 10s 定时 + sidebar-panel-shown /
- *   workspace-registry-changed 事件驱动刷新）；每项=状态色点（renderStates 的
- *   TaskStatusDot 色彩语言）+ 定义名 + 时间 + nodeStates 投影进度「n/m 节点完成」；
- *   点击 openTab 实例页；非终态实例显示取消按钮、全部实例可删（confirm；运行中
- *   删除由后端拒绝并把原因透传 toast）。
- * - 定义区（可折叠）：def.list；操作=编辑（openTab workflow-editor）/运行（RunDialog）/
- *   导出（下载 <name>.workflow.json）/删除（confirm）；「＋」新建（编辑器空定义）；
- *   「导入」选择文件 → def.import（落入当前所选工作区，校验失败逐项回显）。
+ *   实例/定义按所选工作区服务端过滤，列表行仍带 workspaceId 归属展示）+ 刷新。
  *
- * 刷新节流：实例 10s / 定义 30s 定时 + 事件驱动；行级操作（取消/删除/导入/导出）
- * 置 busy 标记防重入。confirm 走 ctx.ui.showDialog（宿主模态壳，缺席降级
- * window.confirm）；toast 走 ctx.ui.showToast。
+ * 行级操作收进 ⋯ 菜单（RowActions，复用宿主 .ui-row-actions 全局样式）：
+ * 实例=取消（活跃时）/删除；定义=运行/编辑/导出/删除（行点击即打开实例页/编辑器）。
+ * 「＋」新建（编辑器空定义）、「导入」选择文件 → def.import（落入当前所选工作区，
+ * 校验失败逐项回显）。
+ *
+ * 刷新节流：实例 10s / 定义 30s 定时 + 事件驱动（sidebar-panel-shown /
+ * workspace-registry-changed）；行级操作置 busy 标记防重入。confirm 走
+ * ctx.ui.showDialog（宿主模态壳，缺席降级 window.confirm）；toast 走 ctx.ui.showToast。
  *
  * 纯逻辑可测核（无插件 web 测试基建，导出保持可测，人工清单见文件尾注释）：
- * formatTimestamp / instanceProgressText / exportFileName / parseImportedDefinition。
+ * formatTimestamp / formatRelativeTime / instanceProgressText / exportFileName /
+ * parseImportedDefinition。
  */
 import React from 'react'
+import { Button } from 'antd'
 import type { PluginWorkspaceEntry } from '@everyagent/plugin-api'
 import { getPluginContext } from '../pluginRuntime'
 import { WORKFLOW_EDITOR_TAB_TYPE, WORKFLOW_INSTANCE_TAB_TYPE } from '../tabKeys'
@@ -33,10 +38,11 @@ import {
   type WorkflowInstanceStatus,
   type WorkflowInstanceSummary,
 } from '../workflowGateway'
+import SidebarScrollArea from '../SidebarScrollArea'
+import { RowActions } from '../Menu'
 import { openRunDialog } from './RunDialog'
 import {
   ChevronDownIcon,
-  ChevronRightIcon,
   DeleteIcon,
   DownloadIcon,
   EditIcon,
@@ -72,6 +78,19 @@ const INSTANCE_STATUS_LABEL: Record<WorkflowInstanceStatus, string> = {
   cancelled: '已取消',
 }
 
+/**
+ * 实例状态 → 行卡片状态药丸文字色（与任务侧边栏 statusPill 同一色彩语言：
+ * 运行=蓝 / 等待·取消=琥珀 / 完成=绿 / 失败=红 / 已创建=弱化）。
+ */
+const INSTANCE_STATUS_PILL_COLOR: Record<WorkflowInstanceStatus, string> = {
+  created: 'var(--text-muted)',
+  running: 'var(--accent-blue)',
+  'waiting-user': 'var(--accent-amber)',
+  done: 'var(--accent-green)',
+  failed: 'var(--accent-red)',
+  cancelled: 'var(--accent-amber)',
+}
+
 /** 非终态实例（可取消：engine.cancel 中断节点线程/挂起决策）。 */
 function instanceActive(status: string): boolean {
   return status === 'created' || status === 'running' || status === 'waiting-user'
@@ -98,6 +117,24 @@ export function formatTimestamp(ms?: number | null): string {
   return sameYear
     ? `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${hm}`
     : `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${hm}`
+}
+
+/**
+ * 相对时间文案（与任务侧边栏同口径）：1 分钟内→刚刚 / 1 小时内→x 分钟前 /
+ * 24 小时内→x 小时前 / 7 天内→x 天前；超过 7 天或无效时间返回 null（调用方
+ * 回退到 formatTimestamp 绝对时间）。未来时间（时钟偏差）按「刚刚」处理。
+ */
+export function formatRelativeTime(ms?: number | null): string | null {
+  if (typeof ms !== 'number' || !Number.isFinite(ms) || ms <= 0) return null
+  const diff = Date.now() - ms
+  if (diff < 60_000) return '刚刚'
+  const minutes = Math.floor(diff / 60_000)
+  if (minutes < 60) return `${minutes} 分钟前`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours} 小时前`
+  const days = Math.floor(hours / 24)
+  if (days <= 7) return `${days} 天前`
+  return null
 }
 
 /**
@@ -169,60 +206,6 @@ function workspaceEntryLabel(entry: PluginWorkspaceEntry): string {
   return base || entry.id || root
 }
 
-// ─── 样式 ──────────────────────────────────────────────────────────────────
-
-const SIDEBAR_STYLE_ID = 'wf-sidebar-styles'
-
-function ensureSidebarStyles(): void {
-  if (typeof document === 'undefined' || document.getElementById(SIDEBAR_STYLE_ID)) return
-  const style = document.createElement('style')
-  style.id = SIDEBAR_STYLE_ID
-  style.textContent = `
-.wf-side-root { display: flex; flex-direction: column; height: 100%; min-height: 0; background: var(--bg-secondary, #11141b); color: var(--text-primary, #eef1f5); font-size: 13px; }
-.wf-side-header { display: flex; align-items: center; gap: 6px; padding: 10px 12px 6px; }
-.wf-side-title { font-weight: 600; flex: 1; }
-.wf-side-toolbar { display: flex; align-items: center; gap: 6px; padding: 0 12px 8px; border-bottom: 1px solid var(--border, #2a303b); }
-.wf-side-toolbar label { font-size: 11.5px; color: var(--text-muted, #6f7a8b); flex: none; }
-.wf-side-select { flex: 1; min-width: 0; background: var(--bg-primary, #0b0d12); border: 1px solid var(--border, #2a303b); border-radius: 6px; color: var(--text-primary, #eef1f5); padding: 3px 6px; font-size: 12px; font-family: inherit; }
-.wf-side-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 10px 12px; display: flex; flex-direction: column; gap: 10px; }
-.wf-side-section { border: 1px solid var(--border-light, #1b202a); border-radius: 8px; background: var(--bg-tertiary, #171b24); overflow: hidden; }
-.wf-side-section-head { display: flex; align-items: center; gap: 6px; width: 100%; padding: 7px 10px; background: transparent; border: none; color: var(--text-secondary, #aab3c2); font-size: 12.5px; cursor: pointer; text-align: left; }
-.wf-side-section-head:hover { color: var(--text-primary, #eef1f5); }
-.wf-side-section-head .wf-side-count { color: var(--text-faint, #525c6a); font-size: 11.5px; }
-.wf-side-section-tools { margin-left: auto; display: inline-flex; gap: 2px; }
-.wf-side-section-body { padding: 2px 6px 8px; display: flex; flex-direction: column; gap: 4px; }
-.wf-side-item { border: 1px solid transparent; border-radius: 8px; padding: 6px 8px; display: flex; flex-direction: column; gap: 3px; cursor: pointer; }
-.wf-side-item:hover { background: var(--bg-hover, #202631); border-color: var(--border, #2a303b); }
-.wf-side-item-title { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.wf-side-item-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
-.wf-side-item-sub { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-muted, #6f7a8b); flex-wrap: wrap; }
-.wf-side-item-actions { display: flex; gap: 2px; margin-top: 1px; }
-.wf-side-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
-.wf-side-dot--pulse { animation: wf-side-pulse 1.6s ease-in-out infinite; }
-@keyframes wf-side-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
-.wf-side-chip { display: inline-flex; align-items: center; border: 1px solid var(--border, #2a303b); border-radius: 999px; padding: 0 6px; font-size: 10.5px; color: var(--text-muted, #6f7a8b); max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.wf-side-chip--warn { color: var(--accent-amber, #f7bd54); border-color: var(--accent-amber, #f7bd54); }
-.wf-side-status-label { font-size: 10.5px; color: var(--text-muted, #6f7a8b); }
-.wf-side-error { color: var(--accent-red, #ff6b6b); font-size: 11.5px; margin: 4px 4px 0; line-height: 1.5; }
-.wf-side-error ul { margin: 2px 0 0; padding-left: 16px; }
-.wf-side-hint { color: var(--text-faint, #525c6a); font-size: 11.5px; padding: 4px 6px; }
-.wf-side-empty { color: var(--text-faint, #525c6a); font-size: 11.5px; padding: 6px 8px; }
-.wf-side-btn { display: inline-flex; align-items: center; justify-content: center; gap: 4px; padding: 3px 8px; border: 1px solid var(--border-strong, #3b4658); border-radius: 6px; background: transparent; color: var(--text-secondary, #aab3c2); cursor: pointer; font-size: 11.5px; white-space: nowrap; }
-.wf-side-btn:hover { color: var(--text-primary, #eef1f5); border-color: var(--accent-blue, #61a5ff); }
-.wf-side-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.wf-side-btn--danger:hover { color: var(--accent-red, #ff6b6b); border-color: var(--accent-red, #ff6b6b); }
-.wf-side-icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border: none; border-radius: 6px; background: transparent; color: var(--text-muted, #6f7a8b); cursor: pointer; flex: none; }
-.wf-side-icon-btn:hover { color: var(--accent-blue, #61a5ff); background: var(--bg-hover, #202631); }
-.wf-side-icon-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.wf-side-icon-btn--danger:hover { color: var(--accent-red, #ff6b6b); }
-.wf-side-confirm { display: flex; flex-direction: column; gap: 12px; min-width: min(320px, 80vw); font-size: 13px; }
-.wf-side-confirm-footer { display: flex; justify-content: flex-end; gap: 8px; }
-.wf-side-btn--danger-solid { background: var(--accent-red, #ff6b6b); border-color: var(--accent-red, #ff6b6b); color: #0b0d12; font-weight: 600; }
-.wf-side-btn--danger-solid:hover { color: #0b0d12; }
-`
-  document.head.appendChild(style)
-}
-
 // ─── 确认对话框（宿主模态壳；缺席时降级 window.confirm） ────────────────────
 
 function confirmDialog(title: string, description: string, okText = '确认'): Promise<boolean> {
@@ -235,15 +218,13 @@ function confirmDialog(title: string, description: string, okText = '确认'): P
       title,
       description,
       Content: ({ close }) => (
-        <div className="wf-side-confirm">
-          <p style={{ margin: 0, color: 'var(--text-secondary, #aab3c2)', lineHeight: 1.7 }}>{description}</p>
-          <div className="wf-side-confirm-footer">
-            <button type="button" className="wf-side-btn" onClick={() => close(false)}>
-              取消
-            </button>
-            <button type="button" className="wf-side-btn wf-side-btn--danger-solid" onClick={() => close(true)}>
+        <div style={confirmBodyStyle}>
+          <p style={{ margin: 0, color: 'var(--text-secondary)', lineHeight: 1.7 }}>{description}</p>
+          <div style={confirmFooterStyle}>
+            <Button onClick={() => close(false)}>取消</Button>
+            <Button type="primary" danger onClick={() => close(true)}>
               {okText}
-            </button>
+            </Button>
           </div>
         </div>
       ),
@@ -251,7 +232,27 @@ function confirmDialog(title: string, description: string, okText = '确认'): P
     .then(r => r === true)
 }
 
-// ─── 行组件 ────────────────────────────────────────────────────────────────
+// ─── 行卡片（与任务侧边栏任务卡同构） ─────────────────────────────────────
+
+/** 时间片段：默认相对时间（7 天内），点击切换绝对/相对（title 带完整绝对时间）。 */
+function CardTime({ ms, label }: { ms?: number | null; label: string }): React.ReactElement | null {
+  const [absolute, setAbsolute] = React.useState(false)
+  const relative = formatRelativeTime(ms)
+  const text = !absolute && relative !== null ? relative : formatTimestamp(ms)
+  if (text === '') return null
+  return (
+    <span
+      style={{ ...cardTimeStyle, cursor: 'help' }}
+      title={`${label} ${new Date(ms ?? 0).toLocaleString()}`}
+      onClick={event => {
+        event.stopPropagation() // 不触发行的打开
+        setAbsolute(v => !v)
+      }}
+    >
+      {text}
+    </span>
+  )
+}
 
 function InstanceRow({
   inst,
@@ -268,59 +269,56 @@ function InstanceRow({
   onCancel: () => void
   onDelete: () => void
 }): React.ReactElement {
-  const visual = instanceStatusVisual(inst.status)
   const active = instanceActive(inst.status)
   const progress = instanceProgressText(inst.nodeStates)
+  const pillColor = (INSTANCE_STATUS_PILL_COLOR as Record<string, string>)[inst.status] ?? 'var(--text-muted)'
+  const menuItems = [
+    ...(active
+      ? [{
+          key: 'cancel',
+          label: '取消实例',
+          icon: <StopIcon size={13} />,
+          onSelect: onCancel,
+        }]
+      : []),
+    {
+      key: 'delete',
+      label: '删除',
+      danger: true,
+      icon: <DeleteIcon size={13} />,
+      onSelect: onDelete,
+    },
+  ]
+  const errorMessage =
+    inst.error && typeof inst.error === 'object'
+      ? String((inst.error as { message?: unknown }).message ?? '')
+      : ''
   return (
-    <div className="wf-side-item" onClick={onOpen} title={`实例 ${inst.id}\n点击打开实例运行页`}>
-      <div className="wf-side-item-title">
-        <span
-          className={`wf-side-dot${inst.status === 'running' ? ' wf-side-dot--pulse' : ''}`}
-          style={{ background: visual.badgeFill }}
-        />
-        <span className="wf-side-item-name">{inst.definitionName || inst.definitionId}</span>
-        <span className="wf-side-status-label" style={{ color: visual.stroke }}>
-          {instanceStatusLabel(inst.status)}
-        </span>
+    <div className="ui-row" style={cardStyle} onClick={onOpen} title={`实例 ${inst.id}\n点击打开实例运行页`}>
+      <div style={cardHeaderStyle}>
+        <span style={cardTitleStyle}>{inst.definitionName || inst.definitionId}</span>
+        <RowActions items={menuItems} title="实例更多操作" disabled={busy} />
       </div>
-      <div className="wf-side-item-sub">
-        <span title={`创建于 ${new Date(inst.createdAt).toLocaleString()}`}>{formatTimestamp(inst.createdAt)}</span>
-        {inst.durationMs ? <span>耗时 {Math.round(inst.durationMs / 1000)}s</span> : null}
-        {progress ? <span>{progress}</span> : null}
-        {wsLabel ? <span className="wf-side-chip" title={inst.workspaceId}>{wsLabel}</span> : null}
-        {inst.workspaceMissing ? (
-          <span className="wf-side-chip wf-side-chip--warn" title="工作区未注册（数据保留，重新注册后自动回归）">
-            ⚠ 工作区缺失
-          </span>
-        ) : null}
+      <div style={cardMetaRowStyle}>
+        <span style={cardIdStyle} title={inst.id}>{inst.id}</span>
+        <CardTime ms={inst.createdAt} label="创建于" />
+        <span style={{ ...cardPillStyle, color: pillColor }}>{instanceStatusLabel(inst.status)}</span>
       </div>
-      {inst.error && typeof inst.error === 'object' && (inst.error as { message?: unknown }).message ? (
-        <div className="wf-side-item-sub" style={{ color: 'var(--accent-red, #ff6b6b)' }} title="实例失败原因">
-          ✕ {String((inst.error as { message?: unknown }).message).slice(0, 80)}
+      {progress || inst.durationMs || wsLabel || inst.workspaceMissing ? (
+        <div style={cardSubRowStyle}>
+          {inst.durationMs ? <span>耗时 {Math.round(inst.durationMs / 1000)}s</span> : null}
+          {progress ? <span>{progress}</span> : null}
+          {wsLabel ? <span style={chipStyle} title={inst.workspaceId}>{wsLabel}</span> : null}
+          {inst.workspaceMissing ? (
+            <span style={chipWarnStyle} title="工作区未注册（数据保留，重新注册后自动回归）">
+              ⚠ 工作区缺失
+            </span>
+          ) : null}
         </div>
       ) : null}
-      <div className="wf-side-item-actions" onClick={e => e.stopPropagation()}>
-        {active ? (
-          <button
-            type="button"
-            className="wf-side-btn"
-            disabled={busy}
-            title="取消该实例（中断运行中的节点线程）"
-            onClick={onCancel}
-          >
-            <StopIcon size={12} /> 取消
-          </button>
-        ) : null}
-        <button
-          type="button"
-          className="wf-side-btn wf-side-btn--danger"
-          disabled={busy}
-          title={active ? '删除实例（运行中会被后端拒绝，需先取消）' : '删除该实例（含事件日志与运行记录）'}
-          onClick={onDelete}
-        >
-          <DeleteIcon size={12} /> 删除
-        </button>
-      </div>
+      {errorMessage ? (
+        <div style={cardErrorStyle} title="实例失败原因">✕ {errorMessage.slice(0, 80)}</div>
+      ) : null}
     </div>
   )
 }
@@ -342,61 +340,57 @@ function DefinitionRow({
   onExport: () => void
   onDelete: () => void
 }): React.ReactElement {
+  const menuItems = [
+    {
+      key: 'run',
+      label: '运行',
+      icon: <RunIcon size={13} />,
+      onSelect: onRun,
+    },
+    {
+      key: 'edit',
+      label: '编辑',
+      icon: <EditIcon size={13} />,
+      onSelect: onEdit,
+    },
+    {
+      key: 'export',
+      label: '导出 JSON',
+      icon: <DownloadIcon size={13} />,
+      onSelect: onExport,
+    },
+    {
+      key: 'delete',
+      label: '删除',
+      danger: true,
+      icon: <DeleteIcon size={13} />,
+      onSelect: onDelete,
+    },
+  ]
   return (
-    <div className="wf-side-item" onClick={onEdit} title={`定义 ${def.id}\n点击打开编辑器`}>
-      <div className="wf-side-item-title">
-        <span className="wf-side-item-name">{def.name || def.id}</span>
+    <div className="ui-row" style={cardStyle} onClick={onEdit} title={`定义 ${def.id}\n点击打开编辑器`}>
+      <div style={cardHeaderStyle}>
+        <span style={cardTitleStyle}>{def.name || def.id}</span>
+        <RowActions items={menuItems} title="定义更多操作" disabled={busy} />
       </div>
-      {def.description ? (
-        <div className="wf-side-item-sub" title={def.description}>
-          <span
-            style={{
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-              maxWidth: '100%',
-            }}
-          >
-            {def.description}
-          </span>
+      <div style={cardMetaRowStyle}>
+        <span style={cardIdStyle} title={def.id}>{def.id}</span>
+        <CardTime ms={def.updatedAt} label="更新于" />
+        <span style={cardPillStyle}>{def.nodeCount} 节点</span>
+      </div>
+      {def.description || wsLabel || def.workspaceMissing ? (
+        <div style={cardSubRowStyle}>
+          {def.description ? (
+            <span style={cardSubTextStyle} title={def.description}>{def.description}</span>
+          ) : null}
+          {wsLabel ? <span style={chipStyle} title={def.workspaceId}>{wsLabel}</span> : null}
+          {def.workspaceMissing ? (
+            <span style={chipWarnStyle} title="工作区未注册（数据保留，重新注册后自动回归）">
+              ⚠ 工作区缺失
+            </span>
+          ) : null}
         </div>
       ) : null}
-      <div className="wf-side-item-sub">
-        <span title={`更新于 ${new Date(def.updatedAt).toLocaleString()}`}>{formatTimestamp(def.updatedAt)}</span>
-        <span>{def.nodeCount} 节点</span>
-        {wsLabel ? <span className="wf-side-chip" title={def.workspaceId}>{wsLabel}</span> : null}
-        {def.workspaceMissing ? (
-          <span className="wf-side-chip wf-side-chip--warn" title="工作区未注册（数据保留，重新注册后自动回归）">
-            ⚠ 工作区缺失
-          </span>
-        ) : null}
-      </div>
-      <div className="wf-side-item-actions" onClick={e => e.stopPropagation()}>
-        <button type="button" className="wf-side-btn" disabled={busy} title="打开定义编辑器" onClick={onEdit}>
-          <EditIcon size={12} /> 编辑
-        </button>
-        <button type="button" className="wf-side-btn" disabled={busy} title="运行该工作流" onClick={onRun}>
-          <RunIcon size={12} /> 运行
-        </button>
-        <button
-          type="button"
-          className="wf-side-icon-btn"
-          disabled={busy}
-          title="导出为 .workflow.json 文件"
-          onClick={onExport}
-        >
-          <DownloadIcon size={13} />
-        </button>
-        <button
-          type="button"
-          className="wf-side-icon-btn wf-side-icon-btn--danger"
-          disabled={busy}
-          title="删除定义（历史实例持快照不受影响）"
-          onClick={onDelete}
-        >
-          <DeleteIcon size={13} />
-        </button>
-      </div>
     </div>
   )
 }
@@ -410,7 +404,6 @@ interface WorkspaceOption {
 
 export default function SidebarPanel() {
   const ctx = getPluginContext()
-  React.useEffect(ensureSidebarStyles, [])
 
   const [workspaces, setWorkspaces] = React.useState<WorkspaceOption[]>([])
   const [selectedWs, setSelectedWs] = React.useState('')
@@ -642,62 +635,80 @@ export default function SidebarPanel() {
 
   const runningCount = (instances ?? []).filter(i => instanceActive(i.status)).length
 
+  /** 分组卡片组头（与任务侧边栏组头同构：仅点击箭头折叠，图标按钮推到右侧）。 */
+  const renderGroupHeader = (
+    label: string,
+    countText: string,
+    collapsed: boolean,
+    onToggle: () => void,
+    tools?: React.ReactNode,
+  ) => (
+    <div style={groupHeaderStyle}>
+      <span
+        style={groupChevronButtonStyle}
+        title={collapsed ? '展开' : '折叠'}
+        role="button"
+        aria-expanded={!collapsed}
+        onClick={onToggle}
+      >
+        <ChevronDownIcon
+          size={13}
+          style={collapsed ? { ...groupChevronStyle, ...groupChevronCollapsedStyle } : groupChevronStyle}
+        />
+      </span>
+      <span style={groupLabelStyle}>{label}</span>
+      <span style={groupCountStyle}>{countText}</span>
+      {tools ? <span style={groupToolsStyle}>{tools}</span> : null}
+    </div>
+  )
+
   return (
-    <div className="wf-side-root">
-      <div className="wf-side-header">
-        <span className="wf-side-title">工作流</span>
-        <button
-          type="button"
-          className="wf-side-icon-btn"
-          title="立即刷新实例与定义列表"
-          onClick={() => {
-            reloadWorkspaces()
-            reloadDefs(selectedWs)
-            reloadInstances(selectedWs)
-          }}
-        >
-          <RefreshIcon size={14} />
-        </button>
-      </div>
-
-      <div className="wf-side-toolbar">
-        <label htmlFor="wf-side-ws-select">工作区</label>
-        <select
-          id="wf-side-ws-select"
-          className="wf-side-select"
-          value={selectedWs}
-          onChange={e => setSelectedWs(e.target.value)}
-        >
-          <option value="">全部工作区</option>
-          {workspaces.map(w => (
-            <option key={w.id} value={w.id}>
-              {w.label}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      <div className="wf-side-scroll">
-        {/* ── 上：实例列表（可折叠） ── */}
-        <div className="wf-side-section">
-          <button
-            type="button"
-            className="wf-side-section-head"
-            onClick={() => setShowInstances(v => !v)}
-            title={showInstances ? '折叠实例列表' : '展开实例列表'}
+    <div style={shellStyle}>
+      <SidebarScrollArea style={listStyle}>
+        {/* ── 工具条：工作区过滤 + 刷新（功能项；任务侧边栏无对应物） ── */}
+        <div style={toolbarStyle}>
+          <select
+            style={selectStyle}
+            value={selectedWs}
+            title="按工作区过滤实例与定义列表"
+            onChange={e => setSelectedWs(e.target.value)}
           >
-            {showInstances ? <ChevronDownIcon size={13} /> : <ChevronRightIcon size={13} />}
-            实例
-            <span className="wf-side-count">
-              {instances === null ? '…' : `${instances.length}${runningCount > 0 ? `（${runningCount} 活跃）` : ''}`}
-            </span>
-          </button>
+            <option value="">全部工作区</option>
+            {workspaces.map(w => (
+              <option key={w.id} value={w.id}>
+                {w.label}
+              </option>
+            ))}
+          </select>
+          <Button
+            type="text"
+            style={toolbarButtonStyle}
+            title="立即刷新实例与定义列表"
+            aria-label="立即刷新实例与定义列表"
+            onClick={() => {
+              reloadWorkspaces()
+              reloadDefs(selectedWs)
+              reloadInstances(selectedWs)
+            }}
+          >
+            <RefreshIcon size={13} />
+          </Button>
+        </div>
+
+        {/* ── 上：实例列表（可折叠分组卡片） ── */}
+        <div style={groupSectionStyle}>
+          {renderGroupHeader(
+            '实例',
+            instances === null ? '…' : `${instances.length}${runningCount > 0 ? `（${runningCount} 活跃）` : ''}`,
+            !showInstances,
+            () => setShowInstances(v => !v),
+          )}
           {showInstances ? (
-            <div className="wf-side-section-body">
-              {instancesError ? <div className="wf-side-error">实例列表加载失败：{instancesError}</div> : null}
-              {instances === null && !instancesError ? <div className="wf-side-empty">正在加载实例…</div> : null}
+            <div style={groupTasksStyle}>
+              {instancesError ? <div style={errorStyle}>实例列表加载失败：{instancesError}</div> : null}
+              {instances === null && !instancesError ? <div style={emptyStyle}>正在加载实例…</div> : null}
               {instances !== null && instances.length === 0 && !instancesError ? (
-                <div className="wf-side-empty">暂无运行实例——从下方定义列表点「运行」开始。</div>
+                <div style={emptyStyle}>暂无运行实例——从下方定义列表点「运行」开始。</div>
               ) : null}
               {(instances ?? []).map(inst => (
                 <InstanceRow
@@ -714,61 +725,51 @@ export default function SidebarPanel() {
           ) : null}
         </div>
 
-        {/* ── 下：定义列表（可折叠；头部带 导入/＋ 新建） ── */}
-        <div className="wf-side-section">
-          <div className="wf-side-section-head" style={{ cursor: 'default' }}>
-            <button
-              type="button"
-              className="wf-side-icon-btn"
-              style={{ width: 16, height: 16 }}
-              title={showDefs ? '折叠定义列表' : '展开定义列表'}
-              onClick={() => setShowDefs(v => !v)}
-            >
-              {showDefs ? <ChevronDownIcon size={13} /> : <ChevronRightIcon size={13} />}
-            </button>
-            <span
-              style={{ cursor: 'pointer', flex: 1, textAlign: 'left' }}
-              onClick={() => setShowDefs(v => !v)}
-            >
-              定义
-              <span className="wf-side-count">{defs === null ? '…' : ` ${defs.length}`}</span>
-            </span>
-            <span className="wf-side-section-tools">
-              <button
-                type="button"
-                className="wf-side-icon-btn"
+        {/* ── 下：定义列表（可折叠分组卡片；组头带 导入/＋ 新建） ── */}
+        <div style={groupSectionStyle}>
+          {renderGroupHeader(
+            '定义',
+            defs === null ? '…' : String(defs.length),
+            !showDefs,
+            () => setShowDefs(v => !v),
+            <>
+              <Button
+                type="text"
+                style={toolbarButtonStyle}
                 disabled={runBusy('import')}
                 title={`导入 .workflow.json（落入${selectedWs ? '当前所选工作区' : '插件归属工作区'}）`}
+                aria-label="导入工作流定义"
                 onClick={() => fileInputRef.current?.click()}
               >
                 <UploadIcon size={13} />
-              </button>
-              <button
-                type="button"
-                className="wf-side-icon-btn"
+              </Button>
+              <Button
+                type="text"
+                style={toolbarButtonStyle}
                 title="新建工作流定义（打开编辑器空白定义）"
+                aria-label="新建工作流定义"
                 onClick={onNewDefinition}
               >
-                <PlusIcon size={14} />
-              </button>
-            </span>
-          </div>
+                <PlusIcon size={13} />
+              </Button>
+            </>,
+          )}
           {showDefs ? (
-            <div className="wf-side-section-body">
-              {defsError ? <div className="wf-side-error">定义列表加载失败：{defsError}</div> : null}
+            <div style={groupTasksStyle}>
+              {defsError ? <div style={errorStyle}>定义列表加载失败：{defsError}</div> : null}
               {importError ? (
-                <div className="wf-side-error">
+                <div style={errorStyle}>
                   导入失败：
-                  <ul>
+                  <ul style={{ margin: '2px 0 0', paddingInlineStart: 16 }}>
                     {importError.map((item, i) => (
                       <li key={i}>{item}</li>
                     ))}
                   </ul>
                 </div>
               ) : null}
-              {defs === null && !defsError ? <div className="wf-side-empty">正在加载定义…</div> : null}
+              {defs === null && !defsError ? <div style={emptyStyle}>正在加载定义…</div> : null}
               {defs !== null && defs.length === 0 && !defsError ? (
-                <div className="wf-side-empty">暂无定义——点 ＋ 新建，或导入 .workflow.json。</div>
+                <div style={emptyStyle}>暂无定义——点 ＋ 新建，或导入 .workflow.json。</div>
               ) : null}
               {(defs ?? []).map(def => (
                 <DefinitionRow
@@ -785,9 +786,7 @@ export default function SidebarPanel() {
             </div>
           ) : null}
         </div>
-
-        <div className="wf-side-hint">实例每 10s 自动刷新；点击实例打开运行页，点击定义打开编辑器。</div>
-      </div>
+      </SidebarScrollArea>
 
       {/* 导入文件选择（隐藏；处理后清值，同文件重复导入也触发 change）。 */}
       <input
@@ -805,21 +804,288 @@ export default function SidebarPanel() {
   )
 }
 
+// ─── 样式（与任务侧边栏 TasksPanel 同一套参数） ─────────────────────────────
+
+const shellStyle: React.CSSProperties = {
+  height: '100%',
+  display: 'flex',
+  flexDirection: 'column',
+  minWidth: 0,
+  minHeight: 0,
+  background: 'var(--bg-secondary)',
+}
+
+const listStyle: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 6,
+  minHeight: 0,
+  paddingRight: 2,
+}
+
+/** 顶部工具条（工作区过滤 + 刷新）。 */
+const toolbarStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 6,
+  padding: '2px 4px',
+}
+
+const selectStyle: React.CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  background: 'var(--bg-primary)',
+  border: '1px solid var(--border-light)',
+  borderRadius: 'var(--radius-sm)',
+  color: 'var(--text-primary)',
+  padding: '2px 6px',
+  fontSize: 'var(--text-xs)',
+  fontFamily: 'inherit',
+}
+
+const toolbarButtonStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: 22,
+  height: 22,
+  minWidth: 22,
+  padding: 0,
+  flexShrink: 0,
+}
+
+/** 分组卡片（实例区/定义区）。 */
+const groupSectionStyle: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 4,
+  padding: '6px 6px',
+  borderRadius: 'var(--radius-md)',
+  border: '1px solid var(--border-light)',
+  background: 'var(--bg-primary)',
+}
+
+const groupHeaderStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 6,
+  minWidth: 0,
+}
+
+/** 折叠/展开触发图标：仅点击该图标才折叠或展开（与任务侧边栏一致）。 */
+const groupChevronButtonStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  flexShrink: 0,
+  cursor: 'pointer',
+  padding: 2,
+  borderRadius: 'var(--radius-sm)',
+  color: 'var(--text-muted)',
+}
+
+const groupChevronStyle: React.CSSProperties = {
+  flexShrink: 0,
+  color: 'var(--text-muted)',
+  transition: 'transform 0.15s ease',
+}
+
+const groupChevronCollapsedStyle: React.CSSProperties = {
+  transform: 'rotate(-90deg)',
+}
+
+const groupLabelStyle: React.CSSProperties = {
+  fontSize: 'var(--text-sm)',
+  fontWeight: 700,
+  color: 'var(--text-primary)',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+  minWidth: 0,
+  flex: '0 1 auto',
+}
+
+const groupCountStyle: React.CSSProperties = {
+  fontSize: 'var(--text-xs)',
+  fontWeight: 400,
+  color: 'var(--text-muted)',
+  flexShrink: 0,
+}
+
+const groupToolsStyle: React.CSSProperties = {
+  marginLeft: 'auto',
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 2,
+  flexShrink: 0,
+}
+
+const groupTasksStyle: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 3,
+}
+
+/** 行卡片（.ui-row：hover 浮现 ⋯ 菜单靠宿主全局 CSS）。 */
+const cardStyle: React.CSSProperties = {
+  borderWidth: 1,
+  borderStyle: 'solid',
+  borderColor: 'transparent',
+  borderRadius: 'var(--radius-md)',
+  background: 'var(--bg-primary)',
+  color: 'var(--text-primary)',
+  padding: '6px 10px',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 3,
+  cursor: 'pointer',
+}
+
+const cardHeaderStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'flex-start',
+  justifyContent: 'space-between',
+  gap: 6,
+}
+
+const cardTitleStyle: React.CSSProperties = {
+  fontSize: 'var(--text-sm)',
+  fontWeight: 700,
+  minWidth: 0,
+  flex: 1,
+  overflow: 'hidden',
+  textOverflow: 'clip',
+  whiteSpace: 'nowrap',
+}
+
+const cardMetaRowStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  flexWrap: 'nowrap',
+  minWidth: 0,
+}
+
+const cardIdStyle: React.CSSProperties = {
+  minWidth: 0,
+  flex: '1 1 auto',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+  fontSize: 'var(--text-xs)',
+  color: 'var(--text-muted)',
+  fontFamily: 'var(--font-mono, monospace)',
+}
+
+const cardTimeStyle: React.CSSProperties = {
+  fontSize: 'var(--text-xs)',
+  color: 'var(--text-muted)',
+  flexShrink: 0,
+  whiteSpace: 'nowrap',
+}
+
+const cardPillStyle: React.CSSProperties = {
+  borderRadius: 999,
+  padding: '1px 6px',
+  fontSize: 'var(--text-xs)',
+  fontWeight: 400,
+  flexShrink: 0,
+  background: 'transparent',
+  color: 'var(--text-muted)',
+  whiteSpace: 'nowrap',
+}
+
+/** 次要信息行（实例=耗时/进度/工作区；定义=描述/工作区）。 */
+const cardSubRowStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 6,
+  flexWrap: 'wrap',
+  minWidth: 0,
+  fontSize: 'var(--text-xs)',
+  color: 'var(--text-muted)',
+}
+
+const cardSubTextStyle: React.CSSProperties = {
+  minWidth: 0,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+}
+
+const cardErrorStyle: React.CSSProperties = {
+  fontSize: 'var(--text-xs)',
+  color: 'var(--accent-red)',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+}
+
+const chipStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  border: '1px solid var(--border-light)',
+  borderRadius: 999,
+  padding: '0 6px',
+  fontSize: 'var(--text-2xs)',
+  color: 'var(--text-muted)',
+  maxWidth: 110,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+}
+
+const chipWarnStyle: React.CSSProperties = {
+  ...chipStyle,
+  color: 'var(--accent-amber)',
+  borderColor: 'color-mix(in srgb, var(--accent-amber) 40%, var(--border-light))',
+}
+
+const emptyStyle: React.CSSProperties = {
+  fontSize: 'var(--text-xs)',
+  color: 'var(--text-muted)',
+  padding: '8px 4px',
+}
+
+const errorStyle: React.CSSProperties = {
+  fontSize: 'var(--text-xs)',
+  color: 'var(--accent-red)',
+  padding: '8px 4px',
+  lineHeight: 1.5,
+}
+
+const confirmBodyStyle: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 12,
+  minWidth: 'min(320px, 80vw)',
+  fontSize: 13,
+}
+
+const confirmFooterStyle: React.CSSProperties = {
+  display: 'flex',
+  justifyContent: 'flex-end',
+  gap: 8,
+}
+
 /*
- * ── 人工验证清单（步骤 9 侧边栏）──────────────────────────────────────────
- * 1. 打开侧边栏「工作流」：实例/定义两区均出现；顶部工作区下拉列出注册表工作区
- *    （含「全部工作区」缺省项）。
- * 2. 「＋」→ 打开空白定义编辑器（workspaceId=所选或插件归属）；保存后返回侧栏，
- *    30s 内或手动刷新后定义列表出现新条目（名称/描述/更新时间/节点数）。
- * 3. 定义行「编辑」→ 编辑器打开同一定义；「运行」→ 运行对话框（见 RunDialog 清单）。
- * 4. 定义行「导出」→ 浏览器下载 `<名称>.workflow.json`；内容=definition.json 原样。
- * 5. 「导入」选择刚导出的文件 → toast「已导入为 wf_…」（id 重赋）；导入残缺 JSON
- *    （删掉 name）→ 红框逐项回显；导入非法 JSON → 「文件不是合法 JSON：…」。
+ * ── 人工验证清单（侧边栏，任务面板同构布局版）──────────────────────────────
+ * 1. 打开侧边栏「工作流」：实例/定义两张分组卡片（与任务侧边栏分组卡片同样式）；
+ *    顶部工作区下拉列出注册表工作区（含「全部工作区」缺省项）+ 刷新按钮。
+ * 2. 组头：仅点击箭头图标折叠/展开（点组名/计数不折叠）；折叠时箭头旋转 -90°。
+ * 3. 行卡片：hover 时右侧浮现 ⋯「更多操作」菜单（与任务卡片一致的浮现行为）；
+ *    实例菜单=取消（活跃时）/删除；定义菜单=运行/编辑/导出 JSON/删除。
+ * 4. 「＋」→ 打开空白定义编辑器；「导入」选择 .workflow.json → toast「已导入为
+ *    wf_…」；导入残缺/非法 JSON → 分组卡片内红色逐项回显。
+ * 5. 定义行「导出」→ 浏览器下载 `<名称>.workflow.json`；内容=definition.json 原样。
  * 6. 定义「删除」→ 宿主模态 confirm → 确认后条目消失；实例保留（持快照）。
- * 7. 运行中实例：状态点蓝色呼吸、显示「取消/删除」；点行打开实例页（步骤 10 占位，
- *    tab.data.instanceId 正确）；「取消」→ confirm → 状态转已取消（灰点）。
+ * 7. 运行中实例：行卡片状态药丸蓝色「运行中」；⋯ 菜单「取消实例」→ confirm →
+ *    状态转已取消（琥珀「已取消」）；点行打开实例页（tab.data.instanceId 正确）。
  * 8. 终态实例显示进度「n/m 节点完成」与耗时；删除终态实例 → 目录清除、列表消失。
- * 9. 切换工作区下拉 → 两列表按所选工作区过滤；切回「全部」→ 恢复全量；
- *    注册表变化（增删工作区）后下拉自动更新、失效选择回落「全部」。
- * 10. 工作区缺失的定义/实例显示「⚠ 工作区缺失」琥珀色标记（数据保留可查看）。
+ * 9. 行内时间：7 天内显示相对时间（刚刚/x 分钟前…），点击切换绝对/相对，
+ *    title 显示完整绝对时间（与任务卡片时间交互一致）。
+ * 10. 切换工作区下拉 → 两列表按所选工作区过滤；切回「全部」→ 恢复全量且行内
+ *     显示工作区归属 chip；注册表变化后下拉自动更新、失效选择回落「全部」。
+ * 11. 工作区缺失的定义/实例显示「⚠ 工作区缺失」琥珀色标记（数据保留可查看）。
+ * 12. 滚动行为与任务侧边栏一致（SidebarScrollArea：滚动时浮现滑块、停后淡出）。
  */
