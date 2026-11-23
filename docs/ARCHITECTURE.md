@@ -250,6 +250,7 @@ worker 端 `RpcDispatcher` 注册方法;应答回**请求来源连接**的 `evt`
 | `search` | **统一搜索入口(破坏性变更:取代已移除的 `fs.search`/`fs.find`/`task.search`,不保留兼容壳)**——**核心零类型感知**:只「遍历 `SearchProviderRegistry`(可选按 `kinds` 过滤)→ 触发 provider → 聚合」,类型清单完全来自注册表;入参仅 `workspace`(必带,沙箱 jailed)/`pattern`(核心不解释)/`kinds?`/`filters?`(**不透明参数袋**,key 为 `${kind}.${field}`,核心绝不解释内容);内置 `file-content`/`file-name`/`task` 三引擎均为 `SearchProvider`,与插件 provider 同权(§8.5);大结果复用 `rpc.data` 分批 |
 | `git.status` / `log` / `diff` / `show` / `commit` / `pull` / `push` / `discard` / `init` / `clone` / `remote.add` / `remote.list` | 工作区 git 快操作(git 插件注册,必带 workspace);由 `NativeGit` 调宿主原生 git argv 直传执行(§7.12);大型迁移(批量 checkout / 大仓库迁移)建为 Task,进度走任务流 |
 | `git.credential.save` | 保存 git 远端凭证(AES-GCM 加密落盘,§7.12;只写不读回) |
+| `workflow.*` | 工作流插件自注册的方法族:`def.list`/`def.get`/`def.save`/`def.delete`/`def.export`/`def.import`、`run`、`instance.list`/`instance.get`/`instance.runLog`/`instance.events`/`instance.cancel`/`instance.delete`/`instance.decide`;**写操作必带 workspace 参数**(同 `task.run` 纪律);数据住 `workspaces/<id>/workflows/`(§7.15),实例事件补齐走 `instance.events` 长轮询(插件自持事件日志,不占任务流频道) |
 | `slash.list` / `select` / `cancel` / `taskTokens.apply` / `taskTokens.list` | 斜杠命令清单与选中/取消、任务级 token 应用与现值拉取(§7.16) |
 | `mention.query` | `@` 文件搜索(后端子序列模糊匹配,独立于统一 `search`,不属搜索面板) |
 | `rpc.cancel` | 取消进行中的长 RPC(Future.cancel) |
@@ -354,6 +355,7 @@ AgentStatusAdvisor(agent 生命周期事件,最外层)
 - **WaitTaskAdvisor 在席等待**:等待绑定 take 消费后迁移到「在席等待」而非移除,收口才退场——周期检测因此能识别**并发互等竞态**;等待期间打心跳日志(静默挂起必须在日志可见)。
 - **ModelLengthGuardAdvisor(输出预算耗尽护栏)**:识别「输出已达上限」的确定性失败,三条路径殊途同归报同一错误;**先向下游下发合成 `finish_reason=length` 帧、再抛非重试异常**——合成帧语义是跨插件协议契约(AdaptiveMaxTokensAdvisor 只认帧,不认异常类型),不可移除。错误为自定义非重试异常(穿透瞬时重试),信息含用户侧建议。
 - **LoopRepeatGuard** 是装饰 `ToolCallingManager` 的核心守卫(不是 advisor):比较本轮与上一轮工具调用签名(名称+参数集合),连续重复达阈值**先以提醒文本作为该轮工具结果回传模型**留一次纠正机会(本轮不真正执行),再重复才中断任务;粒度有意保持批级。
+- **隐式工具(hidden tools)**:`ToolProvider.createHiddenTools(ToolContext)` 产出的工具**注册但不进请求 tool 定义**——模型经 skill 文档认知后按名调用(子 agent 工具族 `run_agent`/`list_agents`/`wait_agents`/`stop_agent` 即此形态,由 agent-dispatch skill 文档化)。hidden 池随 prompt options 的框架 ToolContext map 下行(per-run 生命周期、独立键、每 run 组装期一次定型,与 RunContext 同路);工具名解析 fallback **仅查本请求 hidden 池**,未命中走既有 soft-fail 兜底——**不启用 Spring 全 Bean 解析**(安全边界:未知工具名不得凭全局注册表命中)。配置 `worker.tools.hidden-enabled` 默认 true,false 时 hidden 工具回落为常规暴露(应急回退)。
 - **DialogInsertAdvisor 限主 agent**(子 agent 对话是一次性嵌套,不接收任务队列输入)。
 - **主/子共用同一执行入口与 Advisor 链**,仅 agentId 不同;链上 advisor 对主/子一视同仁装配,仅明确按主体区分的能力才经 `AdvisorProvider.appliesTo` 显式过滤。
 - **advisor 取数统一走 `AgentContext.execution()`(ExecContext 槽位,§7.20)**:taskId→`subjectId()`、模型配置→`snapshot()`、事件→`emitter()`、终态判定→`terminal()`;agent 装配经 `ctx.agentFactory().create(agentId)`(预绑定工厂)。不 import 任务域类型。fileChanges 等插件功能不进 ExecContext 也不进 TaskRuntime(§7.15.2/§14.11)。
@@ -688,7 +690,12 @@ worker 的运行期责任链统一为 filter 形态（`result = next(ctx)`）：
 │   │   ├─ <mainAgentId>.jsonl       # 主 agent 会话 + 任务级事件
 │   │   ├─ rounds.jsonl              # 轮次索引(§7.15.1)
 │   │   └─ file-changes/<roundId>.json   # 单轮文件变更记录(经 task.fileChanges 拉取)
-│   └─ w_xxxxx/tasks/<taskId>/       # 其它工作区任务目录(结构同默认工作区)
+│   ├─ w_xxxxx/tasks/<taskId>/       # 其它工作区任务目录(结构同默认工作区)
+│   └─ <workspaceId>/workflows/      # 工作流插件自持数据(与 tasks/ 平级;工作区即隔离边界,RPC 写操作必带 workspace、root 运行时经注册表解析,同 task 域纪律)
+│       ├─ definitions/<wf_id>/definition.json     # 工作流定义
+│       └─ instances/<wi_id>/                      # 一次运行 = 一个实例(自包含、可独立回放;实例持定义深拷贝快照)
+│           ├─ meta.json / events.jsonl / runs/   # 实例元数据 / 实例事件日志(追加写) / 每次节点运行一文件
+│           └─ agents/<name>.jsonl                 # 命名 agent 会话日志(形态同 task 域 per-agent jsonl,§7.20.7)
 ├─ sandbox/                          # 沙箱持久状态(home/opt/usr-local/resolv.conf/env;worker.sandbox.persistent-root 可覆盖)
 │   └─ distro/                       # WSL 托管发行版 rootfs(原 wsl/distro 迁入;运行期状态,可整体重装)
 ├─ skill-exposure.json             # skill 按工作区暴露配置(黑白名单并存,黑名单优先) {"<skillId>":{"blacklist":["<workspaceRoot>",...],"whitelist":["<workspaceRoot>",...]}}(身份键=工作区根路径;缺文件=空表=全部暴露,§7.17)
@@ -1043,9 +1050,13 @@ public interface AgentFactory {
 - AI 审议 agent：per-task 固定 agentId `review-<subjectId>` 注册进 `agents()` 跨请求复用会话（§7.9）——`agents().get(id)` 命中即续跑（复用路径不补发 `agent.started`——advisor 链每轮 run() 自动发）；未命中经 `ctx.agentFactory().create(id, reviewModel)` 创建，设 `creator("ai-review")` 后 `build()` 自动注册（台账记录其条目；`list_agents` **工具**按 `creator=subagent` 过滤故不可见，而 `task.agents` RPC 现返回全部 agent、包含审议 agent 条目）。
 - `InteractionService` ask 的 context map `"taskId"` 键保留（值=subjectId，今天相等，前端兼容）；`SubjectBoundInteractionService` 静态代理在键缺失时自动补填，替代各处手动组装。
 
-#### 7.20.7 工作流复用终态
+#### 7.20.7 工作流层复用终态
 
-未来工作流层 `WorkflowRuntime implements ExecContext`（subjectId=workflowId、dataDir=工作流数据目录、emitter=工作流事件口、agentFactory=WorkflowBoundAgentFactory）——同一条授权链、同一批 advisor、同一工具链、同一 subagent/审议能力**零改动复用**（§7.14.2 分层：工作区 → task 层/工作流层平级编排 → agent 层 → 基础设施层，下层不知道上层）；事件管道（§14.0）与执行上下文管道双通道同构。
+工作流层(workflow 内置插件)`WorkflowRuntime implements ExecContext`(subjectId=实例 ID、dataDir=工作流数据目录、emitter=工作流事件口、agentFactory 槽位经 `agentFactoryFor(this)` 预绑定)——同一条授权链、同一工具链、同一批**域中性** advisor 零改动复用(§7.14.2 分层:工作区 → task 层/工作流层平级编排 → agent 层 → 基础设施层,下层不知道上层);subagent/审议能力的执行链同样零任务域假设,是否对工作流开放由工作流层在装配期决定(如剔除 agent 族工具防生命周期逃逸)。事件管道(§14.0)与执行上下文管道双通道同构:工作流层实现自己的语义事件→wire 映射与自持事件日志。
+
+- **非任务主体的两个获取口**(plugin-api `WorkerServices`):`agentFactoryFor(ExecContext)` 返回绑定到该 ExecContext 的 `AgentFactory`(静态代理,与任务域 `ExecContext.agentFactory()` 同一绑定形态——非任务主体没有任务域槽位可走,经 worker 服务口取绑定工厂);`modelConfigs()` 返回模型配置全表(apiKey 天然不在返回值,同 `config.get` 掩码纪律),供非任务主体解析节点级模型配置。
+- **不变式:任务域 advisor 不上非任务主体**。`AdvisorContext.isTaskSubject()` 是统一域判定(实现 = `agentEntity().execution() instanceof TaskRuntime`,不用 `ctx instanceof`、不依赖按 subjectId 查任务服务);任务域专属 advisor——消费任务域持久化契约(rounds.jsonl、file-changes 分片)或任务级开关副作用(git 自动同步 token)的——其 provider 的 `appliesTo` 必须以它过滤;后续新增 advisor 注册时必须自检「是否任务域专属」,是则同样过滤。
+- **工作流 agent 上下文模型**:命名 agent = 实例内一条持续会话线(跨节点延续)。会话持久化照抄 task 域形态:per-agent jsonl 事件流 + `conversationArchive()` 槽位全保真重建;运行即销毁、冷启动(同任务域 D18/D22 哲学)。隔离边界五层互相独立:工作区(存储隔离,§7.15)/ 实例间 / agent 间 / supervisor 介入会话 / 与 task 子 agent 体系。**同 agent 名节点全局互斥 = 会话线串行的不变式**:同一条会话线被并行节点交错读写即上下文损坏,调度器以互斥保证串行。
 
 ---
 
@@ -1215,7 +1226,7 @@ worker                         hub                    前端(可能 0 个在线)
 ├── every-agent-contract/          # 纯协议契约:帧信封 / RPC 信封 / 错误码 / 身份哈希(Java DTO + TS 类型)
 ├── every-agent-plugin-api/        # 插件 API 契约:ExecContext(统一执行上下文) / EventEmitter / EmitEvent / ChatModelEnhancer / ModelConfig / TaskLifecycleNode 等接口(纯类型,插件与 worker 共用)
 ├── every-agent-plugin-parent/     # 插件 SDK parent(仅 pom):Java 25 / 编码 / 插件依赖版本管理 / plugin.json 打包 / 测试栈,内置与外部插件共用
-├── every-agent-plugins/           # 内置插件:model-rate-limit(限流) / token-estimator(token 估算与校准) / task-queue(队列) / subagent / git / ai-review / empty-response-retry(空响应重试) / transient-error-retry(瞬时错误重试) / context-compression(上下文压缩) / ...
+├── every-agent-plugins/           # 内置插件:model-rate-limit(限流) / token-estimator(token 估算与校准) / task-queue(队列) / subagent / git / ai-review / empty-response-retry(空响应重试) / transient-error-retry(瞬时错误重试) / context-compression(上下文压缩) / workflow(工作流引擎与界面,java+web 双形态) / ...
 ├── create-everyagent-plugin/      # 插件工程脚手架 CLI(node create-everyagent-plugin --id <id>,java/web/full 模板 + .eap 打包)
 ├── every-agent-desktop/           # Electron 桌面打包
 ├── runtime/                       # 程序附属文件(核心 rg 二进制;插件附属资源由各插件 runtime/ 子目录并入)

@@ -7,7 +7,7 @@ has_children: false
 
 # 内置插件范例索引
 
-**一句话定位**：`every-agent-plugins/` 下的 31 个内置插件是**活教材**——每种扩展点、每种形态、每种 order 档位在仓内都有真实可抄的范本。本篇告诉你「想学某个扩展点，去抄哪个插件」：先查总表（§2）定位插件，再用反查表（§3）按扩展点直达推荐范本，写代码前扫一眼 order 占用表（§4）避开已占档位。
+**一句话定位**：`every-agent-plugins/` 下的 32 个内置插件是**活教材**——每种扩展点、每种形态、每种 order 档位在仓内都有真实可抄的范本。本篇告诉你「想学某个扩展点，去抄哪个插件」：先查总表（§2）定位插件，再用反查表（§3）按扩展点直达推荐范本，写代码前扫一眼 order 占用表（§4）避开已占档位。
 
 所有路径相对仓库根；表格内为省篇幅，`every-agent-plugins/` 前缀在 §5 各小节统一省略为 `~plugins/`。全部数据来自源码逐文件取证（本篇成文前按行复核过关键行号，见文末口径说明）。
 
@@ -45,6 +45,7 @@ has_children: false
 | secret-redaction | 凭据输出脱敏 | java | ToolExecutionInterceptor | — | — | 入口 24 行 |
 | selection-reference | 选区引用 | both | SlashTokenResolver | `ui.editor_context_menu_actions` + `ui.composer_chip_actions` | — | 入口 90 行 + web 94 行 |
 | subagent | 子 Agent | java | ToolProvider + 技能包物化（SkillMaterializer）+ TaskLifecycleNode | — | 节点 950 | 入口 59 行 |
+| svg-renderer | SVG 渲染器 | web | —（无 Java；技能包物化） | `ui.output_blocks` | — | web 52 行 |
 | system-info | 系统环境信息注入 | java | AdvisorProvider | — | HP+50 | 入口 19 行 |
 | task-edit-resend | 编辑重发 | both | TaskLifecycleNode | `ui.user_message_actions` + `task.submit_contributions` | 节点 877 | 入口 27 行 + web 26 行 |
 | task-input-queue | 任务输入队列 | both | TaskLifecycleNode ×2 + AdvisorProvider；RPC ×3（`task.queue*`） | `ui.composer_above_panel` | 节点 15 / 870；Advisor DO+30 | 入口 38 行 + web 24 行 |
@@ -54,11 +55,12 @@ has_children: false
 | transient-error-retry | 瞬时错误退避重试 | java | AdvisorProvider | — | DO+200 | 入口 21 行 |
 | unattended | 无人值守 | java | ToolExecutionInterceptor + AuthorizationHandler + SlashProvider + SlashTokenResolver | — | — | 入口 32 行 |
 | update-file-view | 文件更新视图 | web | —（无 Java） | `ui.tool_call_views` | — | web 29 行 |
+| workflow | 工作流 | both | ToolProvider（hidden 工具五件）+ 技能包物化；RPC `workflow.*`（`def.*` / `run` / `instance.*`） | `ui.sidebar_items` + `ui.workspace_tab_types` ×2（定义编辑器 / 实例运行页） | 侧边栏 4 | — |
 
 ### 2.1 全体共性（读任何一个插件前先知道）
 
-- 形态分布：java-only 19 / both 7 / web-only 5。
-- 清单字段全体一致：`id/name/version/description/author` + `enabled`，version 除 image-vision（`0.2.0`，read_file 接管切换）外一律 `0.1.0`、author 一律 `everyagent`；含 Java 的 26 个另有 `main`，含前端的 12 个另有 `webMain`（值全部写 `web/index.ts`，宿主实际加载的是构建产物 `web/index.js`，见 [plugin.json 字段参考](../plugin-manifest.md) §5）；带技能包的只有 subagent。
+- 形态分布：java-only 19 / both 8 / web-only 5。
+- 清单字段全体一致：`id/name/version/description/author` + `enabled`，version 除 image-vision（`0.2.0`，read_file 接管切换）外一律 `0.1.0`、author 一律 `everyagent`；含 Java 的 27 个另有 `main`，含前端的 13 个另有 `webMain`（值全部写 `web/index.ts`，宿主实际加载的是构建产物 `web/index.js`，见 [plugin.json 字段参考](../plugin-manifest.md) §5）；带技能包的有 subagent、svg-renderer 与 workflow（plugin.json 声明 `skills`，PluginLoader 统一物化）。
 - 用 `contributes.config` 的只有 2 个：image-vision（3 键）、sandbox-windows-codex（6 键）。
 - `enabled:false` 的有 3 个：ripgrep-tool、sandbox-wsl-ubuntu、secret-redaction（内置扫描期整目录跳过；sandbox-windows-mic 已移除）。
 - 依赖红线干净：全部 26 个 pom **零 `every-agent-worker` 依赖**；`task-edit-resend`、`task-input-queue` 额外依赖 `every-agent-contract` 属共享契约层，合规（[架构文档](../../ARCHITECTURE.md) §14.9）。
@@ -74,13 +76,14 @@ has_children: false
 | 想实现 | 推荐范本 | 源码相对路径 | 为什么推荐 |
 |---|---|---|---|
 | ToolProvider（给模型加工具） | subagent | `every-agent-plugins/subagent/src/main/java/dev/everyagent/plugin/subagent/SubAgentPlugin.java:41` | 典型工具型实现,注册即用 |
+| ToolProvider 的 hidden 工具（`createHiddenTools`——注册但不进请求 tool 定义，模型经 skill 按名调用） | workflow | `every-agent-plugins/workflow/`（hidden 定义 CRUD 五工具 + skill 文档化，见 [工具 §1.5](../backend/tools-and-sandbox.md)） | hidden 工具 + skill 文档化组合的范本 |
 | AdvisorProvider（请求/响应链增强） | system-info | `every-agent-plugins/system-info/src/main/java/dev/everyagent/plugin/sysinfo/SystemInfoAdvisorProvider.java` | 全仓最小 Advisor 范例（入口 19 行），只做请求前 system prompt 注入 |
 | SandboxProvider（自定义沙箱） | sandbox-wsl-ubuntu | `every-agent-plugins/sandbox-wsl-ubuntu/src/main/java/dev/everyagent/plugin/sandbox/wslubuntu/WslUbuntuSandboxProvider.java:81-82` | 独立沙箱后端完整样例（codex 为强隔离样本,体量大） |
 | SearchProvider | **无内置范例** | —（声明：`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/WorkerPluginContext.java:52`） | 内置插件零使用，别照抄空气；SPI 已接线（统一 `search` 聚合——内置 `file-content`/`file-name`/`task` 三引擎本身就是内置 provider、与插件 provider 同权，见 [advisors §6](../backend/advisors.md)） |
 | AuthorizationHandler（接管授权闸门） | unattended | `every-agent-plugins/unattended/src/main/java/dev/everyagent/plugin/unattended/UnattendedPlugin.java:23` | 逻辑最短；带评审模型的进阶版看 ai-review（`AiReviewPlugin.java:24`） |
 | ToolExecutionInterceptor（拦截工具调用） | secret-redaction | `every-agent-plugins/secret-redaction/src/main/java/dev/everyagent/plugin/secretredaction/SecretRedactionPlugin.java:22` | 唯一「单 SPI 极简」实现（入口 24 行），上行掩码单向拦截 |
 | 事件出网过滤（隐藏/改写某类事件的出网形态；事件仍落盘） | ai-review | `every-agent-plugins/ai-review/src/main/java/dev/everyagent/plugin/aireview/AiReviewPlugin.java:37-38` | 全仓唯一实现：事件级 + 轮次级两条链都注册，丢弃审议 agent 的**会话内容**事件（思考/正文/工具结果/错误/`agent.done`）；状态与用量（`agent.started`/`agent.status`/`usage`）与结果 trace 保留出网（前端 agent 胶囊列表实时数据源） |
-| 技能包物化（给插件带 skill 知识包；**非 SPI**——`activate()` 里一次物化调用） | subagent | `every-agent-plugins/subagent/src/main/java/dev/everyagent/plugin/subagent/SubAgentPlugin.java:52` | 全仓唯一先例：jar 内 `skill/agent-dispatch/skill.md` 物化到 skillsDir，落盘后与用户自制 skill 同权（[advisors §5](../backend/advisors.md)） |
+| 技能包物化（给插件带 skill 知识包；**非 SPI**——plugin.json 声明 `skills` 字段，PluginLoader 加载时统一物化） | subagent | `every-agent-plugins/subagent/plugin.json`（`"skills": "skill"`） | 最早先例：插件根 `skill/agent-dispatch/skill.md` 物化到 skillsDir，落盘后与用户自制 skill 同权（[advisors §5](../backend/advisors.md)）；svg-renderer、workflow 同款 |
 | TokenEstimator（token 估算） | token-estimator | `every-agent-plugins/token-estimator/src/main/java/dev/everyagent/plugin/tokenEstimator/TokenEstimatorPlugin.java:44` | 全仓唯一实现（BuiltinTokenEstimator）；`calibrate` 等已降为插件内部方法，不再上 SPI |
 | ChatModelEnhancer（模型增强/容灾） | model-pool | `every-agent-plugins/model-pool/src/main/java/dev/everyagent/plugin/modelpool/ModelPoolPlugin.java:26` | 全仓唯一实现：组合 ChatModel 做主备切换 |
 | FileReadHandler（read_file 图片接管） | image-vision | `every-agent-plugins/image-vision/src/main/java/dev/everyagent/plugin/imagevision/ImageVisionPlugin.java:31` | 全仓唯一实现，且是 `contributes.config` → `ctx.config()` 消费链的活样本 |
@@ -314,6 +317,12 @@ WSL Ubuntu 沙箱 + bash 工具 + network slash 开关。
 - 插件**已无 web 前端功能**：原 `ui.composer_above_panel` 子 agent 面板退役，agent 胶囊列表由 web 核心 `TaskChat` + `AgentListPanel` 渲染；`task.agents` RPC 已收回 task 域（`TaskManager` 注册），不再由本插件提供。
 - 值得看：一插件多 SPI 组合；主/子 Agent 共用同一运行入口的对接点。
 
+### svg-renderer（SVG 渲染器）
+
+识别 AI 输出中的 `<svg-image>` 标签并内联渲染为图形（web-only；自带 skill 知识包教模型产出该标签）。
+- 关键文件：`~plugins/svg-renderer/web/index.ts:31`（`ctx.ui.registerOutputBlock`）；渲染组件 `web/SvgBlock.tsx`。
+- 值得看：`ui.output_blocks` 唯一使用者；纯 web 插件带技能包（plugin.json `"skills": "skill"`，无 Java 代码零参与物化）的样本。
+
 ### system-info（系统环境信息注入）
 
 注入 OS / JDK 等系统环境信息。
@@ -364,6 +373,13 @@ Token 估算器（全仓唯一实现 BuiltinTokenEstimator）+ 在线校准 Advi
 - 关键文件：`~plugins/update-file-view/web/index.ts:25`。
 - ⚠️ `web/index.ts:4` 引用已删除的 `builtInPlugins.ts`。
 - 值得看：`ui.tool_call_views` 唯一样本，含 `ctx.ui.openFileTab` 联动。
+
+### workflow（工作流）
+
+工作流引擎与界面：画布定义编辑、实例运行、并行调度（**同 agent 名节点全局互斥 = 会话线串行**）、循环上限（maxRuns）、运行变量、定义导入导出、出错 supervisor 介入（retry / skip / fail / retryWithInput，或 askUser 挂起等人工决策）。
+- 存储位置：`<homeDir>/workspaces/<workspaceId>/workflows/`（`definitions/<wf_id>/definition.json` + `instances/<wi_id>/`，与 `tasks/` 平级、工作区即隔离边界；[架构文档](../../ARCHITECTURE.md) §7.15 / §7.20.7）。
+- AI 可用 hidden 工具五件：`workflow_create` / `workflow_get` / `workflow_update` / `workflow_delete` / `workflow_list`——经 `ToolProvider.createHiddenTools` 注册（不进请求 tool 定义，模型经本插件 skill 文档按名调用，[工具 §1.5](../backend/tools-and-sandbox.md)）。
+- 值得看：**非任务主体的 ExecContext 实现**（`WorkflowRuntime`）——advisor 链 / 授权链 / 工具链零改动复用的范本，任务域 advisor 靠 `AdvisorContext.isTaskSubject()` 过滤（[advisors §1.6](../backend/advisors.md)）；hidden 工具 + skill 文档化组合的最大实例；自研 SVG 画布与 `instance.events` 长轮询的工程范本。
 
 ## 6. 下一步读
 

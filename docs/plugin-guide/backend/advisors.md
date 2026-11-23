@@ -53,6 +53,7 @@ public interface AdvisorProvider {
 | `configId()` | 本 agent 实际解析所用的模型配置 ID（per-agent 语义；审议 agent 覆盖模型时与 `snapshot().configId()` 不同） | TokenCalibrationAdvisor 按它隔离校准系数 |
 | `toolCallingManager()` | 共享的 `ToolCallingManager` 单例 | 自定义 ToolCallingAdvisor 子类的构造参数 |
 | `agentEntity()` | 当前 agent 上下文（plugin-api 契约接口，读会话内存等） | AgentsMdAdvisor 取 `execution().workspaceRoot()` |
+| `isTaskSubject()` | 域判定（`default` 方法）：本 agent 的执行主体是否任务主体（`agentEntity().execution() instanceof TaskRuntime`） | 任务域专属 advisor 的 `appliesTo` 过滤（§1.6） |
 
 ### 1.2 与 Spring AI Advisor 的关系（复用框架，不自搓）
 
@@ -111,6 +112,32 @@ public class AgentsMdAdvisorProvider implements AdvisorProvider {
 | 一个 advisor 塞多个职责 | §14.8 红线：**一个 Advisor 只负责一个功能**；要挂钩工具循环的增强必须继承 `ToolCallingAdvisor` 重写受保护 hook，**不得另起一层包裹**或重复实现递归循环 | [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §14.8（本篇 §8 原文） |
 | **指望「每次模型调用都生效」却把 order 挂在工具循环外侧** | 工具循环在 `ToolCallingAdvisor` 内部递归，每轮迭代只把请求交给 `chain.copy(this)`——**「本 advisor 之后」的链段**，外侧 advisor 一次 run 只见请求一次。凡依赖「工具结果之后再发给模型的东西」（附件注入、按轮刷新的上下文）必须取 `> TCA` 的位置，否则同一 run 中途产生的新内容本轮永不出现在发给模型的请求里，模型只见到文字侧的工具结果、凭上下文编造内容 | `FileAttachmentAdvisor.java:33-44,55-61`（order 不变式与事故口径）、spring-ai-client-chat 2.0.1 `ToolCallingAdvisor.internalStream/adviseCall` + `DefaultAroundAdvisorChain.copyAdvisorsAfter` |
 | advisor 里 import 任务域类型 | 横切层只准取 ExecContext 槽位（`subjectId()/snapshot()/emitter()/terminal()`），禁止 import `TaskEntry/TaskRuntime/TaskInfo` | §14.11；[工具与沙箱扩展点](tools-and-sandbox.md) §5.1 |
+
+### 1.6 任务域 advisor 的 isTaskSubject 过滤
+
+advisor 链对所有 ExecContext 主体的 agent 一视同仁装配——主 agent、子 agent、审议 agent，以及**非任务主体**（工作流等自实现 ExecContext 的执行域）的 agent。「一视同仁」有一个硬边界：**任务域专属的 advisor 不得上非任务主体**。
+
+「任务域专属」= 消费任务域持久化契约或任务级开关副作用的 advisor。挂到非任务主体上会出三类真实事故：
+
+| 事故形态 | 典型来源 |
+|---|---|
+| **崩溃**：advisor 强转 `(TaskRuntime) execution()`，非任务主体直接 ClassCastException → 每次成功运行被改判失败 | 轮次索引（rounds.jsonl 是任务域持久化契约，RoundIndexAdvisor） |
+| **泄漏**：按主体建 collector 条目，但该主体的按轮落盘回调永不发生 → 条目永不释放 | 文件变更（file-changes 分片，FileChangeAdvisorProvider） |
+| **误副作用**：非任务主体输入里的 `git.auto_sync` token 被当任务级开关解析 → 对工作区真实 git 提交推送 | git 自动同步（GitAutoSyncAdvisor；token 的「任务级开关」语义属任务域，非任务主体输入模板中的 token 只做 AI 可见文本替换） |
+
+**统一域判定**：`AdvisorContext.isTaskSubject()`（`default` 方法，实现 = `agentEntity() != null && agentEntity().execution() instanceof TaskRuntime`）。任务域专属 provider 的 `appliesTo` 第一行过滤：
+
+```java
+@Override
+public boolean appliesTo(AdvisorContext ctx) {
+    if (!ctx.isTaskSubject()) return false;   // 任务域 advisor 不上非任务主体（不变式，ARCHITECTURE §7.20.7）
+    // …其余适用性判定
+}
+```
+
+**为什么是它而不是别的判法**：不能拿 `ctx instanceof TaskRuntime` 判——`AdvisorContextImpl` 不实现该接口，槽位是委托；不建议拿「按 subjectId 查任务服务」判——依赖服务在场，且主体已销毁时误判。`isTaskSubject()` 是唯一口径（按主/子 agent 分流并已有过滤的 advisor，如 DialogInsertAdvisorProvider，不受影响）。
+
+**插件作者自检要求**：每写一个新 advisor，先问一句「它是否消费任务域持久化契约或任务级开关副作用？」——是，则 `appliesTo` 必须以 `isTaskSubject()` 过滤；只读 ExecContext 通用槽位（`snapshot()`/`emitter()`/`subjectId()`/`workspaceRoot()` 等）的域中性 advisor 无需过滤。这是注册新 AdvisorProvider 前的固定检查项（[`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §7.20.7 不变式）。
 
 ## 2. Advisor order 坐标图（核心交付物）
 
@@ -361,4 +388,4 @@ public interface AuthorizationHandler {
 
 - 任务生命周期节点（真正的 `[420,850]` 禁插段所在）与自注册 RPC：[task-and-rpc.md](task-and-rpc.md)
 - 工具与沙箱扩展点（ExecContext 槽位表、工具循环的另一半）：[tools-and-sandbox.md](tools-and-sandbox.md)
-- 30 个内置插件全景（谁注册了哪些 Advisor、order 多少）：[内置插件索引](../reference/builtin-plugins.md)
+- 32 个内置插件全景（谁注册了哪些 Advisor、order 多少）：[内置插件索引](../reference/builtin-plugins.md)

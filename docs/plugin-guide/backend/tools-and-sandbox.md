@@ -122,7 +122,39 @@ public String run_agent(
     }
 ```
 
-### 1.5 常见坑
+### 1.5 hidden 工具（隐式工具）：注册但不进请求 tool 定义
+
+`ToolProvider` 还有第二个产出方法 `createHiddenTools(ToolContext)`（`default` 空实现）：
+
+```java
+// every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/spi/ToolProvider.java
+public interface ToolProvider {
+    List<ToolCallback> createTools(ToolContext ctx);
+
+    /** 可选：产出「隐式工具」——注册但不进请求 tool 定义，模型经 skill 文档认知后按名调用。 */
+    default List<ToolCallback> createHiddenTools(ToolContext ctx) { return List.of(); }
+}
+```
+
+hidden 工具与常规工具的差别**只在暴露形态**，执行链完全一致（拦截链、事件、授权照常）：
+
+| | 常规工具（`createTools`） | hidden 工具（`createHiddenTools`） |
+|---|---|---|
+| 进请求 tool 定义（schema 下发） | 是 | **否**——省 tool 定义开销，工具面不被枚举 |
+| 模型怎么知道 | 请求里的 tool schema | **skill 文档**（SkillAdvisor 注入 system prompt，[advisors §5](advisors.md)） |
+| 怎么被调用 | 模型 tool call → 常规解析 | 模型按名 tool call → 工具名解析 fallback **仅查本请求 hidden 池**（池随 prompt options 的框架 ToolContext map 下行，per-run 生命周期、独立键、每 run 组装期一次定型，与 RunContext 同路）；未命中走既有 soft-fail 兜底 |
+
+**安全边界**：解析 fallback 只查本请求 hidden 池，**不启用 Spring 全 Bean 解析**——未知工具名不得凭全局注册表命中（跨任务/跨主体串扰防线）。
+
+**实现纪律——不得捕获 per-run 上下文**：工具名解析与 hidden 池索引均无主体上下文，RunContext/ExecContext 必须从**工具调用时**框架传入的 ToolContext map 里取，不得在 `createHiddenTools` 构造期闭包进工具实例。`appliesTo` 对两类产出一体生效（同一 provider 的适用性判定，如 workflow 的 hidden 工具排除工作流自身主体）。
+
+**skill 文档化是 hidden 工具的另一半**：模型只认 skill 里写下的名字与参数，文档缺位工具就等于不存在。写法要点——工具表（名称 + 一句话用途 + 关键参数）+ 每工具一个紧凑 JSON Schema 代码块 + 每工具一个调用示例；skill 全文会被注入 system prompt（[advisors §5](advisors.md)），写散就是拿上下文换上下文，务必精炼。
+
+**配置**：`worker.tools.hidden-enabled`（默认 `true`）。置 `false` 时 hidden 工具回落为**常规暴露**（进请求 tool 定义、带 schema）——应急回退通道，hidden 解析链出问题时用。
+
+现役范例：subagent 的 agent 族工具（`run_agent`/`list_agents`/`wait_agents`/`stop_agent`，经 agent-dispatch skill 文档化）与 workflow 插件的 `workflow_create`/`workflow_get`/`workflow_update`/`workflow_delete`/`workflow_list`（经 workflow skill 文档化）。
+
+### 1.6 常见坑
 
 | 坑 | 说明 | 证据 |
 |---|---|---|
