@@ -1,83 +1,61 @@
-// ea: 前端插件入口：默认导出 PluginModule，activate() 里经 ctx.ui.registerSidebarItem 注册侧边栏
 /**
- * workflow —— 前端插件入口（PluginModule，对标 VSCode 扩展入口）。
+ * workflow —— 前端插件入口（PluginModule，git 插件同款工程范式）。
  *
  * 加载链路：宿主前端经 plugin.webSource RPC 取 web/index.js（esbuild 产物），
- * 改写 bare import 后以 blob URL import 本模块，再调用 default export 的 activate(ctx)。
+ * 改写 bare import 后动态加载，调用 default export 的 activate(ctx)。
  *
- * 硬约束（详见 docs/plugin-guide/web/overview-and-loading.md）：
- *   - 类型一律 import type ... from '@everyagent/plugin-api'（纯类型包，零运行时代码）；
- *   - bare import 白名单只有 5 项：react / react-dom / react/jsx-runtime / antd / @ant-design/icons，
- *     运行时由宿主 window.__EA_* 全局提供；禁止 '@/...' 形式的宿主内部路径引用；
- *   - 产物必须是 web/index.js（webMain 只决定 hasWebMain，实际路径由宿主硬编码）。
+ * 本步（步骤 8）注册：
+ * - 侧边栏「工作流」占位面板（order=4；实例/定义列表与新建/运行/导入导出=步骤 9）；
+ * - workflow-editor 工作区标签类型（定义编辑器，本步主体）；
+ * - workflow-instance 工作区标签类型（占位注册，避免步骤 10 再改 manifest 结构）。
  *
- * 前端共 12 个扩展点（注册方法都挂在 ctx.ui 上；字段与完整示例见
- * docs/plugin-guide/web/ui-extensions.md，相对仓库根）：
- *   01 ui.sidebar_items            → ctx.ui.registerSidebarItem()                    本文件演示
- *   02 ui.workspace_tab_types      → ctx.ui.registerWorkspaceTabType()               自定义工作区标签类型
- *   03 ui.file_sidebar_panels      → ctx.ui.registerFileSidebarPanel()               文件页侧栏面板
- *   04 ui.composer_above_panel     → ctx.ui.registerComposerAbovePanel()             输入框上方面板（单数）
- *   05 ui.tool_call_views          → ctx.ui.registerToolCallView()                   工具调用视图整体接管
- *   06 ui.user_message_actions     → ctx.ui.registerUserMessageAction()              用户消息气泡动作
- *   07 task.submit_contributions   → ctx.ui.registerTaskRunSubmitContributionProvider() 提交前贡献
- *   08 ui.trace_types              → ctx.ui.registerTraceType()                      trace 类型渲染
- *   09 ui.output_blocks            → ctx.ui.registerOutputBlock()                    输出块渲染
- *   10 ui.file_content_editors     → ctx.ui.registerFileContentEditor()              文件内容编辑器
- *   11 ui.file_explorer_actions    → ctx.ui.registerFileExplorerAction()             文件树右键菜单
- *   12 ui.round_tail_panels        → ctx.ui.registerRoundTailPanel()                 轮末展示区
+ * 硬约束（docs/plugin-guide/web/overview-and-loading.md）：
+ * - 类型一律 import type ... from '@everyagent/plugin-api'（纯类型包）；
+ * - bare import 白名单：react / react-dom / react/jsx-runtime / antd /
+ *   @ant-design/icons / react-markdown / remark-gfm；禁止 '@/...' 宿主内部路径；
+ * - 产物必须是 web/index.js（改 web 后必须重跑 build:plugins——宿主读预编译产物）；
+ * - 入口 .ts 不写 JSX（esbuild 对 .ts 不启用 JSX loader）——含 JSX 的实现一律放 .tsx 子模块。
+ *
+ * ── tab.data 参数约定（openTab 的 data 袋，宿主透明中转、本插件自解释） ──
+ * - workflow-editor（tabTypes.tsx）：{ workspaceId: 稳定工作区 id（workflow.* RPC 的
+ *     workspace 参数）；definitionId?: 定义 id，空/缺省=新建（保存时后端赋 wf id）；
+ *     workspaceRoot?/workerId?: 富输入框与 RPC 定向（缺省经注册表解析） }
+ *   打开方式：ctx.ui.openTab('workflow-editor', { workspaceId, definitionId }, 标题)
+ * - workflow-instance（tabTypes.tsx）：{ instanceId: 实例 id（wi_…）；workspaceId?（回开定义用） }
+ *   实例运行页=步骤 10 实现（画布只读回放 + instance.events 长轮询 + 决策按钮）。
  */
 
 import type { Disposable, PluginContext, PluginModule, UiSidebarItemDefinition } from '@everyagent/plugin-api'
 import React from 'react'
+import { WorkflowIcon } from './icons'
+import { setPluginContext } from './pluginRuntime'
+import { workflowEditorTabType, workflowInstanceTabType } from './tabTypes'
+import SidebarPanel from './panels/SidebarPanel'
 
-/** 本插件持有的可释放资源；deactivate() 时统一清理（宿主前端目前不自动卸载，留好出口）。 */
+/** 本插件持有的可释放资源；deactivate() 时统一清理（宿主当前不自动卸载，留好出口）。 */
 const disposables: Disposable[] = []
-
-/** 侧边栏图标（ReactNode）。正式插件常用 @ant-design/icons，这里用内联 span 保持示例零依赖。 */
-function SidebarIcon() {
-  return React.createElement(
-    'span',
-    { style: { fontSize: 16, lineHeight: 1 } },
-    '◆',
-  )
-}
-
-/** 侧边栏面板：一个带 workflow 标题的简单 div。 */
-function SidebarPanel() {
-  return React.createElement(
-    'div',
-    { style: { padding: 16, fontSize: 13, lineHeight: 1.7, color: '#333' } },
-    React.createElement('h3', { style: { margin: '0 0 8px' } }, 'workflow'),
-    React.createElement(
-      'p',
-      { style: { margin: 0, color: '#888' } },
-      '面板已就绪：编辑 web/index.ts 替换这里的内容，然后在 every-agent-web 下重跑 npm run build:plugins 并刷新页面。',
-    ),
-  )
-}
 
 const workflowPlugin: PluginModule = {
   activate(ctx: PluginContext) {
-    // 扩展点 ui.sidebar_items（ctx.ui.registerSidebarItem）：注册左侧活动栏入口（图标 + 面板）。
-    //   - order：float 排序坐标，越小越靠前；内置 tasks=1 / files=2 / search=3 / git=5 /
-    //     扩展管理=9，未声明时缺省 100（排在全部内置项之后），支持小数（如 4.5）插空。
-    //   - badgeCount：>0 时在图标上显示数字角标；Badge 可换成自管订阅刷新的角标组件。
-    //   - 返回 Disposable：请收集起来，在 deactivate() 里统一 dispose（见本文件底部）。
-    // 其余 11 个前端扩展点（标签类型 / 文件侧栏 / 输入框面板 / 工具视图 / 消息动作 /
-    // 提交贡献 / trace / 输出块 / 文件编辑器 / 右键菜单 / 轮末面板）的注册方法同样挂在
-    // ctx.ui 上，字段与示例见 docs/plugin-guide/web/ui-extensions.md。
+    // 注入 module-level ctx（组件/网关取用同一 ctx；git 插件同款）。
+    setPluginContext(ctx)
+
+    // 侧边栏「工作流」（order=4：搜索(3) 之后、git(5) 之前；面板=占位版，步骤 9 替换）。
     const sidebarItem: UiSidebarItemDefinition = {
       id: 'workflow',
-      title: 'workflow',
-      icon: React.createElement(SidebarIcon),
+      title: '工作流',
+      icon: React.createElement(WorkflowIcon),
       Panel: SidebarPanel,
-      order: 100,
+      order: 4,
     }
     disposables.push(ctx.ui.registerSidebarItem(sidebarItem))
+
+    // 定义编辑器标签类型 + 实例标签类型（占位，步骤 10 填充）。
+    disposables.push(ctx.ui.registerWorkspaceTabType(workflowEditorTabType))
+    disposables.push(ctx.ui.registerWorkspaceTabType(workflowInstanceTabType))
   },
 
-  // 宿主前端当前从不调用 deactivate（loadedPlugins 的 disposables 恒空），但保留标准出口：
-  // 一旦将来接入热卸载，这里能把所有注册项从各扩展点注册表里摘除。
+  // 宿主当前不调用 deactivate，但保留标准出口（热卸载接入时能摘除全部注册项）。
   deactivate() {
     for (const d of disposables.splice(0)) {
       d.dispose()
@@ -86,3 +64,4 @@ const workflowPlugin: PluginModule = {
 }
 
 export default workflowPlugin
+
