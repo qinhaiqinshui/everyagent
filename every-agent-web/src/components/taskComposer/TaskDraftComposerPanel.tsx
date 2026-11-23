@@ -4,15 +4,15 @@ import type {
   ChatComposerToken,
   LLMConfigProfile,
 } from '@/types'
-import type { ComposerDraftChange } from './TaskComposerSurface'
+import type { ComposerDraftChange } from '@/components/richComposer/RichComposer'
 import type { InlineComposerHandle } from './InlineComposer'
 import { BrandMark } from '../shared/BrandLoadingBlock'
 import { ArrowRightIcon } from '../shared/AppGlyphs'
 import HScrollArea from '../shared/HScrollArea'
 import TaskModelControls from './TaskModelControls'
 import TaskWorkspacePicker from './TaskWorkspacePicker'
-import TaskComposerSurface from './TaskComposerSurface'
-import { extractSlashId } from '@/slash/taskScopedTokens'
+import RichComposer from '@/components/richComposer/RichComposer'
+import { extractSlashId, cancelTaskToken } from '@/slash/taskScopedTokens'
 import ChatShell from '@/components/task/ChatShell'
 import { Button } from '@/components/shared/ui'
 import type { WorkspaceEntry } from '@/hub/workspaceRegistry'
@@ -65,13 +65,13 @@ export interface TaskDraftComposerPanelProps {
    * 父组件持有该 ref，本组件在每次光标变化时写入最新偏移。
    */
   composerCaretRef?: React.MutableRefObject<number>
-  /** 外部捕获内联编辑器命令式句柄（透传给 TaskComposerSurface，供宿主「光标处插入」）。可选。 */
+  /** 外部捕获内联编辑器命令式句柄（透传给 RichComposer，供宿主「光标处插入」）。可选。 */
   editorHandleRef?: React.MutableRefObject<InlineComposerHandle | null>
   /** 任务级底部 token（胶囊）列表（草稿本地持有）。 */
   taskScopeTokens?: ChatComposerToken[]
   /** 添加任务级 token（选中 bottom 项）。允许返回 Promise（联动多胶囊逐个 await）。 */
   onAddTaskScopeToken?: (payload: { id: string; token: string }) => void | Promise<void>
-  /** 移除任务级 token（底部 ✕，内联 ✕ 由 TaskComposerSurface 内部处理）。 */
+  /** 移除任务级 token（底部 ✕；内联 ✕ 的 slash 取消见组件内 handleRemoveInlineToken）。 */
   onRemoveTaskScopeToken?: (payload: { id?: string; token: string }) => void
   /** 输入框上方可选内容（如插件注册的 composer_above_panel：等待任务选择框等）。 */
   abovePanel?: React.ReactNode
@@ -110,6 +110,17 @@ export default function TaskDraftComposerPanel({
   onRemoveTaskScopeToken,
   abovePanel,
 }: TaskDraftComposerPanelProps) {
+  /**
+   * 内联胶囊 ✕ 删除上报：对含 slashId 的 token 触发 cancelTaskToken（不传 taskId，
+   * 内联不持久化）。任务域行为收敛在使用方（RichComposer 本体只透传回调）。
+   */
+  const handleRemoveInlineToken = React.useCallback((token: ChatComposerToken) => {
+    const slashId = extractSlashId(token.opaqueText)
+    if (slashId) {
+      void cancelTaskToken({ id: slashId, token: token.opaqueText })
+    }
+  }, [])
+
   return (
     <ChatShell
       header={(
@@ -123,7 +134,7 @@ export default function TaskDraftComposerPanel({
       thread={null}
       composer={(
         <div className="nagent-composer-dock">
-          <TaskComposerSurface
+          <RichComposer
             draft={draft}
             workspace={selectedWorkspace || undefined}
             workerId={workerId}
@@ -138,7 +149,8 @@ export default function TaskDraftComposerPanel({
             onSubmit={onSubmitTask}
             composerCaretRef={composerCaretRef}
             editorHandleRef={editorHandleRef}
-            onAddTaskScopeToken={onAddTaskScopeToken}
+            onAddScopeToken={onAddTaskScopeToken}
+            onRemoveInlineToken={handleRemoveInlineToken}
             footerControls={(
               <div className="task-composer-footer">
                 <HScrollArea className="task-composer-footer__scroll">

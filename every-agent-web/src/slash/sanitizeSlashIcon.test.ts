@@ -1,7 +1,7 @@
 /**
  * slash 菜单 icon 净化测试（审计 M-8 整改）。
  *
- * TaskComposerSurface（`/` 菜单）与 SlashItemDetailPopover（详情弹层）两处渲染点
+ * TaskComposerSurface → RichComposer（`/` 菜单）与 SlashItemDetailPopover（详情弹层）两处渲染点
  * 已统一改为 `dangerouslySetInnerHTML={{ __html: sanitizeSlashIcon(icon) ?? '' }}`
  * （本 helper 是单一注入入口，null → 空 span 占位）。本文件按项目 vitest 约定
  * （node 环境、无 jsdom）用与 svg-renderer/sanitize.test.ts 同构的「最小 XML DOM

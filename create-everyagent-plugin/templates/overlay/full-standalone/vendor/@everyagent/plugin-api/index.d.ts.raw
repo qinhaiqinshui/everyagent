@@ -1089,6 +1089,44 @@ export interface UiRegistry {
   readonly TokenRichText?: ComponentType<{ text: string; className?: string; interactive?: boolean; singleLine?: boolean }>
 
   /**
+   * 宿主注入的「富输入框」组件：多行编辑、`@` 文件引用、`/` 斜杠菜单、外部/粘贴
+   * 文件选择、内联胶囊 token 渲染与编码（IME 安全），与任务页输入框同一套实现
+   * （宿主 `richComposer/RichComposer.tsx` 单点实现；本包零运行时代码、只声明类型）。
+   *
+   * 受控值 `value` 即 rawContent（可含 `ctx.ui.buildComposerToken` 构造的 opaque token
+   * 串），变更经 `onChange(rawContent)` 回传——插件持一个字符串状态即可获得与任务
+   * 输入框一致的富输入体验（胶囊 DOM 由 opaque 串还原，无需自管 token 列表）。
+   * `enableSlash` / `enableAt` 可分别关闭 `/` 菜单与 `@` 引用（默认全开）；
+   * `workspace` / `workerId` / `taskId` 决定 `@` 列举与 `/` 菜单的定向范围。
+   * 用途：插件自建富输入场景（如工作流节点的 AI 输入编辑）。可选注入（旧宿主可能
+   * 缺席）：插件侧缺席时降级为普通 textarea。
+   */
+  readonly RichComposer?: ComponentType<{
+    /** 受控值（rawContent，可含 opaque token 串）。 */
+    value: string
+    /** 值变化（回传最新 rawContent）。 */
+    onChange: (value: string) => void
+    /** 占位文案。 */
+    placeholder?: string
+    /** `@` 文件引用的工作区根（缺省用宿主注册表首选根）。 */
+    workspace?: string
+    /** 定向 worker（`/` 菜单候选拉取用）。 */
+    workerId?: string
+    /** `@` 文件列举范围任务 ID（可选）。 */
+    taskId?: string
+    /** 是否启用 `/` 斜杠菜单（默认 true）。 */
+    enableSlash?: boolean
+    /** 是否启用 `@` 文件引用（默认 true）。 */
+    enableAt?: boolean
+    /** 提交回调（Enter / 内置发送按钮）。 */
+    onSubmit?: () => void
+    /** 内置提交按钮文案（缺省「发送」）。 */
+    submitLabel?: string
+    /** 是否禁用提交（默认 false）。 */
+    submitDisabled?: boolean
+  }>
+
+  /**
    * 把可含 opaque token 串的文本拍平为纯 label 明文（嵌套递归拍平）。
    * 纯文本展示场景（标签标题、toast 文案、tooltip 等）用；胶囊展示场景用 TokenRichText。
    */

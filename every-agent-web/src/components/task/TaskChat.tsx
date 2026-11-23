@@ -1,7 +1,7 @@
 /**
  * 任务聊天页(hub 版,布局/样式照搬 n 分支同位置组件)。
  *
- * 视觉结构与 n 版一致:ChatShell(线程滚动区 + composer dock)+ TaskComposerSurface
+ * 视觉结构与 n 版一致:ChatShell(线程滚动区 + composer dock)+ RichComposer
  * 富输入框 + task-composer-footer(上下文电池 + 模型选择 + 发送/停止)。
  *
  * 消息区 = TaskRoundsPanel 连续线程视图:轮次结构(user/final/折叠标记/耗时)来自
@@ -24,7 +24,7 @@ import TaskRoundsPanel from './TaskRoundsPanel'
 import ContextBattery from './ContextBattery'
 import AgentListPanel, { type AgentListItem } from './AgentListPanel'
 import TaskDraftComposerPanel from '@/components/taskComposer/TaskDraftComposerPanel'
-import TaskComposerSurface, { applyComposerDraftChange, type ComposerDraftChange } from '@/components/taskComposer/TaskComposerSurface'
+import RichComposer, { applyComposerDraftChange, type ComposerDraftChange } from '@/components/richComposer/RichComposer'
 import TaskModelControls from '@/components/taskComposer/TaskModelControls'
 import type { InlineComposerHandle } from '@/components/taskComposer/InlineComposer'
 import HScrollArea from '@/components/shared/HScrollArea'
@@ -340,8 +340,19 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
   }, [isDraft, draftWorkerId])
 
   /**
+   * 内联胶囊 ✕ 删除上报：对含 slashId 的 token 触发 cancelTaskToken（不传 taskId，
+   * 内联不持久化）。任务域行为收敛在使用方（RichComposer 本体只透传回调）。
+   */
+  const handleRemoveInlineToken = React.useCallback((token: ChatComposerToken) => {
+    const slashId = extractSlashId(token.opaqueText)
+    if (slashId) {
+      void cancelTaskToken({ id: slashId, token: token.opaqueText })
+    }
+  }, [])
+
+  /**
    * 选中 bottom 项 → 底部胶囊（乐观） + applyTaskToken 落盘（草稿仅本地持有）。
-   * 返回 applyTaskToken 的 Promise（catch 后不 reject,只 setError）：TaskComposerSurface
+   * 返回 applyTaskToken 的 Promise（catch 后不 reject,只 setError）：RichComposer
    * 对联动多胶囊（无人值守 + AI 审议）会逐个 await——先落盘前者再 apply 后者,消除并行
    * RPC 的 meta 写竞态（worker 端 SlashTaskScopeStore 亦按任务串行化,双保险）。
    */
@@ -1013,7 +1024,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
       composer={(
         <div className="nagent-composer-dock">
           {/* 任务级错误信息已由线程内 error 事件的红色 trace 承载，输入框上方不再重复弹提示条。 */}
-          <TaskComposerSurface
+          <RichComposer
             draft={draft}
             placeholder="继续输入内容发送给 AI，开启下一轮对话"
             taskId={effectiveTaskId}
@@ -1110,7 +1121,8 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
                 )}
               </div>
             )}
-            onAddTaskScopeToken={handleAddTaskScopeToken}
+            onAddScopeToken={handleAddTaskScopeToken}
+            onRemoveInlineToken={handleRemoveInlineToken}
             onChangeDraft={handleChangeDraft}
             onSubmit={handleSubmit}
           />

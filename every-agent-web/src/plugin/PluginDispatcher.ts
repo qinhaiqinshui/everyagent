@@ -47,6 +47,7 @@ import type { FileContentEditorDescriptor } from '@/components/files/file-tab-ty
 import { registerTraceType as registerToTraceRegistry, unregisterTraceType as unregisterFromTraceRegistry } from './traceTypeRegistry'
 import { outputBlockRegistry } from './outputBlockRegistry'
 import HostTokenRichText from '@/composerToken/TokenRichText'
+import HostRichComposer, { type RichComposerProps } from '@/components/richComposer/RichComposer'
 import {
   ExtensionRegistry,
   ExtensionRegistryFactory,
@@ -281,6 +282,14 @@ export interface RealPluginDispatcher {
    * 激活动作）之间的模块初始化环。
    */
   readonly TokenRichText?: ComponentType<{ text: string; className?: string; interactive?: boolean; singleLine?: boolean }>
+  /**
+   * 宿主注入的「富输入框」组件（声明见 @everyagent/plugin-api UiRegistry.RichComposer）：
+   * 多行编辑、`@` 文件引用、`/` 斜杠菜单、外部/粘贴文件选择、内联胶囊渲染与编码，
+   * 与任务页输入框同一实现（richComposer/RichComposer.tsx 单点）。与 TokenRichText
+   * 同理 getter 惰性解引用——该组件链（InlineComposer）经由 pluginDispatcher 渲染
+   * 胶囊，惰性取用避开模块初始化环。插件侧缺席时降级（类型 optional 已表达）。
+   */
+  readonly RichComposer?: ComponentType<RichComposerProps>
   /** 把可含 opaque token 串（嵌套递归）的文本拍平为纯 label 明文。 */
   toPlainText: (text: string) => string
 }
@@ -533,6 +542,11 @@ export const pluginDispatcher: RealPluginDispatcher = {
   // 惰性取用避开模块初始化环；toPlainText 直连宿主拍平函数（嵌套递归）。
   get TokenRichText(): ComponentType<{ text: string; className?: string; interactive?: boolean; singleLine?: boolean }> {
     return HostTokenRichText
+  },
+  // 宿主注入的富输入框（同上惰性解引用）：任务页输入框同一实现，供插件自建
+  // 富输入场景（如工作流节点编辑）复用；插件侧经 ctx.ui.RichComposer 消费。
+  get RichComposer(): ComponentType<RichComposerProps> {
+    return HostRichComposer
   },
   toPlainText(text) {
     return stripTokensToLabels(text)

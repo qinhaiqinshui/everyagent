@@ -11,12 +11,8 @@ import {
 import { buildWorkspaceFileToken } from '@/composerToken/workspaceFileToken'
 import { buildExternalFileToken, type ExternalFileEntry } from '@/composerToken/externalFileToken'
 import { isOpaqueTokenText } from '@/composerToken/composerOpaqueToken'
-import {
-  cancelTaskToken,
-  extractSlashId,
-} from '@/slash/taskScopedTokens'
-import InlineComposer, { type InlineComposerHandle, type InlineComposerChange } from './InlineComposer'
-import ExternalFilePickerModal from './ExternalFilePickerModal'
+import InlineComposer, { type InlineComposerHandle, type InlineComposerChange } from '../taskComposer/InlineComposer'
+import ExternalFilePickerModal from '../taskComposer/ExternalFilePickerModal'
 import { Button, IconButton } from '@/components/shared/ui'
 import { FileIcon, FolderIcon, PlusIcon } from '../shared/AppGlyphs'
 import {
@@ -73,11 +69,23 @@ export function applyComposerDraftChange(
   }
 }
 
+/** 字符串受控值（rawContent）→ 草稿态（与 TaskChat 草稿桥 setRawContent 同口径）。 */
+function draftFromValue(value: string): ChatComposerDraftState {
+  return { text: value, rawContent: value, tokens: [], activeTokenId: undefined }
+}
+
 /**
- * 通用 Task 输入区属性。
- * 该组件只承载输入展示和交互，不负责读取业务数据。
+ * 通用富输入区属性（中性，与任务域解耦）。
+ *
+ * 两种受控模式二选一：
+ * - **全量草稿态**（宿主内部，如任务页）：`draft` + `onChangeDraft`——宿主持有
+ *   `ChatComposerDraftState`（tokens 列表供胶囊 id 定位 / 去重），变更以
+ *   `ComposerDraftChange` 增量上报，由 `applyComposerDraftChange` 合并；
+ * - **字符串值**（插件等简单场景，经 `ctx.ui.RichComposer` 注入）：`value` + `onChange`
+ *   ——`value` 即 rawContent（可含 opaque token 串），变更回传最新 rawContent，
+ *   组件内部自行维护草稿态。胶囊 DOM 由 opaque 串还原，无需宿主维护 token 列表。
  */
-export interface TaskComposerSurfaceProps {
+export interface RichComposerProps {
   /** 顶部可选头部内容。 */
   header?: React.ReactNode
   /** 输入框上方可选内容（如任务队列列表），由父组件 dispatch 扩展点后传入。 */
@@ -86,47 +94,61 @@ export interface TaskComposerSurfaceProps {
   footerControls?: React.ReactNode
   /** 当前是否移动端。 */
   isMobile?: boolean
-  /** 当前草稿状态（rawContent 含内联 opaque token，tokens 为胶囊列表）。 */
-  draft: ChatComposerDraftState
+  /** 当前草稿状态（rawContent 含内联 opaque token，tokens 为胶囊列表）。与 value 二选一。 */
+  draft?: ChatComposerDraftState
+  /** 草稿内容变化（输入 / 插入 / 删除胶囊；draft 模式）。 */
+  onChangeDraft?: (next: ComposerDraftChange) => void
+  /** 受控值 = rawContent（可含 opaque token 串；value 模式，与 draft 二选一）。 */
+  value?: string
+  /** 受控值变化（回传最新 rawContent；value 模式）。 */
+  onChange?: (value: string) => void
   /** 输入框占位文案。 */
-  placeholder: string
-  /** 当前任务 ID（`@` 文件列举经 resolver 取范围；草稿态为 undefined）。 */
+  placeholder?: string
+  /** 当前任务 ID（`@` 文件列举经 resolver 取范围；缺省走 workspace/注册表首选根）。 */
   taskId?: string
   /** `@` 文件引用的工作区根(任务自身工作区/草稿选择值;缺省由查询服务取注册表首选根)。 */
   workspace?: string
-  /** 当前 worker(草稿态 = 当前唯一已连接的 worker;任务态 = 任务归属 worker),用于 / 命令与浏览定向。 */
+  /** 当前 worker(用于 / 命令与浏览定向)。 */
   workerId?: string
+  /** 是否启用 `/` 斜杠菜单（默认 true）。关闭后不再检测 `/` 触发、不拉候选。 */
+  enableSlash?: boolean
+  /** 是否启用 `@` 文件引用（默认 true）。关闭后不再检测 `@` 触发、不弹文件面板。 */
+  enableAt?: boolean
   /** 提交按钮文案。 */
-  submitLabel: string
+  submitLabel?: string
   /** 是否禁用提交。 */
-  submitDisabled: boolean
+  submitDisabled?: boolean
   /** 输入区提示文案。 */
   hint?: string
   /** 输入区错误文案。 */
   error?: string
-  /** 是否渲染内置发送按钮（启动台将按钮与模型选择同行时关闭）。默认 true。 */
+  /** 是否渲染内置发送按钮（宿主把按钮与模型选择同行时关闭）。默认 true。 */
   showSendButton?: boolean
   /**
-   * 外部接收编辑器当前光标文本偏移（供 composer 权限「插入到光标位置」定位）。可选。
+   * 外部接收编辑器当前光标文本偏移（供「插入到光标位置」定位）。可选。
    * 父组件持有该 ref，本组件在每次光标变化时写入最新偏移。
    */
   composerCaretRef?: React.MutableRefObject<number>
   /**
    * 外部捕获内联编辑器命令式句柄（focus / 光标定位 / 光标处插入）。可选。
-   * 父组件（TaskChat）持有该 ref，经 composer 草稿桥把「插入到光标位置」类
+   * 父组件（如 TaskChat）持有该 ref，经草稿桥把「插入到光标位置」类
    * 宿主动作路由到编辑器；本组件在编辑器挂载/卸载时同步写入。
    */
   editorHandleRef?: React.MutableRefObject<InlineComposerHandle | null>
   /**
-   * 选中 position === 'bottom' 的 `/` 项时回调宿主（宿主负责 applyTaskToken + 更新自身列表）。
-   * 允许返回 Promise：多个 bottom 结果（如「无人值守」联动「AI 审议」）会**逐个 await**，
-   * 保证前一个胶囊先落盘（RPC 完成）再 apply 下一个，避免并行 RPC 的 meta 写竞态与中间态回显抖动。
+   * 选中 position === 'bottom' 的 `/` 项时回调使用方（由其持久化底部 token，如任务的
+   * applyTaskToken）。允许返回 Promise：多个 bottom 结果（如「无人值守」联动「AI 审议」）
+   * 会**逐个 await**，保证前一个胶囊先落盘（RPC 完成）再 apply 下一个，避免并行 RPC 的
+   * meta 写竞态与中间态回显抖动。
    */
-  onAddTaskScopeToken?: (payload: { id: string; token: string }) => void | Promise<void>
-  /** 草稿内容变化（输入 / 插入 / 删除胶囊）。 */
-  onChangeDraft: (next: ComposerDraftChange) => void
-  /** 提交当前草稿。 */
-  onSubmit: () => void
+  onAddScopeToken?: (payload: { id: string; token: string }) => void | Promise<void>
+  /**
+   * 内联胶囊 ✕ 删除上报（使用方据此触发外部动作，如任务的 cancelTaskToken——组件本体
+   * 不感知取消语义）。可选。
+   */
+  onRemoveInlineToken?: (token: ChatComposerToken) => void
+  /** 提交当前草稿（Enter / 内置发送按钮）。 */
+  onSubmit?: () => void
 }
 
 /**
@@ -207,7 +229,7 @@ function detectSlashTrigger(
 }
 
 /**
- * 通用 Task 输入区内容（nagent 面板风格）。
+ * 通用富输入区内容（nagent 面板风格；自任务输入区中性化而来，任务页与插件共用）。
  * 新任务入口与 Task 聊天页都复用同一套输入能力展示结构。
  *
  * 输入区为内联富文本：命令 / 技能 / 文件胶囊渲染在触发位置的光标处，
@@ -215,32 +237,53 @@ function detectSlashTrigger(
  *
  * `/` 菜单内容来自独立注册中心 `slashCommandRegistry`（与 task 解耦），
  * 渲染时按 `group` 动态分组，渲染组件不感知条目是 skill 还是其它内容。
+ * 任务域行为（底部 scope token 持久化、内联胶囊取消等）经 `onAddScopeToken` /
+ * `onRemoveInlineToken` 回调收敛到使用方，组件本体零任务依赖。
  */
 /** 输入框高度拖拽的下限/上限（px）。 */
 const COMPOSER_EDITOR_MIN_HEIGHT = 44
 const COMPOSER_EDITOR_MAX_HEIGHT = 480
 
-export default function TaskComposerSurface({
+export default function RichComposer({
   header,
   abovePanel,
   footerControls,
   isMobile = false,
   draft,
-  placeholder,
+  onChangeDraft,
+  value,
+  onChange,
+  placeholder = '',
   taskId,
   workspace,
   workerId,
-  submitLabel,
-  submitDisabled,
+  enableSlash = true,
+  enableAt = true,
+  submitLabel = '发送',
+  submitDisabled = false,
   hint,
   error,
   showSendButton = true,
   composerCaretRef,
   editorHandleRef,
-  onAddTaskScopeToken,
-  onChangeDraft,
+  onAddScopeToken,
+  onRemoveInlineToken,
   onSubmit,
-}: TaskComposerSurfaceProps) {
+}: RichComposerProps) {
+  // ── 受控模式归一：draft 模式（宿主全量草稿态）优先；value 模式内部维护草稿态 ──
+  const stringMode = draft === undefined
+  const [innerDraft, setInnerDraft] = React.useState<ChatComposerDraftState>(() => draftFromValue(value ?? ''))
+  // value 模式下外部受控值变化时同步内部草稿（等值时幂等返回原引用，不触发重渲染）。
+  React.useEffect(() => {
+    if (!stringMode) {
+      return
+    }
+    setInnerDraft((current) => (
+      (value ?? '') === current.rawContent ? current : draftFromValue(value ?? '')
+    ))
+  }, [stringMode, value])
+  const effectiveDraft = stringMode ? innerDraft : draft
+
   const editorRef = React.useRef<InlineComposerHandle | null>(null)
   // 编辑器句柄双写：同一份 InlineComposerHandle 同时喂内部 editorRef（`/` `@` 面板
   // 插入用）与外部 editorHandleRef（TaskChat 经草稿桥做「光标处插入」等宿主动作用）。
@@ -251,7 +294,7 @@ export default function TaskComposerSurface({
       editorHandleRef.current = handle
     }
   }, [editorHandleRef])
-  const editorTextRef = React.useRef(draft.text)
+  const editorTextRef = React.useRef(effectiveDraft.text)
   const editorCaretRef = React.useRef(0)
   const { showToast } = useAppUi()
   /**
@@ -296,8 +339,24 @@ export default function TaskComposerSurface({
   const atPopRef = React.useRef<HTMLDivElement | null>(null)
   const atOptionRefs = React.useRef<Array<HTMLButtonElement | null>>([])
 
+  /** 草稿内容变化归一：draft 模式透传增量；value 模式内部合并后回传最新 rawContent。 */
+  const handleChangeDraft = React.useCallback((next: ComposerDraftChange) => {
+    if (stringMode) {
+      setInnerDraft((current) => applyComposerDraftChange(current, next))
+      onChange?.(next.rawContent)
+    } else {
+      onChangeDraft?.(next)
+    }
+  }, [stringMode, onChange, onChangeDraft])
+
   /** 根据文本 + caret 重新评估 `/` 触发状态。 */
   const updateSlashTrigger = React.useCallback((text: string, caret: number) => {
+    if (!enableSlash) {
+      setSlashOpen(false)
+      setSlashQuery('')
+      setSlashStart(-1)
+      return
+    }
     const hit = detectSlashTrigger(text, caret)
     if (!hit) {
       setSlashOpen(false)
@@ -314,10 +373,16 @@ export default function TaskComposerSurface({
     setSlashActiveIndex((current) => (
       slashOpen && slashStart === hit.slashIndex && slashQuery === hit.query ? current : 0
     ))
-  }, [slashOpen, slashQuery, slashStart])
+  }, [enableSlash, slashOpen, slashQuery, slashStart])
 
   /** 根据文本 + caret 重新评估 `@` 触发状态。 */
   const updateAtTrigger = React.useCallback((text: string, caret: number) => {
+    if (!enableAt) {
+      setAtOpen(false)
+      setAtBrowse(null)
+      setAtQuery('')
+      return
+    }
     const hit = detectAtTrigger(text, caret)
     if (!hit) {
       setAtOpen(false)
@@ -334,7 +399,7 @@ export default function TaskComposerSurface({
     setAtActiveIndex((current) => (
       atOpen && atStart === hit.atIndex && atQuery === hit.query ? current : 0
     ))
-  }, [atOpen, atQuery, atStart])
+  }, [enableAt, atOpen, atQuery, atStart])
 
   // `/` 菜单候选项：打开时从注册中心加载（与 task 解耦，只取一次）。
   React.useEffect(() => {
@@ -364,12 +429,12 @@ export default function TaskComposerSurface({
   }, [slashOpen, workerId])
 
   React.useEffect(() => {
-    if (draft.text.length === 0 && slashOpen) {
+    if (effectiveDraft.text.length === 0 && slashOpen) {
       setSlashOpen(false)
       setSlashQuery('')
       setSlashStart(-1)
     }
-  }, [draft.text, slashOpen])
+  }, [effectiveDraft.text, slashOpen])
 
   React.useEffect(() => {
     if (!atOpen) {
@@ -521,7 +586,7 @@ export default function TaskComposerSurface({
   }, [atActiveList, atSafeActiveIndex, selectFileEntry])
 
   /** 选中某个 `/` 菜单项：按 select 返回的 position 分流（支持一次返回多个结果）。
-   *  - 'bottom' → 清掉 `/query` 触发段（不写内联胶囊），对每个 bottom 结果循环回调宿主新增底部 token
+   *  - 'bottom' → 清掉 `/query` 触发段（不写内联胶囊），对每个 bottom 结果循环回调使用方新增底部 token
    *    （各自用 result.id 归属条目，如「无人值守」一次返回「无人值守」+「AI 审议」两个胶囊）；
    *  - 'inline'  → 与现状一致：在 `/` 触发位置原地插入 opaque 胶囊或纯文本。
    *  select 第二参透传宿主上下文（taskId/workspace/workerId），供插件类 provider 定向取数；
@@ -549,18 +614,18 @@ export default function TaskComposerSurface({
     for (const result of results) {
       const text = result.token
       if (result.position === 'bottom') {
-        // 清掉 `/query` 触发段（不写内联胶囊，仅一次）；底部 token 由宿主持久化处理。
+        // 清掉 `/query` 触发段（不写内联胶囊，仅一次）；底部 token 由使用方持久化处理。
         if (!slashSegmentConsumed) {
           editorRef.current?.insertText('', deleteBefore)
           slashSegmentConsumed = true
         }
         if (isOpaqueTokenText(text)) {
           // 逐个 await:联动双胶囊(无人值守 + AI 审议)按顺序落盘,避免并行 RPC 竞态导致丢胶囊。
-          // 同样在 await 前后保存/恢复光标：onAddTaskScopeToken 也是异步 RPC，
+          // 同样在 await 前后保存/恢复光标：onAddScopeToken 也是异步 RPC，
           // 后续若有 inline 结果需要正确光标位置。
           // composition 进行中不恢复（避免打断 IME 合成导致光标左移）。
           const caretBeforeBottomAwait = editorCaretRef.current
-          await onAddTaskScopeToken?.({ id: result.id ?? entry.id, token: text })
+          await onAddScopeToken?.({ id: result.id ?? entry.id, token: text })
           editorRef.current?.setCaretAtOffset(caretBeforeBottomAwait)
         }
         continue
@@ -573,18 +638,10 @@ export default function TaskComposerSurface({
       }
       slashSegmentConsumed = true
     }
-  }, [slashStart, slashQuery, onAddTaskScopeToken, taskId, workspace, workerId])
-
-  /** 内联胶囊 ✕ 删除上报：对含 slashId 的 token 触发 cancelTaskToken（不传 taskId，内联不持久化）。 */
-  const handleRemoveInlineToken = React.useCallback((token: ChatComposerToken) => {
-    const slashId = extractSlashId(token.opaqueText)
-    if (slashId) {
-      void cancelTaskToken({ id: slashId, token: token.opaqueText })
-    }
-  }, [])
+  }, [slashStart, slashQuery, onAddScopeToken, taskId, workspace, workerId])
 
   const handleSubmit = React.useCallback(() => {
-    onSubmit()
+    onSubmit?.()
   }, [onSubmit])
 
   const handleCaretChange = React.useCallback((text: string, caret: number) => {
@@ -656,7 +713,7 @@ export default function TaskComposerSurface({
         editorRef.current?.insertText('\n')
         return
       }
-      if (submitDisabled) {
+      if (submitDisabled || !onSubmit) {
         return
       }
       event.preventDefault()
@@ -670,6 +727,7 @@ export default function TaskComposerSurface({
     slashActiveIndex,
     isMobile,
     submitDisabled,
+    onSubmit,
     applyAtActiveSelection,
     applySlashSelection,
     handleSubmit,
@@ -846,14 +904,14 @@ export default function TaskComposerSurface({
 
         <InlineComposer
           ref={editorRefCallback}
-          rawContent={draft.rawContent}
-          tokens={draft.tokens}
+          rawContent={effectiveDraft.rawContent}
+          tokens={effectiveDraft.tokens}
           placeholder={placeholder}
-          onChange={onChangeDraft}
+          onChange={handleChangeDraft}
           onCaretChange={handleCaretChange}
           onKeyDown={handleKeyDown}
           onBlur={handleBlur}
-          onRemoveToken={handleRemoveInlineToken}
+          onRemoveToken={onRemoveInlineToken}
           workspaceRoot={effectiveWorkspaceRoot || undefined}
           onFilePasteError={handleFilePasteError}
         />

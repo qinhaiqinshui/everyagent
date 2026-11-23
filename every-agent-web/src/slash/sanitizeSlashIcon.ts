@@ -4,7 +4,7 @@
  * 背景：slash 候选的 `icon` 字段契约上是「内联 SVG 字符串」，但来源不止宿主内置
  * provider——任意第三方插件可经 worker 的 `WorkerPluginContextImpl.registerSlashProvider`
  * 返回**任意字符串**（icon 契约在注册链上无校验），此前两处渲染点
- * （TaskComposerSurface 的 `/` 菜单、SlashItemDetailPopover 的详情弹层）把它当作
+ * （RichComposer 的 `/` 菜单、SlashItemDetailPopover 的详情弹层）把它当作
  * 「注册中心内部可信来源」直接 `dangerouslySetInnerHTML` 注入，恶意/被投毒插件可借
  * `<img onerror=…>`、`<svg onload=…>` 等载荷执行脚本。
  *
