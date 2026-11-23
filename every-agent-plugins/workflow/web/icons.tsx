@@ -254,3 +254,74 @@ export function SupervisorIcon({ size = 16, style, className, color }: IconProps
     </Svg>
   )
 }
+
+// ── 侧边栏 / 运行对话框（步骤 9） ─────────────────────────────────────────
+
+/** 编辑（定义行入口）。 */
+export function EditIcon({ size = 16, style, className, color }: IconProps) {
+  return (
+    <Svg size={size} style={style} className={className} color={color}>
+      <path d="M3.2 12.8L3.8 10.3L10.5 3.6L12.4 5.5L5.7 12.2L3.2 12.8Z" />
+      <path d="M9.4 2.6L11.4 4.6L12.6 3.4L10.6 1.4L9.4 2.6Z" />
+    </Svg>
+  )
+}
+
+/** 导出（下载 definition JSON）。 */
+export function DownloadIcon({ size = 16, style, className, color }: IconProps) {
+  return (
+    <Svg size={size} style={style} className={className} color={color}>
+      <path d="M8 2.6V10" />
+      <path d="M4.8 7.2L8 10.4L11.2 7.2" />
+      <path d="M2.8 13.2H13.2" />
+    </Svg>
+  )
+}
+
+/** 导入（上传 definition JSON）。 */
+export function UploadIcon({ size = 16, style, className, color }: IconProps) {
+  return (
+    <Svg size={size} style={style} className={className} color={color}>
+      <path d="M8 10.4V3" />
+      <path d="M4.8 6.2L8 3L11.2 6.2" />
+      <path d="M2.8 13.2H13.2" />
+    </Svg>
+  )
+}
+
+/** 折叠区展开（chevron 向下）。 */
+export function ChevronDownIcon({ size = 16, style, className, color }: IconProps) {
+  return (
+    <Svg size={size} style={style} className={className} color={color}>
+      <path d="M4 6L8 10L12 6" />
+    </Svg>
+  )
+}
+
+/** 折叠区收起（chevron 向右）。 */
+export function ChevronRightIcon({ size = 16, style, className, color }: IconProps) {
+  return (
+    <Svg size={size} style={style} className={className} color={color}>
+      <path d="M6 4L10 8L6 12" />
+    </Svg>
+  )
+}
+
+/** 取消实例（停止方块）。 */
+export function StopIcon({ size = 16, style, className, color }: IconProps) {
+  return (
+    <Svg size={size} style={style} className={className} color={color}>
+      <rect x="3.6" y="3.6" width="8.8" height="8.8" rx="1.5" />
+    </Svg>
+  )
+}
+
+/** 手动刷新列表。 */
+export function RefreshIcon({ size = 16, style, className, color }: IconProps) {
+  return (
+    <Svg size={size} style={style} className={className} color={color}>
+      <path d="M13 8.2A5.1 5.1 0 1 1 11.1 4" />
+      <path d="M11.2 1.6L11.3 4.2L13.9 4.1" />
+    </Svg>
+  )
+}

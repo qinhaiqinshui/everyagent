@@ -6,9 +6,9 @@
  * 后端落位 workspaces/<wsId>/workflows/），经 pluginRuntime.resolveWorkspaceRef
  * 从注册表反查归属 worker；注册表无该 id 时回退 ctx.sdk.workerId（单 worker 兜底）。
  *
- * 本步（步骤 8）只实现 def.get / def.save 的调用逻辑；其余方法按「RPC 参数契约」
- * 表预置**带完整签名的 typed stub**（抛「步骤 9/10 实现」），后续步骤只填方法体、
- * 不再动调用方类型。
+ * 步骤 9 起全量实现：def.* / run / instance.* 全部直连 + instance.events 的
+ * **可取消长轮询订阅循环**（subscribeInstanceEvents，afterSeq 游标推进 + waitMs
+ * + 断线退避重拉）。方法签名与「RPC 参数契约」表一致——步骤 10 只消费不再改本文件。
  */
 import { getPluginContext, resolveWorkspaceRef } from './pluginRuntime'
 
@@ -232,9 +232,30 @@ async function rpcWorkflow<T>(
   }
 }
 
-/** typed stub：方法签名已按契约表定型，实现留待步骤 9/10。 */
-function stub<T>(method: string): Promise<T> {
-  return Promise.reject(new Error(`workflow.${method} 尚未实现（步骤 9/10 落地）`))
+/**
+ * 按**当前 worker** 定向调用 workflow RPC（无 workspace 寻址的方法）：
+ * - def.list / instance.list 缺省 workspace 过滤（=该 worker 视角的全部工作区）；
+ * - instance.get/runLog/events/cancel/delete/decide 按全局唯一 instanceId 寻址
+ *   （wire 无 workspace 参数；meta 自带 workspaceId 归户展示）。v1 单 worker 主场景
+ *   直接定向 ctx.sdk.workerId；多 worker 精细路由（按实例归户反查）留待后续增强。
+ */
+async function rpcCurrentWorker<T>(
+  method: string,
+  params: Record<string, unknown>,
+): Promise<T> {
+  const ctx = getPluginContext()
+  try {
+    return (await ctx.sdk.rpc(ctx.sdk.workerId, method, params)) as T
+  } catch (err) {
+    normalizeRpcError(err)
+  }
+}
+
+/** err → RPC 错误码（非结构化错误返回空串；订阅循环判 NOT_FOUND 终停用）。 */
+export function rpcErrorCode(err: unknown): string {
+  return err && typeof err === 'object' && 'code' in err
+    ? String((err as { code?: unknown }).code ?? '')
+    : ''
 }
 
 // ─── id / 标签工具 ────────────────────────────────────────────────────────
@@ -287,76 +308,286 @@ export const workflowGateway = {
     })
   },
 
-  // ── 以下为步骤 9（侧边栏/导入导出/运行）与步骤 10（实例页）的 typed stub ──
+  // ── 定义列表 / 删除 / 导入导出 / 运行（步骤 9 侧边栏消费） ──────────────
 
-  /** workflow.def.list {workspace?} → {defs:[摘要]}（updatedAt 倒序）。 */
+  /**
+   * workflow.def.list {workspace?} → {defs:[摘要]}（updatedAt 倒序）。
+   * workspace 缺省=当前 worker 视角的全部工作区（同 tasks.list 口径）。
+   */
   async defList(workspace?: string): Promise<WorkflowDefSummary[]> {
-    return stub<WorkflowDefSummary[]>('def.list')
+    const result = workspace
+      ? await rpcWorkflow<{ defs?: WorkflowDefSummary[] }>(workspace, 'workflow.def.list', { workspace })
+      : await rpcCurrentWorker<{ defs?: WorkflowDefSummary[] }>('workflow.def.list', {})
+    if (!result || typeof result !== 'object' || !Array.isArray(result.defs)) {
+      throw new Error('workflow.def.list 返回结构异常：缺少 defs')
+    }
+    return result.defs
   },
 
   /** workflow.def.delete {workspace, id} → {ok:true}（历史实例持快照不受影响）。 */
   async defDelete(workspace: string, id: string): Promise<{ ok: boolean }> {
-    return stub<{ ok: boolean }>('def.delete')
+    return rpcWorkflow<{ ok: boolean }>(workspace, 'workflow.def.delete', { workspace, id })
   },
 
   /** workflow.def.export {workspace, id} → {definition}（前端转文件下载）。 */
   async defExport(workspace: string, id: string): Promise<WorkflowDefinition> {
-    return stub<WorkflowDefinition>('def.export')
+    const result = await rpcWorkflow<{ definition?: WorkflowDefinition }>(workspace, 'workflow.def.export', {
+      workspace,
+      id,
+    })
+    if (!result || typeof result !== 'object' || !result.definition) {
+      throw new Error('workflow.def.export 返回结构异常：缺少 definition')
+    }
+    return result.definition
   },
 
-  /** workflow.def.import {workspace, definition} → {id}（重赋顶层 wf id）。 */
+  /** workflow.def.import {workspace, definition} → {id}（重赋顶层 wf id；校验失败抛 WorkflowValidationError）。 */
   async defImport(workspace: string, definition: WorkflowDefinition): Promise<{ id: string }> {
-    return stub<{ id: string }>('def.import')
+    return rpcWorkflow<{ id: string }>(workspace, 'workflow.def.import', { workspace, definition })
   },
 
-  /** workflow.run {workspace, definitionId, variables?} → {instanceId}（异步开跑）。 */
-  async run(workspace: string, definitionId: string, variables?: Record<string, string>): Promise<{ instanceId: string }> {
-    return stub<{ instanceId: string }>('run')
+  /**
+   * workflow.run {workspace, definitionId, variables?} → {instanceId}（立即创建实例并
+   * 异步开跑）。BAD_PARAMS（缺 required 变量 / 模型配置不存在）以 message 原样抛出。
+   */
+  async run(
+    workspace: string,
+    definitionId: string,
+    variables?: Record<string, string>,
+  ): Promise<{ instanceId: string }> {
+    return rpcWorkflow<{ instanceId: string }>(workspace, 'workflow.run', {
+      workspace,
+      definitionId,
+      ...(variables && Object.keys(variables).length > 0 ? { variables } : {}),
+    })
   },
 
-  /** workflow.instance.list {workspace?, definitionId?} → {instances}（createdAt 倒序）。 */
+  // ── 实例面（步骤 9 侧边栏消费列表/取消/删除；步骤 10 实例页消费详情/事件） ──
+
+  /**
+   * workflow.instance.list {workspace?, definitionId?} → {instances}（createdAt 倒序；
+   * 含终态 nodeStates 投影与工作区缺失标记）。
+   */
   async instanceList(filter?: { workspace?: string; definitionId?: string }): Promise<WorkflowInstanceSummary[]> {
-    return stub<WorkflowInstanceSummary[]>('instance.list')
+    const params: Record<string, unknown> = {}
+    if (filter?.workspace) params.workspace = filter.workspace
+    if (filter?.definitionId) params.definitionId = filter.definitionId
+    const result = filter?.workspace
+      ? await rpcWorkflow<{ instances?: WorkflowInstanceSummary[] }>(filter.workspace, 'workflow.instance.list', params)
+      : await rpcCurrentWorker<{ instances?: WorkflowInstanceSummary[] }>('workflow.instance.list', params)
+    if (!result || typeof result !== 'object' || !Array.isArray(result.instances)) {
+      throw new Error('workflow.instance.list 返回结构异常：缺少 instances')
+    }
+    return result.instances
   },
 
-  /** workflow.instance.get {instanceId} → {instance}（meta 全量，含定义快照）。 */
+  /** workflow.instance.get {instanceId} → {instance}（meta 全量，含定义快照/pendingDecision）。 */
   async instanceGet(instanceId: string): Promise<WorkflowInstanceMeta> {
-    return stub<WorkflowInstanceMeta>('instance.get')
+    const result = await rpcCurrentWorker<{ instance?: WorkflowInstanceMeta }>('workflow.instance.get', {
+      instanceId,
+    })
+    if (!result || typeof result !== 'object' || !result.instance) {
+      throw new Error('workflow.instance.get 返回结构异常：缺少 instance')
+    }
+    return result.instance
   },
 
   /** workflow.instance.runLog {instanceId} → {runs:[按 runNo 升序], nextRunNo}。 */
   async instanceRunLog(instanceId: string): Promise<{ runs: WorkflowRunRecord[]; nextRunNo: number }> {
-    return stub<{ runs: WorkflowRunRecord[]; nextRunNo: number }>('instance.runLog')
+    const result = await rpcCurrentWorker<{ runs?: WorkflowRunRecord[]; nextRunNo?: number }>(
+      'workflow.instance.runLog',
+      { instanceId },
+    )
+    if (!result || typeof result !== 'object' || !Array.isArray(result.runs)) {
+      throw new Error('workflow.instance.runLog 返回结构异常：缺少 runs')
+    }
+    return { runs: result.runs, nextRunNo: typeof result.nextRunNo === 'number' ? result.nextRunNo : 0 }
   },
 
   /**
    * workflow.instance.events {instanceId, afterSeq?, waitMs?(≤15000), limit?} →
-   * {events, nextSeq(string)}。长轮询（waitMs 上限 15s，sdk.rpc 默认 30s 超时）。
+   * {events, nextSeq(string)}。长轮询原语（单发）；持续消费请用
+   * {@link subscribeInstanceEvents}（游标推进 + 退避重拉的订阅循环）。
    */
   async instanceEvents(
     instanceId: string,
     opts?: { afterSeq?: string; waitMs?: number; limit?: number },
   ): Promise<{ events: WorkflowInstanceEvent[]; nextSeq: string }> {
-    return stub<{ events: WorkflowInstanceEvent[]; nextSeq: string }>('instance.events')
+    const params: Record<string, unknown> = { instanceId }
+    if (opts?.afterSeq != null && opts.afterSeq !== '') params.afterSeq = opts.afterSeq
+    if (opts?.waitMs != null && opts.waitMs > 0) params.waitMs = opts.waitMs
+    if (opts?.limit != null && opts.limit > 0) params.limit = opts.limit
+    const result = await rpcCurrentWorker<{ events?: WorkflowInstanceEvent[]; nextSeq?: string }>(
+      'workflow.instance.events',
+      params,
+    )
+    if (!result || typeof result !== 'object' || !Array.isArray(result.events)) {
+      throw new Error('workflow.instance.events 返回结构异常：缺少 events')
+    }
+    return {
+      events: result.events,
+      nextSeq: typeof result.nextSeq === 'string' ? result.nextSeq : '',
+    }
   },
 
-  /** workflow.instance.cancel {instanceId} → {ok:true}（运行中中断节点线程）。 */
+  /** workflow.instance.cancel {instanceId} → {ok:true}（运行中/挂起中断；已终态 BAD_PARAMS）。 */
   async instanceCancel(instanceId: string): Promise<{ ok: boolean }> {
-    return stub<{ ok: boolean }>('instance.cancel')
+    return rpcCurrentWorker<{ ok: boolean }>('workflow.instance.cancel', { instanceId })
   },
 
-  /** workflow.instance.delete {instanceId} → {ok:true}（运行中拒绝）。 */
+  /** workflow.instance.delete {instanceId} → {ok:true}（运行中/挂起拒绝；删整个实例目录）。 */
   async instanceDelete(instanceId: string): Promise<{ ok: boolean }> {
-    return stub<{ ok: boolean }>('instance.delete')
+    return rpcCurrentWorker<{ ok: boolean }>('workflow.instance.delete', { instanceId })
   },
 
-  /** workflow.instance.decide {instanceId, runNo, decision, input?} → {ok:true}。 */
+  /** workflow.instance.decide {instanceId, runNo, decision, input?} → {ok:true}（waiting-user 决策）。 */
   async instanceDecide(
     instanceId: string,
     runNo: number,
     decision: 'retry' | 'skip' | 'fail' | 'retryWithInput',
     input?: string,
   ): Promise<{ ok: boolean }> {
-    return stub<{ ok: boolean }>('instance.decide')
+    return rpcCurrentWorker<{ ok: boolean }>('workflow.instance.decide', {
+      instanceId,
+      runNo,
+      decision,
+      ...(input != null ? { input } : {}),
+    })
   },
+}
+
+// ─── instance.events 长轮询订阅循环（步骤 10 实例页消费；gateway 层单点封装） ──
+
+/**
+ * 节流策略（对齐宿主 task.poll 前端消费纪律，见 task-packet-view.ts）：
+ * - **游标只用服务端 nextSeq（字符串，未过滤推进口径）**——批内事件 seq 仅作缺省回退；
+ *   空批时 nextSeq=afterSeq（活实例=等待超时无新事件，游标原地续拉；终态=已读到尾）。
+ * - 长轮询 waitMs=8000（后端钳制 ≤15000；sdk.rpc 默认 30s 超时留半程余量）——服务端
+ *   挂起即天然节流，成功路径**无额外客户端定时器**，拿到应答立即续拉。
+ * - 断线/异常：指数退避 1s→2s→4s→8s→15s 封顶重拉（成功即清零），经 onState 回调
+ *   暴露给 UI 做连接状态提示；NOT_FOUND（实例被删）直接终停。
+ * - **终态自动停**：观测到终态标记事件（wf.done / wf.cancelled / wf.status{终态}）
+ *   即停——后端对终态实例立即返回当前尾，不停会退化成无 waitMs 的热转。
+ */
+const DEFAULT_EVENT_WAIT_MS = 8000
+
+/** 退避档位（ms；成功一次即清零回 0 档）。 */
+const EVENT_BACKOFF_SCHEDULE_MS = [1000, 2000, 4000, 8000, 15000]
+
+/** 订阅轮询状态：polling=正常长轮询中；backoff=异常退避等待；stopped=循环终停。 */
+export type WorkflowEventsPollState =
+  | { phase: 'polling' }
+  | { phase: 'backoff'; ms: number; error: string }
+  | { phase: 'stopped'; reason: 'terminal' | 'not-found' | 'closed' }
+
+/** 订阅句柄：close() 幂等（在途 RPC 的结果会被丢弃）。 */
+export interface WorkflowEventsHandle {
+  close(): void
+  /** 当前游标（字符串雪花 seq；终停后不再推进）。 */
+  readonly cursor: string
+}
+
+export interface SubscribeWorkflowEventsOptions {
+  /** 初始游标（缺省 '0' = 从头回放全部事件；翻历史场景由调用方传入已知游标）。 */
+  afterSeq?: string
+  /** 长轮询等待毫秒（缺省 8000；勿超后端 15000 上限与 sdk.rpc 30s 超时的半程）。 */
+  waitMs?: number
+  /** 单批条数上限（缺省不传=后端缺省）。 */
+  limit?: number
+  /** 轮询状态回调（退避提示/终停原因；缺省忽略）。 */
+  onState?: (state: WorkflowEventsPollState) => void
+}
+
+/**
+ * 事件是否实例**终态标记**：wf.done / wf.cancelled 事件本体，或 wf.status 事件的
+ * payload.status ∈ {done, failed, cancelled}（failed 终态无专属事件、只落 wf.status
+ * ——与引擎 transitionLocked 的发射序列一致）。
+ */
+export function isTerminalInstanceEvent(e: WorkflowInstanceEvent): boolean {
+  if (e.event === 'wf.done' || e.event === 'wf.cancelled') return true
+  if (e.event === 'wf.status') {
+    const s = String((e.payload as { status?: unknown } | null)?.status ?? '')
+    return s === 'done' || s === 'failed' || s === 'cancelled'
+  }
+  return false
+}
+
+/**
+ * 订阅实例事件流（可取消的长轮询循环）。
+ *
+ * 每批事件经 onEvents 回调（**先投递再判终停**——终态标记事件保证送达消费者）；
+ * 游标经返回句柄只读暴露。close() 后在途 RPC/退避 sleep 的结果被丢弃（sleep 定时器
+ * 被 clearTimeout，挂起的 Promise 永不 resolve、随闭包一并回收——标准可取消范式）。
+ */
+export function subscribeInstanceEvents(
+  instanceId: string,
+  onEvents: (events: WorkflowInstanceEvent[]) => void,
+  opts: SubscribeWorkflowEventsOptions = {},
+): WorkflowEventsHandle {
+  let closed = false
+  let cursor = opts.afterSeq ?? '0'
+  let backoffIndex = 0
+  let timer: ReturnType<typeof setTimeout> | null = null
+
+  const stop = (reason: 'terminal' | 'not-found' | 'closed'): void => {
+    if (closed) return
+    closed = true
+    if (timer) {
+      clearTimeout(timer)
+      timer = null
+    }
+    opts.onState?.({ phase: 'stopped', reason })
+  }
+
+  const sleep = (ms: number): Promise<void> =>
+    new Promise<void>(resolve => {
+      timer = setTimeout(resolve, ms)
+    })
+
+  void (async () => {
+    while (!closed) {
+      try {
+        const res = await workflowGateway.instanceEvents(instanceId, {
+          afterSeq: cursor,
+          waitMs: opts.waitMs ?? DEFAULT_EVENT_WAIT_MS,
+          ...(opts.limit != null ? { limit: opts.limit } : {}),
+        })
+        if (closed) return
+        if (backoffIndex > 0) {
+          backoffIndex = 0
+          opts.onState?.({ phase: 'polling' })
+        }
+        if (res.events.length > 0) {
+          // 未过滤口径游标优先（task.poll 同款纪律）；缺省回退批尾事件 seq。
+          cursor = res.nextSeq || res.events[res.events.length - 1].seq
+          onEvents(res.events)
+          if (res.events.some(isTerminalInstanceEvent)) {
+            stop('terminal')
+            return
+          }
+        } else if (res.nextSeq) {
+          // 空批推进（通常等于原游标；显式采纳服务端口径）。
+          cursor = res.nextSeq
+        }
+        // 立即续拉——服务端 waitMs 挂起即节流。
+      } catch (err) {
+        if (closed) return
+        if (rpcErrorCode(err) === 'NOT_FOUND') {
+          stop('not-found')
+          return
+        }
+        const ms = EVENT_BACKOFF_SCHEDULE_MS[Math.min(backoffIndex, EVENT_BACKOFF_SCHEDULE_MS.length - 1)]
+        backoffIndex += 1
+        opts.onState?.({ phase: 'backoff', ms, error: rpcErrorMessage(err) })
+        await sleep(ms)
+      }
+    }
+  })()
+
+  return {
+    close: () => stop('closed'),
+    get cursor() {
+      return cursor
+    },
+  }
 }
