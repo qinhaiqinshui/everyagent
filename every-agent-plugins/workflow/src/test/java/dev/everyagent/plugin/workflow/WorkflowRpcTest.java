@@ -1,4 +1,4 @@
-// ea: RPC 面测试（14 方法各一正一反 + 长轮询三态 + import 重赋 id + run 变量/模型校验；桩注入不依赖 worker，§14.9 红线）
+// ea: RPC 面测试（15 方法各一正一反 + 长轮询三态 + import 重赋 id + run 变量/模型校验；桩注入不依赖 worker，§14.9 红线）
 package dev.everyagent.plugin.workflow;
 
 import java.lang.reflect.Proxy;
@@ -40,7 +40,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.fail;
 
 /**
- * 14 个 RPC 方法的参数装配/错误码/长轮询行为测试。错误码对齐经异常类型断言
+ * 15 个 RPC 方法的参数装配/错误码/长轮询行为测试。错误码对齐经异常类型断言
  * （BadParamsException→BAD_PARAMS / NotFoundException→NOT_FOUND 由 RpcDispatcher 统一映射）；
  * RpcContext 用本地桩（语义与 worker 实现逐字对齐：strParam 缺失/空串抛 BadParams）。
  */
@@ -188,18 +188,18 @@ class WorkflowRpcTest {
     // ══════════════════════════ 注册面 ══════════════════════════
 
     @Test
-    void registerAllRegistersExactlyFourteenMethods() {
+    void registerAllRegistersExactlyFifteenMethods() {
         Map<String, RpcMethod> registered = new LinkedHashMap<>();
         rpc.registerAll(recordingContext(registered));
         assertThat(registered.keySet()).containsExactlyElementsOf(rpc.methods().keySet());
-        assertThat(registered).hasSize(14);
+        assertThat(registered).hasSize(15);
         assertThat(registered.keySet()).containsExactly(
                 "workflow.def.list", "workflow.def.get", "workflow.def.save",
                 "workflow.def.delete", "workflow.def.export", "workflow.def.import",
                 "workflow.run", "workflow.instance.list", "workflow.instance.get",
                 "workflow.instance.runLog", "workflow.instance.events",
                 "workflow.instance.cancel", "workflow.instance.delete",
-                "workflow.instance.decide");
+                "workflow.instance.decide", "workflow.instance.dataDir");
     }
 
     // ══════════════════════════ def.list ══════════════════════════
@@ -890,5 +890,32 @@ class WorkflowRpcTest {
         assertThatThrownBy(() -> rpc.instanceDecide(call(p().put("instanceId", m.id())
                 .put("runNo", runNo).put("decision", "retry"))))
                 .isInstanceOf(BadParamsException.class);
+    }
+
+    // ══════════════════════════ instance.dataDir ══════════════════════════
+
+    @Test
+    void instanceDataDirReturnsAbsoluteDirAndMissingRejected() throws Exception {
+        Definition d = save("ws_run",
+                DefinitionValidatorTest.node("s", "start"),
+                DefinitionValidatorTest.node("a", "ai").agent("writer"),
+                DefinitionValidatorTest.edge("e1", "s", "a"),
+                new AgentDef("writer", null, null));
+        InstanceMeta m = store.createInstance(d, Map.of());
+        Call c = call(p().put("instanceId", m.id()));
+        rpc.instanceDataDir(c);
+        String path = c.result.path("path").asString();
+        // worker 宿主上的绝对路径：落位 workspaces/<wsId>/workflows/instances/<wiId>/ 且目录真实在盘。
+        assertThat(path).isNotEmpty();
+        assertThat(Path.of(path).isAbsolute()).isTrue();
+        assertThat(path).contains("workspaces").contains("ws_run")
+                .contains("workflows").contains("instances").contains(m.id());
+        assertThat(Files.isDirectory(Path.of(path))).isTrue();
+
+        // 实例不存在 → NOT_FOUND；缺 instanceId → BAD_PARAMS。
+        assertThatThrownBy(() -> rpc.instanceDataDir(call(p().put("instanceId", "wi_nope"))))
+                .isInstanceOf(NotFoundException.class);
+        assertThatThrownBy(() -> rpc.instanceDataDir(call(p())))
+                .isInstanceOf(BadParamsException.class).hasMessageContaining("instanceId");
     }
 }

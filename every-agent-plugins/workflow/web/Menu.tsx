@@ -189,15 +189,21 @@ function ensureMobileActionsStyles(): void {
  * 列表行「更多操作」（⋯）按钮——自宿主 ListRowActions 复制精简（无移动端长按句柄）：
  * 桌面 hover 整行（.ui-row）时浮现（宿主全局 .ui-row:hover .ui-row-actions），
  * 点击弹出 MenuList；移动端常显并放大触控目标（见上方样式）。侧边栏行卡片内使用。
+ *
+ * `onOpen`：菜单**即将打开**时的回调（对齐宿主 ListRowActions.onOpen 语义）——用于
+ * 「点击菜单项之前」的轻量准备，例如预取「复制工作流路径」要用的实例目录（剪贴板
+ * 同步写入要求用户手势仍在，跨 await 的取数会把手势吃掉），不得阻塞开菜单。
  */
 export function RowActions({
   items,
   title = '更多操作',
   disabled = false,
+  onOpen,
 }: {
   items: MenuListItem[]
   title?: string
   disabled?: boolean
+  onOpen?: () => void
 }) {
   const triggerRef = React.useRef<HTMLButtonElement | null>(null)
   const [open, setOpen] = React.useState(false)
@@ -225,6 +231,7 @@ export function RowActions({
             return
           }
           setOpen(true)
+          onOpen?.()
         }}
       >
         <MoreHorizontalIcon size={13} />

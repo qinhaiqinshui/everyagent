@@ -559,6 +559,15 @@ public final class WorkflowStore {
         return findInstance(instanceId).filter(m -> workspaceId.equals(m.workspaceId()));
     }
 
+    /**
+     * 实例目录（workspaces/&lt;wsId&gt;/workflows/instances/&lt;wiId&gt;/）在 worker 宿主上的
+     * 绝对路径（workflow.instance.dataDir RPC 用：前端「复制工作流路径」按需拉取，
+     * 路径不进列表 wire——worker 数据目录迁移后不会留下陈旧值，task.dataDir 同款纪律）。
+     */
+    public Path instanceDirOf(String workspaceId, String instanceId) {
+        return instanceDir(workspaceId, instanceId).toAbsolutePath();
+    }
+
     /** 写回实例元数据（状态迁移点原子重写 meta.json + 索引维护）。 */
     public InstanceMeta saveInstanceMeta(InstanceMeta meta) {
         if (meta == null || meta.id() == null || meta.id().isBlank() || meta.workspaceId() == null) {

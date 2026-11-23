@@ -286,6 +286,33 @@ export function conditionLabel(c?: WorkflowCondition | null): string {
   }
 }
 
+// ─── instance.dataDir 预取缓存（侧栏「复制工作流路径」；宿主 taskDataDirCache 同款） ──
+
+/** 预取 TTL：worker 数据目录迁移（换 homeDir 重启）后旧值会陈旧，过期即重新预取。 */
+const INSTANCE_DATA_DIR_TTL_MS = 5 * 60 * 1000
+
+interface InstanceDataDirCacheEntry {
+  /** 预取发起时刻（用于 TTL 判定）。 */
+  at: number
+  /** 已解析的绝对路径；预取在飞/失败时为 null。 */
+  resolved: string | null
+}
+
+const instanceDataDirCache = new Map<string, InstanceDataDirCacheEntry>()
+
+/**
+ * instance.dataDir 取数本体（模块级函数：instanceDataDir 与预取共用，不依赖 this，
+ * 避免方法被解构调用时丢上下文——宿主 fetchTaskDataDir 同款纪律）。
+ */
+async function fetchInstanceDataDir(instanceId: string): Promise<string> {
+  const result = await rpcCurrentWorker<{ path?: string }>('workflow.instance.dataDir', { instanceId })
+  const path = String(result?.path ?? '')
+  if (!path) {
+    throw new Error('worker 未返回工作流实例路径')
+  }
+  return path
+}
+
 // ─── RPC 面 ───────────────────────────────────────────────────────────────
 
 export const workflowGateway = {
@@ -458,6 +485,55 @@ export const workflowGateway = {
       decision,
       ...(input != null ? { input } : {}),
     })
+  },
+
+  /**
+   * workflow.instance.dataDir {instanceId} → {path}：实例目录
+   * （workspaces/<wsId>/workflows/instances/<wiId>/）在 worker 宿主上的绝对路径。
+   * 侧边栏「复制工作流路径」按需拉取——路径不进 instance.list 摘要 wire，随取随发，
+   * worker 数据目录迁移后不会留下陈旧值（宿主 task.dataDir 同款纪律）。
+   */
+  async instanceDataDir(instanceId: string): Promise<string> {
+    return fetchInstanceDataDir(instanceId)
+  },
+
+  /**
+   * 预取实例目录路径（行菜单**打开时**调用）：fire-and-forget，结果落
+   * {@link getPrefetchedInstanceDataDir} 供点击时同步取用。
+   *
+   * 为什么需要：「复制工作流路径」在**非安全上下文**（局域网 http 访问）下只能靠同步
+   * `execCommand('copy')` 写剪贴板，而它要求点击手势仍在——先 await 一次 RPC 再复制，
+   * 手势已被跨 task 的往返吃掉，复制必然失败。故路径必须在点击**之前**就绪。
+   */
+  prefetchInstanceDataDir(instanceId: string): void {
+    const cached = instanceDataDirCache.get(instanceId)
+    // 已有新鲜条目 = 在飞或已落定，不重复发起。
+    if (cached && Date.now() - cached.at < INSTANCE_DATA_DIR_TTL_MS) return
+    const entry: InstanceDataDirCacheEntry = { at: Date.now(), resolved: null }
+    instanceDataDirCache.set(instanceId, entry)
+    // 预取是「顺手准备」：失败从缓存移除（点击时重取并提示），且不冒 unhandled rejection。
+    fetchInstanceDataDir(instanceId).then(
+      (path) => {
+        entry.resolved = path
+      },
+      () => {
+        if (instanceDataDirCache.get(instanceId) === entry) instanceDataDirCache.delete(instanceId)
+      },
+    )
+  },
+
+  /**
+   * 同步取预取到的实例目录路径；尚未落定/已过期/不存在返回 null。
+   * 调用点据此在**点击回调内同步写剪贴板**，不跨 await（保住 execCommand 需要的用户手势）。
+   */
+  getPrefetchedInstanceDataDir(instanceId: string): string | null {
+    const entry = instanceDataDirCache.get(instanceId)
+    if (!entry) return null
+    if (Date.now() - entry.at >= INSTANCE_DATA_DIR_TTL_MS) {
+      instanceDataDirCache.delete(instanceId)
+      return null
+    }
+    return entry.resolved
   },
 }
 

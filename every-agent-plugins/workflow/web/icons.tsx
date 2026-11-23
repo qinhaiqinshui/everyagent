@@ -192,6 +192,16 @@ export function DeleteIcon({ size = 16, style, className, color }: IconProps) {
   )
 }
 
+/** 复制（叠页，图形同宿主 CopyIcon）：实例行「复制工作流路径」等剪贴板动作。 */
+export function CopyIcon({ size = 16, style, className, color }: IconProps) {
+  return (
+    <Svg size={size} style={style} className={className} color={color}>
+      <rect x="5.3" y="3.5" width="6.2" height="8" rx="1.2" />
+      <path d="M4.2 5V11A1.2 1.2 0 0 0 5.4 12.2H10" />
+    </Svg>
+  )
+}
+
 /** 变量声明。 */
 export function VariableIcon({ size = 16, style, className, color }: IconProps) {
   return (

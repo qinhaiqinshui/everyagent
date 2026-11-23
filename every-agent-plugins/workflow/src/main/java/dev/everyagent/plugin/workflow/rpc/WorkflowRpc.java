@@ -32,7 +32,7 @@ import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
 
 /**
- * workflow.* RPC 面（14 个方法，契约=计划「RPC 参数契约」表，前后端对齐速查表）。
+ * workflow.* RPC 面（15 个方法，契约=计划「RPC 参数契约」表，前后端对齐速查表）。
  *
  * <p><b>参数纪律</b>（task.run/fs.&#42;/git.&#42; 同款）：写操作（def.save/delete/export/import、run）
  * 必带 {@code workspace} 参数——缺省/空串由 {@code strParam} 抛 BAD_PARAMS；落位
@@ -55,7 +55,7 @@ import tools.jackson.databind.node.ObjectNode;
  */
 public final class WorkflowRpc {
 
-    // ══════════════════════════ 方法名（14 个） ══════════════════════════
+    // ══════════════════════════ 方法名（15 个） ══════════════════════════
 
     public static final String DEF_LIST = "workflow.def.list";
     public static final String DEF_GET = "workflow.def.get";
@@ -71,6 +71,7 @@ public final class WorkflowRpc {
     public static final String INSTANCE_CANCEL = "workflow.instance.cancel";
     public static final String INSTANCE_DELETE = "workflow.instance.delete";
     public static final String INSTANCE_DECIDE = "workflow.instance.decide";
+    public static final String INSTANCE_DATA_DIR = "workflow.instance.dataDir";
 
     /** 长轮询等待上限（sdk.rpc 默认 30s 超时，勿超）。 */
     public static final long MAX_WAIT_MS = 15_000;
@@ -102,10 +103,11 @@ public final class WorkflowRpc {
         m.put(INSTANCE_CANCEL, this::instanceCancel);
         m.put(INSTANCE_DELETE, this::instanceDelete);
         m.put(INSTANCE_DECIDE, this::instanceDecide);
+        m.put(INSTANCE_DATA_DIR, this::instanceDataDir);
         return m;
     }
 
-    /** 注册全部 14 个方法（activate 调用）。 */
+    /** 注册全部 15 个方法（activate 调用）。 */
     public void registerAll(WorkerPluginContext ctx) {
         methods().forEach(ctx::registerRpcMethod);
     }
@@ -321,6 +323,18 @@ public final class WorkflowRpc {
         String input = ctx.optStrParam("input", null);
         engine.decide(instanceId, (int) runNo, decision, input);
         ctx.ok(Json.obj().put("ok", true));
+    }
+
+    /**
+     * workflow.instance.dataDir {instanceId} → {path}：实例目录
+     * （workspaces/&lt;wsId&gt;/workflows/instances/&lt;wiId&gt;/）在 worker 宿主上的绝对路径。
+     * 前端侧边栏「复制工作流路径」按需拉取——不进 instance.list 摘要 wire，路径随取随发，
+     * worker 数据目录迁移后不会留下陈旧值（task.dataDir 同款纪律）。
+     * 实例不存在 → NOT_FOUND（存在性口径=内存索引，activate 扫描后与磁盘一致）。
+     */
+    public void instanceDataDir(RpcContext ctx) {
+        InstanceMeta m = requireInstance(ctx);
+        ctx.ok(Json.obj().put("path", store.instanceDirOf(m.workspaceId(), m.id()).toString()));
     }
 
     // ══════════════════════════ 参数装配 ══════════════════════════

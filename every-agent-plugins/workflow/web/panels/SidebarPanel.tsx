@@ -18,7 +18,8 @@
  * 归属数据的工作区未注册时收进尾组「工作区缺失」（只读展示，无创建入口）。
  *
  * 行级操作收进 ⋯ 菜单（RowActions，复用宿主 .ui-row-actions 全局样式）：
- * 实例=取消（活跃时）/删除（行点击即打开实例页）。
+ * 实例=复制工作流路径（instance.dataDir RPC 按需拉取+菜单打开预取，宿主「复制任务
+ * 路径」同款链路）/取消（活跃时）/删除（行点击即打开实例页）。
  *
  * 刷新模型（任务面板同款，推送驱动）：worker 侧定义/实例的每次落盘变更经 worker 级插件
  * 通知频道扇出 `plugin.workflow.changed`（架构 §5.2），宿主桥接为领域事件
@@ -49,8 +50,10 @@ import {
 import SidebarScrollArea from '../SidebarScrollArea'
 import { HeaderMenu, RowActions } from '../Menu'
 import { openWorkspaceRunDialog } from './RunDialog'
+import { copyText, copyTextSync } from '../clipboard'
 import {
   ChevronDownIcon,
+  CopyIcon,
   DeleteIcon,
   ManageIcon,
   RefreshIcon,
@@ -257,6 +260,70 @@ function confirmDialog(title: string, description: string, okText = '确认'): P
     .then(r => r === true)
 }
 
+// ─── 手动复制降落伞（「复制工作流路径」剪贴板写入失败时） ───────────────────
+
+/**
+ * 路径已拿到但写不进剪贴板时的「降落伞」模态：把文本摆进**已全选**的只读文本域，
+ * 用户直接 Ctrl+C（⌘C）即可，不再只看到一句「复制失败」（宿主 ManualCopyDialog 的
+ * 插件版——插件不得引宿主模块，经 ctx.ui.showDialog 挂宿主模态壳）。
+ *
+ * 「重试复制」按钮本身是一次**新的点击手势**，其同步 copyTextSync 几乎必然成功
+ * （这正是非安全上下文下 execCommand 需要的手势）。
+ */
+function showManualCopyDialog(title: string, text: string): void {
+  const ctx = getPluginContext()
+  if (typeof ctx.ui.showDialog !== 'function') {
+    // 宿主模态缺席：window.prompt 自带全选文本域，可直接 Ctrl+C / ⌘C。
+    window.prompt(title, text)
+    return
+  }
+  void ctx.ui.showDialog({
+    title,
+    description:
+      '浏览器拒绝了剪贴板访问：下方文本已全选，可直接按 Ctrl+C（⌘C）复制，或点「重试复制」。',
+    Content: ({ close }) => {
+      const textareaRef = React.useRef<HTMLTextAreaElement | null>(null)
+      const [copied, setCopied] = React.useState(false)
+      // 打开即全选：用户无需拖选，直接按键复制。
+      React.useEffect(() => {
+        const node = textareaRef.current
+        if (!node) return
+        node.focus()
+        node.select()
+      }, [])
+      return (
+        <div style={manualCopyBodyStyle}>
+          <textarea
+            ref={textareaRef}
+            readOnly
+            value={text}
+            spellCheck={false}
+            onFocus={event => event.currentTarget.select()}
+            style={manualCopyTextareaStyle}
+          />
+          <div style={confirmFooterStyle}>
+            <Button onClick={() => close(null)}>关闭</Button>
+            <Button
+              type="primary"
+              onClick={() => {
+                // 本次点击手势内同步写；同步路径失败（极少数环境禁用 execCommand）
+                // 再退回异步 API 并落 copied 态。
+                if (copyTextSync(text)) {
+                  setCopied(true)
+                  return
+                }
+                void copyText(text).then(setCopied)
+              }}
+            >
+              {copied ? '已复制' : '重试复制'}
+            </Button>
+          </div>
+        </div>
+      )
+    },
+  })
+}
+
 // ─── 行卡片（与任务侧边栏任务卡同构） ─────────────────────────────────────
 
 /** 时间片段：默认相对时间（7 天内），点击切换绝对/相对（title 带完整绝对时间）。 */
@@ -284,6 +351,7 @@ function InstanceRow({
   workspaceChip,
   busy,
   onOpen,
+  onCopyPath,
   onCancel,
   onDelete,
 }: {
@@ -292,6 +360,7 @@ function InstanceRow({
   workspaceChip?: string
   busy: boolean
   onOpen: () => void
+  onCopyPath: () => void
   onCancel: () => void
   onDelete: () => void
 }): React.ReactElement {
@@ -299,6 +368,12 @@ function InstanceRow({
   const pillColor = (INSTANCE_STATUS_PILL_COLOR as Record<string, string>)[inst.status] ?? 'var(--text-muted)'
   const varsText = instanceVariablesText(inst.variables)
   const menuItems = [
+    {
+      key: 'copyDataDir',
+      label: '复制工作流路径',
+      icon: <CopyIcon size={13} />,
+      onSelect: onCopyPath,
+    },
     ...(active
       ? [{
           key: 'cancel',
@@ -325,7 +400,14 @@ function InstanceRow({
         <span style={cardTitleStyle}>{inst.definitionName || inst.definitionId}</span>
         <CardTime ms={inst.createdAt} label="创建于" />
         <span style={{ ...cardPillStyle, color: pillColor }}>{instanceStatusLabel(inst.status)}</span>
-        <RowActions items={menuItems} title="实例更多操作" disabled={busy} />
+        <RowActions
+          items={menuItems}
+          title="实例更多操作"
+          disabled={busy}
+          // 菜单一打开就预取路径:点击「复制工作流路径」时路径已就绪,
+          // 同步写入剪贴板不跨 await(非安全上下文下 execCommand 才认这个手势)。
+          onOpen={() => workflowGateway.prefetchInstanceDataDir(inst.id)}
+        />
       </div>
       {varsText ? (
         // 运行参数行：只显示参数值（「；」分隔），单行不换行、溢出可见不截断
@@ -584,6 +666,47 @@ export default function SidebarPanel() {
     )
   }
 
+  /**
+   * 「复制工作流路径」：拉 workflow.instance.dataDir（workspaces/<workspaceId>/
+   * workflows/instances/<instanceId>/ 在 worker 宿主上的完整绝对路径）并复制到剪贴板
+   * （宿主「复制任务路径」同款链路）。路径必须由 worker 提供——前端（可能远端经 hub）
+   * 无从拼出 worker 宿主上的数据目录。
+   *
+   * 复制**必须**在点击手势内完成：非安全上下文（局域网 http）下 `navigator.clipboard`
+   * 不存在，只剩同步 execCommand，而它要求手势仍在——因此先用菜单打开时预取到的路径
+   * 走同步写（见 workflowGateway.prefetchInstanceDataDir），预取没命中才退让到「取数后
+   * 复制」（跨 await 可能丢手势），最终失败则弹手动复制模态，绝不只报一句失败。
+   */
+  const onCopyInstancePath = (inst: WorkflowInstanceSummary) => {
+    const prefetched = workflowGateway.getPrefetchedInstanceDataDir(inst.id)
+    if (prefetched && copyTextSync(prefetched)) {
+      toast('已复制工作流路径', 'success')
+      return
+    }
+    void (async () => {
+      let path = prefetched
+      let failureMessage = '复制工作流路径失败'
+      try {
+        if (!path) {
+          path = await workflowGateway.instanceDataDir(inst.id)
+        }
+        if (await copyText(path)) {
+          toast('已复制工作流路径', 'success')
+          return
+        }
+        failureMessage = '浏览器拒绝了剪贴板访问'
+      } catch (err) {
+        failureMessage = rpcErrorMessage(err)
+      }
+      if (path) {
+        // 路径拿到了、只是剪贴板写不进（典型：非安全上下文 + 跨 await 手势失效）。
+        showManualCopyDialog('复制工作流路径', path)
+        return
+      }
+      toast(failureMessage, 'error')
+    })()
+  }
+
   const onCancelInstance = (inst: WorkflowInstanceSummary) => {
     void withBusy(`inst:${inst.id}`, async () => {
       const ok = await confirmDialog(
@@ -705,6 +828,7 @@ export default function SidebarPanel() {
                         workspaceChip={orphanChip ? inst.workspaceId : undefined}
                         busy={runBusy(`inst:${inst.id}`)}
                         onOpen={() => onOpenInstance(inst)}
+                        onCopyPath={() => onCopyInstancePath(inst)}
                         onCancel={() => onCancelInstance(inst)}
                         onDelete={() => onDeleteInstance(inst)}
                       />
@@ -953,6 +1077,29 @@ const confirmFooterStyle: React.CSSProperties = {
   gap: 8,
 }
 
+/** 手动复制降落伞主体（同宽约束；文本域 + 操作行）。 */
+const manualCopyBodyStyle: React.CSSProperties = {
+  ...confirmBodyStyle,
+  minWidth: 'min(420px, 80vw)',
+}
+
+/** 降落伞文本域：等宽只读、打开即全选、wordBreak 容长路径。 */
+const manualCopyTextareaStyle: React.CSSProperties = {
+  width: '100%',
+  minHeight: 72,
+  resize: 'vertical',
+  padding: '10px 12px',
+  borderRadius: 'var(--radius-md, 8px)',
+  border: '1px solid var(--border)',
+  background: 'var(--bg-primary)',
+  color: 'var(--text-primary)',
+  fontFamily: 'var(--font-mono, monospace)',
+  fontSize: 'var(--text-sm, 13px)',
+  lineHeight: 1.5,
+  outline: 'none',
+  wordBreak: 'break-all',
+}
+
 /*
  * ── 人工验证清单（侧边栏 · 工作区分组 · 实例平铺 · 管理页承载定义）──────────
  * 1. 打开侧边栏「工作流」：注册表里每个工作区一张分组卡片同时并陈（含空工作区，
@@ -964,8 +1111,15 @@ const confirmFooterStyle: React.CSSProperties = {
  *    （每工作区一个，重复点击聚焦；见 ManagePanel 尾部清单）。
  * 3. 组内实例行**直接平铺**（无「实例」子区头、无折叠箭头、无计数）。
  * 4. 实例行卡片（**单行**）：粗体工作流名 + 创建时间 + 状态药丸 + hover 浮现 ⋯ 菜单
- *    （取消实例〔活跃时〕/删除；行悬浮 title 显示实例 id）；点行打开实例页（tab.data 正确）；
- *    带运行参数的实例在下行只显示参数值（「；」分隔、单行不截断溢出可见），无参数不占行。
+ *    （复制工作流路径/取消实例〔活跃时〕/删除；行悬浮 title 显示实例 id）；点行打开
+ *    实例页（tab.data 正确）；带运行参数的实例在下行只显示参数值（「；」分隔、单行
+ *    不截断溢出可见），无参数不占行。
+ * 4b. **复制工作流路径**：hover 实例行 → 打开 ⋯ 菜单（此刻发 instance.dataDir 预取）→
+ *    点「复制工作流路径」→ toast「已复制工作流路径」，粘贴得到 worker 宿主上的
+ *    `…/workspaces/<wsId>/workflows/instances/<wiId>/` 绝对路径；局域网 http（非安全
+ *    上下文）下同样成功（预取+同步写保手势）；实例已被他端删除时点复制 → toast 报
+ *    「工作流实例不存在…」；极少数环境写不进剪贴板 → 弹手动复制模态（文本域已全选，
+ *    Ctrl+C 或「重试复制」可用）。
  * 5. **推送**：在管理页/编辑器保存定义 / 另一端运行工作流 / AI 调 workflow_create 工具 /
  *    实例运行态翻转（running→waiting-user→done）→ 侧栏在 ~150ms 内自动更新，**无需手动
  *    刷新**（kind=definition 的推送只校准 ▶ 运行窗选项，不渲染定义行）；取消实例 → 状态

@@ -46,9 +46,10 @@ workflow 插件
   循环上限 maxRuns、实例状态机、错误三策略 fail/supervisor/askUser、取消）+ `NodeRunners`
   （命令节点走 nativeExec、AI 节点按会话时序 ①-⑥ 走 agentFactoryFor 装配链、
   supervisor 决策协议 retry/skip/fail/retryWithInput）。
-- **RPC 面**（`rpc/`）：`workflow.*` 14 方法——`def.list`/`def.get`/`def.save`/`def.delete`/
+- **RPC 面**（`rpc/`）：`workflow.*` 15 方法——`def.list`/`def.get`/`def.save`/`def.delete`/
   `def.export`/`def.import`、`run`、`instance.list`/`instance.get`/`instance.runLog`/
-  `instance.events`/`instance.cancel`/`instance.delete`/`instance.decide`；**写操作必带
+  `instance.events`/`instance.cancel`/`instance.delete`/`instance.decide`/`instance.dataDir`
+  （实例目录绝对路径，前端「复制工作流路径」按需拉取，`task.dataDir` 同款纪律）；**写操作必带
   workspace 参数**（同 `task.run` 纪律）；实例事件混合模型：实时增量经 `EventSink.fanout`
   扇出到实例流频道 `u.<K>.worker.<wid>.wf.<wiId>.stream`（store 落盘后通知监听器，
   同实例锁内回调=推送序与落盘序一致），历史/断线补齐走 `instance.events` RPC 拉取，
