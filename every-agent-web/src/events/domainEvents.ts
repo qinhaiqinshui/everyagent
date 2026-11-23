@@ -35,6 +35,7 @@ export const DOMAIN_EVENTS = {
   USER_INTERACTION_CLEARED: 'user-interaction-cleared',
   WORKSPACE_OPEN_USER_INTERACTION_REQUESTED: 'workspace-open-user-interaction-requested',
   PLUGIN_TASK_EVENT: 'plugin-task-event',
+  PLUGIN_WORKER_EVENT: 'plugin-worker-event',
   PLUGINS_LOADED: 'plugins-loaded',
   WORKER_DATA_CHANGED: 'worker-data-changed',
   WORKSPACE_TAB_CLOSED: 'workspace-tab-closed',
@@ -165,6 +166,14 @@ export type DomainEventMap = {
     /** 插件自定义事件名(恒为 plugin.* 前缀,如 file-change 的轮末摘要直推)。 */
     event: string
     /** 事件 data 载荷原样透传(宿主不解释语义,由对应插件 web 端按 event 名解析,§7.15.2)。 */
+    data: unknown
+  }
+  [DOMAIN_EVENTS.PLUGIN_WORKER_EVENT]: {
+    /** 归属 worker(发出该事件的 worker 级插件频道绑定的 worker,取自频道 worker 段)。 */
+    workerId: string
+    /** 插件自定义事件名(恒为 plugin.<pluginId>.<name>,如 workflow 的 plugin.workflow.changed)。 */
+    event: string
+    /** 帧 payload 原样透传(宿主不解释语义;插件只把它当「失效→重拉」信号,数据经自家 RPC 拉取,§5.2)。 */
     data: unknown
   }
   [DOMAIN_EVENTS.PLUGINS_LOADED]: {

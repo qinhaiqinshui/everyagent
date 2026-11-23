@@ -109,6 +109,12 @@ export const channels = {
    */
   taskStream: (k: string, workerId: string, taskId: string) =>
     `u.${k}.worker.${workerId}.task.${taskId}.stream`,
+  /**
+   * worker 级插件通知频道(worker 段必填,与 Java plugin-api 的 Channels.plugins 逐字对齐):
+   * 插件 worker 侧把非任务域的数据变更以 plugin.<pluginId>.<name> 事件扇出到此,
+   * 宿主桥接为领域事件 plugin-worker-event(架构 §5.2)。
+   */
+  plugins: (k: string, workerId: string) => `u.${k}.worker.${workerId}.plugin`,
   /** 内嵌终端实时输出:worker 定向推送(term.output/term.exited);与 worker 侧 proto/Channels.java 逐字对齐。 */
   termStream: (k: string, termId: string) => `u.${k}.term.${termId}.stream`,
 } as const;

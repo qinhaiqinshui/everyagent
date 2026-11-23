@@ -7,7 +7,7 @@ has_children: false
 
 # 前端事件
 
-**一句话定位**：`ctx.events` 是前端插件感知（和驱动）宿主 UI 的唯一事件通道——它是宿主进程内一条模块级事件总线的最薄委托。本文给出**全部 22 个宿主事件的逐个取证表**（载荷、触发时机、来源文件、监听价值）——死事件清理后，常量表里**不再有零 emit 的死事件**：18 个有真实 emit 调用点，其余 4 个是「宿主监听、插件可反向 emit 驱动宿主」的请求通道。事件名与载荷类型的唯一登记处是 `every-agent-web/src/events/domainEvents.ts`（常量表 `DOMAIN_EVENTS` + 载荷类型 `DomainEventMap`）。
+**一句话定位**：`ctx.events` 是前端插件感知（和驱动）宿主 UI 的唯一事件通道——它是宿主进程内一条模块级事件总线的最薄委托。本文给出**全部 23 个宿主事件的逐个取证表**（载荷、触发时机、来源文件、监听价值）——死事件清理后，常量表里**不再有零 emit 的死事件**：19 个有真实 emit 调用点，其余 4 个是「宿主监听、插件可反向 emit 驱动宿主」的请求通道。事件名与载荷类型的唯一登记处是 `every-agent-web/src/events/domainEvents.ts`（常量表 `DOMAIN_EVENTS` + 载荷类型 `DomainEventMap`）。
 
 ## 1. 事件系统架构：一个模块级单例总线
 
@@ -77,7 +77,7 @@ class EventBus {
 
 ## 2. plugin-api 的具名事件
 
-`PluginDomainEvent`（`every-agent-plugin-api/js/index.ts`）具名列 8 个事件名 + `(string & {})` 兜底（兜底写法让 IDE 补全优先提示具名、同时放行任意自定义字符串）：
+`PluginDomainEvent`（`every-agent-plugin-api/js/index.ts`）具名列 9 个事件名 + `(string & {})` 兜底（兜底写法让 IDE 补全优先提示具名、同时放行任意自定义字符串）：
 
 | 具名事件 | 当前真实会发生？ | 详见 |
 |---|---|---|
@@ -86,11 +86,12 @@ class EventBus {
 | `sidebar-panel-shown` | ✅ | §3.1、§5.4 |
 | `task-status-changed` | ✅ | §3.1 |
 | `plugin-task-event` | ✅ | §3.1 |
+| `plugin-worker-event` | ✅（worker 级插件通知频道桥接） | §3.1 |
 | `task-created` | ✅（曾长期零 emit，已补齐接线） | §3.1 |
 | `task-deleted` | ✅（曾长期零 emit，已补齐接线） | §3.1 |
 | `plugins-loaded` | ✅（曾长期零 emit，已补齐接线） | §3.1 |
 
-⚠️ 具名清单是手维护的子集（8/21）——写订阅前仍先查 §3 的两张表。类型原文如下（`every-agent-plugin-api/js/index.ts` 摘录）：
+⚠️ 具名清单是手维护的子集（9/23）——写订阅前仍先查 §3 的两张表。类型原文如下（`every-agent-plugin-api/js/index.ts` 摘录）：
 
 ```ts
 /** 领域事件名（与宿主 DOMAIN_EVENTS 同名值，字符串字面量联合；全部有真实 emit）。 */
@@ -102,8 +103,9 @@ export type PluginDomainEvent =
   | 'task-deleted'
   | 'task-status-changed'
   | 'plugin-task-event'
+  | 'plugin-worker-event'
   | 'plugins-loaded'
-  | (string & {})    // 兜底：放行任意自定义字符串，补全仍优先提示上面 8 个
+  | (string & {})    // 兜底：放行任意自定义字符串，补全仍优先提示上面 9 个
 
 export interface PluginEvents {
   on(eventName: PluginDomainEvent, handler: (payload: unknown) => void): Disposable
@@ -111,11 +113,11 @@ export interface PluginEvents {
 }
 ```
 
-## 3. 宿主事件总表（21 个，逐一回源码复核）
+## 3. 宿主事件总表（23 个，逐一回源码复核）
 
-统计口径（rg 实测）：`DOMAIN_EVENTS` 常量表声明 **22** 个事件名；全仓（`every-agent-web/src` + `every-agent-plugins` + `every-agent-desktop`）`.emit(` 调用点命中其中 **18** 个，其余 4 个是宿主监听的请求通道。历史上本表曾有 38 个声明、24 个零 emit——被折叠器/镜像订阅取代设计位的 17 个条目已连同载荷类型一起删除（`agent-run-event` 的 `AgentRunEvent`/`AgentRunEventPayload` 类型一并移除，其注释引用的幽灵文件 `src/task/agentRunEventBridge.ts` 随之消失）。
+统计口径（rg 实测）：`DOMAIN_EVENTS` 常量表声明 **23** 个事件名；全仓（`every-agent-web/src` + `every-agent-plugins` + `every-agent-desktop`）`.emit(` 调用点命中其中 **19** 个，其余 4 个是宿主监听的请求通道。历史上本表曾有 38 个声明、24 个零 emit——被折叠器/镜像订阅取代设计位的 17 个条目已连同载荷类型一起删除（`agent-run-event` 的 `AgentRunEvent`/`AgentRunEventPayload` 类型一并移除，其注释引用的幽灵文件 `src/task/agentRunEventBridge.ts` 随之消失）。
 
-### 3.1 真实会发生的事件（18 个）
+### 3.1 真实会发生的事件（19 个）
 
 | 事件名 | 载荷（`DomainEventMap` 摘要） | 触发时机（谁、何时 emit） | 插件监听价值 |
 |---|---|---|---|
@@ -124,6 +126,7 @@ export interface PluginEvents {
 | `sidebar-panel-shown` | `{panelId: string}`（`:255-257`） | 侧边栏面板从隐藏→显示的边沿（`Layout.tsx:1107-1113` 的 `SidebarPanelHost` useEffect，emit 于 `:1112`）；`panelId` 即侧边栏项 `id`（内置 `tasks/files/search/settings` + 插件自己的 id） | **高**。「面板被用户点亮时懒刷新」标准姿势（git 在用：`GitSidebarPanel.tsx:334-339` 过滤 `panelId === 'git'`），见 §5.4 |
 | `task-status-changed` | `{taskId, status, error?, endTime?, task?, displayTitle?}`（`:167-174`） | 任务列表条目状态翻转时（`every-agent-web/src/task/taskStore.ts:497-513` 的 `upsert`，emit 于 `:505-512`；仅 `prevStatus !== entry.status` 才发）。来源是 worker 任务频道帧 | **高**。任务终态/出错感知（宿主自用：浏览器系统通知 `BrowserNotificationHost.tsx:53`） |
 | `plugin-task-event` | `{taskId, workerId, event, data}`（`event` 恒为 `plugin.*` 前缀,data 原样透传） | 任务流消费到 `plugin.*` 前缀的瞬态直推帧时（`every-agent-web/src/task/taskStream.ts` `onEvent` 的 plugin.* 分支统一 emit;worker 侧插件经 `runtime.events().emit(EmitEvent.transientOf(...))` 直推,§7.15.2） | **高**。插件自定义任务直推数据的标准入口——插件 worker 侧落盘/产生旁路数据后直推轻量增量,web 侧按 `event` 名滤取后 upsert 自持缓存（file-change 在用：滤出 `plugin.file-change.roundChanges` 合入轮末摘要,不再走「作废→重拉」）。注意 `plugin.*` 瞬态不落盘、历史回放不补发（task.poll 折叠侧跳过）,错过由插件 RPC 全量拉取兜底 |
+| `plugin-worker-event` | `{workerId, event, data}`（`event` 恒为 `plugin.<pluginId>.<name>`，data=帧 payload 原样透传） | 宿主桥接 worker 级插件通知频道 `u.<K>.worker.<id>.plugin` 的帧（`every-agent-web/src/plugin/pluginWorkerEvents.ts`，启动接线 `main.tsx`；worker 侧插件经 `services().stream().fanout(k -> Channels.plugins(k, workerId), …)` 扇出，架构 §5.2）。首个在用：workflow 的 `plugin.workflow.changed{kind,action,workspaceId,id}`（定义/实例每次落盘变更） | **高**。**非任务域**的「数据变了」推送入口——与 `plugin-task-event` 的分工：那是任务流内瞬态增量（data 即数据），本事件只是失效信号，插件按 `event` 名滤取后经自家 RPC 全量重拉（workflow 侧栏在用：按 `data.kind` 重拉定义/实例列表，不再轮询）。fire-and-forget：重连窗口内丢帧由插件自留低频兜底或面板再展示重拉补齐 |
 | `settings-theme-patched` | `{themeMode: 'light'\|'dark'}`（`:197-199`） | 用户切换主题落 localStorage 时（`every-agent-web/src/settings/localSettings.ts:14-19`，emit 于 `:18`） | 中。自带 UI 想跟随宿主主题可订阅（宿主自用：`useThemeMode.ts:15`、`TerminalPage.tsx:152`） |
 | `worker-data-changed` | `Record<string, never>`（空对象）（`:359`） | worker 启用/停用/移除/重连 hub 配置后（`WorkerList.tsx:87,155,169`、`SettingsPanel.tsx:70`） | 中。worker 集合变动后提醒自家数据可能过期（taskStore 全量 refresh 的触发器，`taskStore.ts:235`） |
 | `workspace-tab-closed` | `{tabId: string}`（`:360`） | 关闭工作区标签页的瞬间（`Layout.tsx:388-390`；taskStream 据此退订任务流频道，`taskStream.ts:739`） | 中。插件若按 tabId 持有 per-tab 资源可监听清理 |
@@ -203,7 +206,7 @@ file-change 插件订阅它清理轮次摘要缓存（`every-agent-plugins/file-
 
 ### 5.4.b 具名清单已对齐宿主实况
 
-`PluginDomainEvent` 具名 8 个**全部有真实 emit**（§2 表）；曾具名却零 emit 的 `file-content-saved`、`task-trace-changed` 已从具名清单与宿主常量表同步删除。plugin-api 的具名清单仍是手维护快照——以 §3 两张表为准的习惯保持不变。
+`PluginDomainEvent` 具名 9 个**全部有真实 emit**（§2 表）；曾具名却零 emit 的 `file-content-saved`、`task-trace-changed` 已从具名清单与宿主常量表同步删除。plugin-api 的具名清单仍是手维护快照——以 §3 两张表为准的习惯保持不变。
 
 顺带解释「为什么 TypeScript 拦不住死事件订阅」：`PluginDomainEvent` 的兜底 `(string & {})` 让任何字符串字面量都是合法事件名——类型系统只校验「这是个 string」，不校验「宿主真的会 emit 它」。#4 清理后常量表本身已无死事件，但**自定义事件名**（§6.1）的拼写仍只能靠你自己保证；死事件的唯一可靠判据就是本文 §3 的两张表（rg emit 调用点实测），后续宿主演进若接活了某个事件，以 `DOMAIN_EVENTS` 常量表 + 全仓 emit 复查为准，不要依赖本文快照的永久性。
 

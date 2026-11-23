@@ -382,4 +382,47 @@ class WorkflowStoreTest {
         assertThat(back).hasSize(2); // 坏行跳过
         assertThat(back.get(0).event()).isEqualTo("user.message");
     }
+
+    // ── 变更监听（worker 级插件通知频道的信号源，架构 §5.2） ──
+
+    @Test
+    void changeListenerFiresOnEverySuccessfulMutationOnly() {
+        List<String> events = new java.util.ArrayList<>();
+        store.addChangeListener((kind, action, ws, id) -> events.add(kind + ":" + action + ":" + ws + ":" + id));
+
+        Definition created = store.saveDefinition(WS_A, sampleDef());
+        Definition updated = store.saveDefinition(WS_A,
+                new Definition(created.schemaVersion(), created.id(), created.name(), "改描述", created.workspaceId(),
+                        created.createdAt(), created.updatedAt(), created.variables(), created.onError(),
+                        created.supervisor(), created.agents(), created.nodes(), created.edges()));
+        assertThat(events).containsExactly(
+                "DEFINITION:CREATED:" + WS_A + ":" + created.id(),
+                "DEFINITION:UPDATED:" + WS_A + ":" + created.id());
+        events.clear();
+
+        InstanceMeta meta = store.createInstance(updated, Map.of());
+        store.saveInstanceMeta(withStatus(meta, InstanceStatus.RUNNING));
+        assertThat(events).containsExactly(
+                "INSTANCE:CREATED:" + WS_A + ":" + meta.id(),
+                "INSTANCE:UPDATED:" + WS_A + ":" + meta.id());
+        events.clear();
+
+        // 失败路径不回调：删除不存在 / 运行中实例拒绝删除 / 校验失败的定义
+        assertThat(store.deleteDefinition(WS_B, created.id())).isFalse();
+        assertThatThrownBy(() -> store.deleteInstance(WS_A, meta.id())).isInstanceOf(BadParamsException.class);
+
+        assertThat(events).isEmpty();
+
+        // 删除成功回调；监听器抛错不影响存储路径也不打断其余监听器
+        store.addChangeListener((kind, action, ws, id) -> {
+            throw new IllegalStateException("监听器故意抛错");
+        });
+        assertThat(store.saveInstanceMeta(withStatus(meta, InstanceStatus.DONE)).status()).isEqualTo(InstanceStatus.DONE);
+        assertThat(store.deleteInstance(WS_A, meta.id())).isTrue();
+        assertThat(store.deleteDefinition(WS_A, created.id())).isTrue();
+        assertThat(events).containsExactly(
+                "INSTANCE:UPDATED:" + WS_A + ":" + meta.id(),
+                "INSTANCE:DELETED:" + WS_A + ":" + meta.id(),
+                "DEFINITION:DELETED:" + WS_A + ":" + created.id());
+    }
 }

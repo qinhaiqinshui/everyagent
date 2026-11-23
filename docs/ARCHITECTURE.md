@@ -175,6 +175,7 @@ wss://hub:6101/ws
 | `u.<K>.worker.<id>.evt` | `rpc.ok/rpc.err/rpc.data/rpc.progress` + 通知事件(`config.changed`、`fs.changed`、`workspaces.changed`) | 命名空间内任意角色 |
 | `u.<K>.worker.<id>.input` | **worker 级输入频道**:`ask.reply` / `stream.ack`(worker 每连接订阅一次,订阅数 O(worker×hub))。**`task.input` 事件已删除**:热任务入队与终态续跑统一走 `task.run{taskId}`(§5.5),worker 不再消费任何「输入事件」 | 命名空间内任意角色 |
 | `u.<K>.worker.<id>.tasks` | 任务生命周期:`task.created` / `task.updated` / `task.deleted`(**worker 段必填**:一台 worker 的任务事件只进自己的频道,payload 另带 `workerId`) | 命名空间内任意角色 |
+| `u.<K>.worker.<id>.plugin` | **worker 级插件通知频道**(worker 段必填,与 `.tasks` 同理):插件 worker 侧把**非任务域**的数据变更以 `plugin.<pluginId>.<name>` 事件扇出到此(如 workflow 的 `plugin.workflow.changed{kind,action,workspaceId,id,workerId}`)。通知只作「失效→重拉」信号,不承载数据本体——数据真相源仍是 worker 磁盘,前端经该插件 RPC 全量拉取(与 `.tasks` 的 upsert 增量模型不同,故不入 taskStore)。hub 零状态只路由;前端宿主把帧桥接为领域事件 `plugin-worker-event{workerId,event,data}` 供插件 web 侧订阅 | 命名空间内任意角色 |
 | `u.<K>.worker.<id>.task.<taskId>.stream` | **运行中任务实时增量**(worker 定向推送,`ext.target=sessionId` 只投该会话;worker 段用于区分同 apiKey 下的不同 worker) | 命名空间内任意角色 |
 | `u.<K>.term.<termId>.stream` | **内嵌终端实时输出**(worker 定向推送：event `term.output` payload `{data: base64}`；进程退出推 `term.exited`)。**不加 worker 段**:`termId` 由前端生成且 `term.open` RPC 已按 worker 定向,一台 worker 的 PTY 只对它自己可见,不构成串台 | 命名空间内任意角色 |
 

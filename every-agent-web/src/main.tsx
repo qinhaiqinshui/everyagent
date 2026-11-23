@@ -36,7 +36,7 @@ import { initializeCoreComposerChipActions } from './plugin/coreComposerChipActi
 import { initializeCoreEditorContextMenuActions } from './plugin/coreEditorContextMenuActions'
 import { initializeCoreUserMessageActions } from './plugin/coreUserMessageActions'
 import { loadPlugins } from './plugin/pluginLoader'
-import { wireFsChanged } from './platform/fs/workspaceGateway'
+
 import { workspaceRegistry } from './hub/workspaceRegistry'
 import { modelConfigs } from './hub/modelConfigs'
 import { userPreferences } from './settings/userPreferences'
@@ -74,8 +74,7 @@ initializeCoreUserMessageActions()
 // 统一插件加载：plugin.list RPC 驱动发现，worker 不可达时静默降级。
 void loadPlugins()
 
-// fs.changed(worker evt 频道)→ 前端文件刷新事件。进程内只接一次。
-wireFsChanged()
+
 
 // 工作区注册表跟踪(workspaces.list 校准 + workspaces.changed 感知)。
 workspaceRegistry.wire()

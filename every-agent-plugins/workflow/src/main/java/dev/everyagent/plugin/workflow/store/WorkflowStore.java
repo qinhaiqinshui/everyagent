@@ -17,6 +17,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.stream.Stream;
 
 import org.slf4j.Logger;
@@ -84,9 +85,50 @@ public final class WorkflowStore {
     /** 已注册工作区 id 快照（「工作区缺失」标记用）。 */
     private volatile Set<String> registeredWorkspaceIds = Set.of();
 
+    /** 变更监听器（定义/实例落盘+索引变更后的回调；activate 时由插件接线到 stream 频道扇出）。 */
+    private final List<ChangeListener> changeListeners = new CopyOnWriteArrayList<>();
+
+    /** 变更种类：定义 / 实例。 */
+    public enum ChangeKind { DEFINITION, INSTANCE }
+
+    /** 变更动作：新建 / 更新（含状态迁移）/ 删除。 */
+    public enum ChangeAction { CREATED, UPDATED, DELETED }
+
+    /**
+     * 存储/索引变更监听（架构 §5.2 worker 级插件通知频道的信号源）。
+     *
+     * <p>仅在变更<b>成功落盘且索引已更新后</b>回调（失败路径抛异常、不回调）；监听器抛出的
+     * 异常被吞掉只记日志——通知绝不反向影响存储路径。回调发生在调用方线程（RPC 虚拟线程或
+     * 引擎调度线程），实现须轻量非阻塞（stream 扇出是 fire-and-forget）。
+     */
+    @FunctionalInterface
+    public interface ChangeListener {
+        void onChanged(ChangeKind kind, ChangeAction action, String workspaceId, String id);
+    }
+
     public WorkflowStore(WorkspaceManager workspaces) {
         this.workspaces = workspaces;
         this.systemDir = workspaces.systemDir();
+    }
+
+    /** 注册变更监听器（无注销：生命周期与插件一致）。 */
+    public void addChangeListener(ChangeListener listener) {
+        if (listener != null) {
+            changeListeners.add(listener);
+        }
+    }
+
+    private void notifyChanged(ChangeKind kind, ChangeAction action, String workspaceId, String id) {
+        if (changeListeners.isEmpty()) {
+            return;
+        }
+        for (ChangeListener listener : changeListeners) {
+            try {
+                listener.onChanged(kind, action, workspaceId, id);
+            } catch (RuntimeException e) {
+                log.warn("[workflow] 变更监听器抛错(kind={} action={} id={}): {}", kind, action, id, e.toString());
+            }
+        }
     }
 
     /** activate 扫描结果。 */
@@ -356,6 +398,7 @@ public final class WorkflowStore {
             throw new UncheckedIOException("写 definition.json 失败: " + id, e);
         }
         defIndex.put(id, saved);
+        notifyChanged(ChangeKind.DEFINITION, existing != null ? ChangeAction.UPDATED : ChangeAction.CREATED, workspaceId, id);
         return saved;
     }
 
@@ -402,6 +445,7 @@ public final class WorkflowStore {
         }
         deleteRecursively(defFile(workspaceId, defId).getParent());
         defIndex.remove(defId);
+        notifyChanged(ChangeKind.DEFINITION, ChangeAction.DELETED, workspaceId, defId);
         return true;
     }
 
@@ -465,6 +509,7 @@ public final class WorkflowStore {
                 .put("definitionId", def.id() == null ? "" : def.id())
                 .put("name", def.name() == null ? "" : def.name())
                 .set("variables", Json.toJson(vars)));
+        notifyChanged(ChangeKind.INSTANCE, ChangeAction.CREATED, wsId, wiId);
         return meta;
     }
 
@@ -504,6 +549,7 @@ public final class WorkflowStore {
             throw new UncheckedIOException("写实例 meta.json 失败: " + meta.id(), e);
         }
         instanceIndex.put(meta.id(), meta);
+        notifyChanged(ChangeKind.INSTANCE, ChangeAction.UPDATED, meta.workspaceId(), meta.id());
         return meta;
     }
 
@@ -542,6 +588,7 @@ public final class WorkflowStore {
         String k = key(workspaceId, instanceId);
         eventLocks.remove(k);
         eventTails.remove(k);
+        notifyChanged(ChangeKind.INSTANCE, ChangeAction.DELETED, workspaceId, instanceId);
         return true;
     }
 

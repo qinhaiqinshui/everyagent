@@ -2,11 +2,16 @@ package dev.everyagent.plugin.workflow;
 
 import dev.everyagent.plugin.api.EveryAgentPlugin;
 import dev.everyagent.plugin.api.WorkerPluginContext;
+import dev.everyagent.plugin.api.event.Channels;
+import dev.everyagent.plugin.api.event.StreamEmitter;
 import dev.everyagent.plugin.workflow.engine.WorkflowEngine;
 import dev.everyagent.plugin.workflow.rpc.WorkflowRpc;
 import dev.everyagent.plugin.workflow.store.WorkflowStore;
+import dev.everyagent.contract.json.Json;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.util.Locale;
 
 /**
  * workflow 插件入口。
@@ -28,6 +33,14 @@ public class WorkflowPlugin implements EveryAgentPlugin {
 
     private static final Logger log = LoggerFactory.getLogger(WorkflowPlugin.class);
 
+    /**
+     * 变更通知事件名（worker 级插件通知频道 {@code u.<K>.worker.<id>.plugin}，架构 §5.2）。
+     * 事件名沿用任务流 {@code plugin.*} 直推的前缀约定；payload
+     * {@code {workerId, kind: definition|instance, action: created|updated|deleted, workspaceId, id}}。
+     * 前端只把它当「失效→重拉」信号（数据经 workflow.def.list / instance.list 全量拉取）。
+     */
+    public static final String CHANGED_EVENT = "plugin.workflow.changed";
+
     private volatile WorkflowEngine engine;
 
     @Override
@@ -45,6 +58,20 @@ public class WorkflowPlugin implements EveryAgentPlugin {
         WorkflowStore.ScanReport report = store.scanOnActivate();
         log.info("[workflow] 已激活：扫描 {} 个工作区，索引 {} 定义 / {} 实例，重启中断标 failed {} 个",
                 report.workspaces(), report.definitions(), report.instances(), report.interrupted());
+
+        // 变更 → stream 频道扇出（扫描之后接线：激活期的中断标记不算业务变更）。
+        // store 的全部写操作收口在 5 个 mutator，通知点即「落盘+索引更新成功后」；
+        // 一台 worker 的变更只进自己的频道（worker 段），不混进同 apiKey 下另一台的前端视图。
+        StreamEmitter stream = ctx.services().stream();
+        store.addChangeListener((kind, action, workspaceId, id) -> {
+            String wid = stream.workerId();
+            stream.fanout(k -> Channels.plugins(k, wid), CHANGED_EVENT, null, Json.obj()
+                    .put("workerId", wid)
+                    .put("kind", kind.name().toLowerCase(Locale.ROOT))
+                    .put("action", action.name().toLowerCase(Locale.ROOT))
+                    .put("workspaceId", workspaceId == null ? "" : workspaceId)
+                    .put("id", id == null ? "" : id), null);
+        });
 
         // 执行引擎：调度器跑虚拟线程（start 异步开跑，不阻塞 RPC 线程）
         engine = new WorkflowEngine(store, ctx.services());

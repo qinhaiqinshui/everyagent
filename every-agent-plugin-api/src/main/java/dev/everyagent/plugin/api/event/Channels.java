@@ -51,6 +51,19 @@ public final class Channels {
         return "u." + k + ".worker." + workerId + ".task." + taskId + ".stream";
     }
 
+    /**
+     * worker 级插件通知频道(worker 段必填),形如 {@code u.<K>.worker.<id>.plugin}(架构 §5.2)。
+     *
+     * <p>插件把<b>非任务域</b>的数据变更以 {@code plugin.<pluginId>.<name>} 事件扇出到此
+     * (事件名沿用任务流 {@code plugin.*} 直推的前缀约定,前端按名滤取)。通知只作「失效→重拉」
+     * 信号、不承载数据本体:数据真相源仍是 worker 磁盘,前端经插件 RPC 全量拉取。
+     * 与 {@link #tasks(String, String)} 同理必须带 worker 段:一台 worker 的数据只进自己的频道,
+     * 不混进同一 apiKey 下另一台 worker 的前端视图。
+     */
+    public static String plugins(String k, String workerId) {
+        return "u." + k + ".worker." + workerId + ".plugin";
+    }
+
     /** @deprecated 无 worker 段 = 归属不可判定,只会把一台 worker 的任务混进另一台的前端。
      *  保留仅为已编译的外部插件二进制兼容(架构 §5.6);新代码一律用 {@link #tasks(String, String)}。 */
     @Deprecated

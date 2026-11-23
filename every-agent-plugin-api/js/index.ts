@@ -165,6 +165,7 @@ export type PluginDomainEvent =
   | 'task-deleted'
   | 'task-status-changed'
   | 'plugin-task-event'
+  | 'plugin-worker-event'
   | 'plugins-loaded'
   | 'workspace-tab-activated'
   | 'workspace-tab-closed'
