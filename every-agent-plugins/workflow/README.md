@@ -30,6 +30,24 @@ workflow 插件
 
 构建产物 `target/`（Maven）与 `web/index.js(.map)` / `web/index.css(.map)`（esbuild）均为 gitignored，不入库。
 
+## 功能概览（步骤 4+5 后端现状）
+
+- **持久化层**（`model/` `validate/` `store/`）：工作流定义/实例 JSON 持久化于
+  `workspaces/<wsId>/workflows/`（与 tasks/ 平级）；全量校验；events.jsonl/runs/agents
+  五种文件形态与写策略；激活扫描（非终态实例标 failed）。
+- **执行引擎**（`engine/`）：`WorkflowRuntime`（ExecContext + WorkflowSubject 标记，
+  per-node 视图 + emitter 双路由：agent 域事件→agents/&lt;name&gt;.jsonl、实例域→events.jsonl）
+  + `WorkflowEngine` 调度器（开始节点先行、边激活语义一次求值、同 agent fair 锁互斥、
+  循环上限、实例状态机、错误三策略 fail/supervisor/askUser、取消）+ `NodeRunners`
+  （命令节点走 nativeExec、AI 节点按会话时序 ①-⑥ 走 agentFactoryFor 装配链、
+  supervisor 决策协议）。
+- **hidden 五工具**（`WorkflowToolProvider` + `skill/workflow-tools/skill.md`）：
+  workflow_create/get/update/delete/list，只服务普通任务的 AI（工作流自己的 agent 不携带）。
+- **设计决策**：命令节点不经 PermissionGate（与 git/term 同级信任——用户编排的受控操作）；
+  AI 节点不设节点级超时（依赖模型链路既有护栏，timeoutMs 仅命令节点有效）；
+  v1 无断点续跑（worker 重启即 failed，同任务语义）。
+- RPC 面（workflow.* 14 方法）与前端界面由步骤 6/8-10 补齐。
+
 ## 构建与验证
 
 ### 后端（kind = java / full）

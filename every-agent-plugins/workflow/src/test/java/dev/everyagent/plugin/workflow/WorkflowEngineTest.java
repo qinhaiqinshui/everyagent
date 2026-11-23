@@ -1,0 +1,737 @@
+// ea: 引擎集成测试（假 AgentFactory 经 agentFactoryFor 注入点伪造模型行为；命令节点真执行）
+package dev.everyagent.plugin.workflow;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BooleanSupplier;
+import java.util.function.Function;
+
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+import org.springframework.ai.chat.messages.Message;
+
+import dev.everyagent.plugin.api.exception.BadParamsException;
+import dev.everyagent.plugin.api.model.ModelConfig;
+import dev.everyagent.plugin.workflow.engine.WorkflowEngine;
+import dev.everyagent.plugin.workflow.model.AgentDef;
+import dev.everyagent.plugin.workflow.model.ConditionDef;
+import dev.everyagent.plugin.workflow.model.Definition;
+import dev.everyagent.plugin.workflow.model.EventLine;
+import dev.everyagent.plugin.workflow.model.InstanceMeta;
+import dev.everyagent.plugin.workflow.model.InstanceStatus;
+import dev.everyagent.plugin.workflow.model.NodeDef;
+import dev.everyagent.plugin.workflow.model.OnError;
+import dev.everyagent.plugin.workflow.model.RunRecord;
+import dev.everyagent.plugin.workflow.model.VariableDef;
+import dev.everyagent.plugin.workflow.store.WorkflowStore;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.fail;
+
+/**
+ * 引擎端到端：并行+同 agent 互斥（含锁排队读到上游完整事件流）、循环上限、七种条件路由
+ * （含多路激活/无匹配收束）、错误三策略、取消、匿名 vs 命名 agent、变量渲染、事件/记录留档。
+ */
+class WorkflowEngineTest {
+
+    @TempDir
+    Path home;
+
+    FakeWorkspaces workspaces;
+    WorkflowStore store;
+    Fakes.FakeAgentFactory factory;
+    Fakes.FakeWorkerServices services;
+    WorkflowEngine engine;
+
+    @BeforeEach
+    void setUp() throws Exception {
+        workspaces = new FakeWorkspaces(home);
+        // 命令节点 cwd=工作区根：目录须真实存在（真实 worker 注册的工作区必有实体目录）
+        java.nio.file.Files.createDirectories(home.resolve("proj"));
+        workspaces.register(home.resolve("proj"), "ws_run");
+        factory = new Fakes.FakeAgentFactory();
+        services = new Fakes.FakeWorkerServices(workspaces, new Fakes.RealNativeExec(), factory,
+                List.of(new ModelConfig("gpt5", "openai", "http://localhost", null, "gpt-5", null)));
+        store = new WorkflowStore(workspaces);
+        engine = new WorkflowEngine(store, services);
+    }
+
+    // ── 构造工具 ──
+
+    private Definition save(Object... parts) {
+        Definition d = withOnError(DefinitionValidatorTest.def(parts), null);
+        return store.saveDefinition("ws_run", d);
+    }
+
+    private Definition saveOnError(OnError onError, Object... parts) {
+        return store.saveDefinition("ws_run", withOnError(DefinitionValidatorTest.def(parts), onError));
+    }
+
+    private static Definition withOnError(Definition d, OnError onError) {
+        return new Definition(d.schemaVersion(), d.id(), d.name(), d.description(), d.workspaceId(),
+                d.createdAt(), d.updatedAt(), d.variables(), onError, d.supervisor(),
+                d.agents(), d.nodes(), d.edges());
+    }
+
+    private InstanceMeta start(Definition d) {
+        return engine.start(store.createInstance(d, Map.of()));
+    }
+
+    private InstanceMeta start(Definition d, Map<String, String> vars) {
+        return engine.start(store.createInstance(d, vars));
+    }
+
+    private List<EventLine> events(String instanceId) {
+        return store.readEvents("ws_run", instanceId, 0, 0);
+    }
+
+    private List<String> eventNames(String instanceId) {
+        return events(instanceId).stream().map(EventLine::event).toList();
+    }
+
+    private List<RunRecord> runs(String instanceId) {
+        return store.listRunRecords("ws_run", instanceId);
+    }
+
+    private InstanceMeta meta(String instanceId) {
+        return store.findInstance(instanceId).orElseThrow();
+    }
+
+    private void await(BooleanSupplier cond, String what) throws InterruptedException {
+        long deadline = System.currentTimeMillis() + 20_000;
+        while (!cond.getAsBoolean()) {
+            if (System.currentTimeMillis() > deadline) {
+                fail("超时等待: " + what + "；事件=" + eventNames(latest));
+            }
+            Thread.sleep(20);
+        }
+    }
+
+    private String latest;
+
+    private void awaitTerminal(String instanceId) throws InterruptedException {
+        latest = instanceId;
+        assertThat(engine.awaitTerminal(instanceId, 20_000)).as("实例终态").isTrue();
+    }
+
+    private void awaitStatus(String instanceId, InstanceStatus status) throws InterruptedException {
+        latest = instanceId;
+        await(() -> meta(instanceId).status() == status, "状态 " + status);
+    }
+
+    // ══════════════════════════ 基础流转 ══════════════════════════
+
+    @Test
+    void startOnlyDefinitionCompletes() throws Exception {
+        Definition d = save(DefinitionValidatorTest.node("s", "start"));
+        InstanceMeta m = start(d);
+        awaitTerminal(m.id());
+
+        assertThat(meta(m.id()).status()).isEqualTo(InstanceStatus.DONE);
+        assertThat(meta(m.id()).startedAt()).isNotNull();
+        assertThat(meta(m.id()).endedAt()).isNotNull();
+        assertThat(meta(m.id()).nodeStates()).isNotNull();
+        assertThat(meta(m.id()).nodeStates()).containsKey("s");
+
+        List<String> names = eventNames(m.id());
+        assertThat(names).containsSubsequence("wf.created", "wf.status", "node.started",
+                "node.output", "wf.done", "wf.status");
+        assertThat(names).doesNotContain("node.error");
+        // 终态 nodeStates 投影
+        assertThat(meta(m.id()).nodeStates().get("s").status()).isEqualTo("done");
+        assertThat(meta(m.id()).nodeStates().get("s").runCount()).isEqualTo(1);
+        assertThat(meta(m.id()).runCounter()).isEqualTo(1);
+    }
+
+    @Test
+    void startRejectsNonCreatedOrMissingWorkspace() throws Exception {
+        Definition d = save(DefinitionValidatorTest.node("s", "start"));
+        InstanceMeta m = start(d);
+        awaitTerminal(m.id());
+        // 已终态不可再启动
+        assertThatThrownBy(() -> engine.start(meta(m.id())))
+                .isInstanceOf(BadParamsException.class);
+        // 工作区不在注册表 → 拒绝启动
+        Definition orphan = store.saveDefinition("ws_run", DefinitionValidatorTest.def(
+                DefinitionValidatorTest.node("s", "start")));
+        InstanceMeta created = store.createInstance(
+                new Definition(orphan.schemaVersion(), orphan.id(), orphan.name(),
+                        orphan.description(), "ws_missing", orphan.createdAt(), orphan.updatedAt(),
+                        orphan.variables(), orphan.onError(), orphan.supervisor(), orphan.agents(),
+                        orphan.nodes(), orphan.edges()), Map.of());
+        assertThatThrownBy(() -> engine.start(created)).isInstanceOf(BadParamsException.class);
+    }
+
+    // ══════════════════════════ 命令节点 + 变量渲染 ══════════════════════════
+
+    @Test
+    void commandNodeExecutesWithRenderedVariable() throws Exception {
+        Definition base = DefinitionValidatorTest.def(
+                DefinitionValidatorTest.node("s", "start"),
+                DefinitionValidatorTest.node("cmd", "command").command("echo hello {{name}}"),
+                DefinitionValidatorTest.edge("e1", "s", "cmd"));
+        Definition withVars = DefinitionValidatorTest.withVariables(base,
+                new VariableDef("name", null, true, null, null));
+        Definition saved = store.saveDefinition("ws_run", withVars);
+
+        InstanceMeta m = start(saved, Map.of("name", "starship"));
+        awaitTerminal(m.id());
+        assertThat(meta(m.id()).status()).as(eventNames(m.id()) + "/" + runs(m.id())).isEqualTo(InstanceStatus.DONE);
+
+        RunRecord cmdRun = runs(m.id()).stream()
+                .filter(r -> "cmd".equals(r.nodeId())).findFirst().orElseThrow();
+        assertThat(cmdRun.output().stdout()).contains("hello starship");
+        assertThat(cmdRun.output().exitCode()).isZero();
+        assertThat(cmdRun.input().rendered()).isEqualTo("echo hello starship");
+        assertThat(cmdRun.input().raw()).isEqualTo("echo hello {{name}}");
+        assertThat(cmdRun.input().visibleToAi()).isNull(); // 命令节点无 token 拍平视图
+    }
+
+    @Test
+    void aiNodeInputRenderedAndTokenFlattened() throws Exception {
+        String token = dev.everyagent.plugin.api.slash.SlashTokenEncoder.buildToken(
+                "file.ref", "a.png", null, dev.everyagent.contract.json.Json.obj().put("path", "a.png"));
+        Definition base = DefinitionValidatorTest.def(
+                DefinitionValidatorTest.node("s", "start"),
+                DefinitionValidatorTest.node("ai", "ai").agent("writer").input("引用 {{ref}} 写作"),
+                DefinitionValidatorTest.edge("e1", "s", "ai"),
+                new AgentDef("writer", "gpt5", "你是作者"));
+        Definition withVars = DefinitionValidatorTest.withVariables(base,
+                new VariableDef("ref", null, true, null, null));
+        Definition saved = store.saveDefinition("ws_run", withVars);
+        factory.script("writer", key -> Fakes.Script.echo("写作完成"));
+
+        InstanceMeta m = start(saved, Map.of("ref", token));
+        awaitTerminal(m.id());
+        assertThat(meta(m.id()).status()).isEqualTo(InstanceStatus.DONE);
+
+        RunRecord aiRun = runs(m.id()).stream().filter(r -> "ai".equals(r.nodeId()))
+                .findFirst().orElseThrow();
+        // rendered 留档 opaque token 原串；visibleToAi 拍平为 label
+        assertThat(aiRun.input().rendered()).contains(token);
+        assertThat(aiRun.input().visibleToAi()).isEqualTo("引用 a.png 写作");
+        // 指令轮 user.message：content=拍平文本，data.rawContent=原串
+        var lines = store.readAgentEvents("ws_run", m.id(), "writer");
+        assertThat(lines).isNotEmpty();
+        var instruction = lines.stream()
+                .filter(l -> "user.message".equals(l.event())).findFirst().orElseThrow();
+        assertThat(instruction.payload().path("content").asString()).isEqualTo("引用 a.png 写作");
+        assertThat(instruction.payload().path("data").path("rawContent").asString()).contains(token);
+        // agent 观测：seed 0 轮、结果轮 > 0、usage 落档
+        assertThat(aiRun.agent().name()).isEqualTo("writer");
+        assertThat(aiRun.agent().modelConfigId()).isEqualTo("gpt5");
+        assertThat(aiRun.agent().seedTurns()).isZero();
+        assertThat(aiRun.agent().resultTurns()).isPositive();
+        assertThat(aiRun.agent().usage().inputTokens()).isEqualTo(100L);
+    }
+
+    // ══════════════════════════ 七种条件路由 ══════════════════════════
+
+    @Test
+    void conditionRoutingAllSevenTypes() throws Exception {
+        // 每条分支：start → cmd(特定产出) →(条件) sink；sink 起跑与否即路由结果
+        Definition ok = route("cmd-ok", "echo hello", "sink-ok");
+        Definition bad = route("cmd-bad", "exit 3", "sink-bad");
+
+        // onSuccess / onError / exitCode
+        assertActivated(routeCond("cmd-ok", "echo hello", new ConditionDef("onSuccess", null, null, null), "sink"), "sink");
+        assertNotActivated(routeCond("cmd-ok", "echo hello", new ConditionDef("onError", null, null, null), "sink"), "sink");
+        assertActivated(routeCond("cmd-bad", "exit 3", new ConditionDef("onError", null, null, null), "sink"), "sink");
+        assertActivated(routeCond("cmd-bad", "exit 3", new ConditionDef("exitCode", 3L, null, null), "sink"), "sink");
+        assertNotActivated(routeCond("cmd-bad", "exit 3", new ConditionDef("exitCode", 0L, null, null), "sink"), "sink");
+        // 文本条件
+        assertActivated(routeCond("cmd-ok", "echo hello", new ConditionDef("outputContains", null, "hello", null), "sink"), "sink");
+        assertNotActivated(routeCond("cmd-ok", "echo hello", new ConditionDef("outputContains", null, "zzz", null), "sink"), "sink");
+        assertActivated(routeCond("cmd-ok", "echo hello", new ConditionDef("outputNotContains", null, "zzz", null), "sink"), "sink");
+        assertNotActivated(routeCond("cmd-ok", "echo hello", new ConditionDef("outputNotContains", null, "hello", null), "sink"), "sink");
+        assertActivated(routeCond("cmd-ok", "echo hello",
+                new ConditionDef("outputMatches", null, null, "(?s).*hello.*"), "sink"), "sink");
+        assertNotActivated(routeCond("cmd-ok", "echo hello",
+                new ConditionDef("outputMatches", null, null, "(?s)^bye.*"), "sink"), "sink");
+        // 未用实例仅防编译告警
+        assertThat(ok).isNotNull();
+        assertThat(bad).isNotNull();
+    }
+
+    private Definition route(String cmdId, String cmd, String sinkId) {
+        return routeCond(cmdId, cmd, null, sinkId);
+    }
+
+    private Definition routeCond(String cmdId, String cmd, ConditionDef cond, String sinkId) {
+        return store.saveDefinition("ws_run", DefinitionValidatorTest.def(
+                DefinitionValidatorTest.node("s", "start"),
+                DefinitionValidatorTest.node(cmdId, "command").command(cmd).maxRuns(10),
+                DefinitionValidatorTest.node(sinkId, "ai").maxRuns(10),
+                DefinitionValidatorTest.edge("e1", "s", cmdId),
+                DefinitionValidatorTest.edge("e2", cmdId, sinkId, cond)));
+    }
+
+    private void assertActivated(Definition d, String sinkId) throws InterruptedException {
+        InstanceMeta m = start(d);
+        awaitTerminal(m.id());
+        assertThat(meta(m.id()).status()).as("事件=" + eventNames(m.id())).isEqualTo(InstanceStatus.DONE);
+        assertThat(startedNodes(m.id())).contains(sinkId);
+    }
+
+    private void assertNotActivated(Definition d, String sinkId) throws InterruptedException {
+        InstanceMeta m = start(d);
+        awaitTerminal(m.id());
+        // 无匹配收束：实例照常 done，sink 不跑（不报错）
+        assertThat(meta(m.id()).status()).isEqualTo(InstanceStatus.DONE);
+        assertThat(startedNodes(m.id())).doesNotContain(sinkId);
+    }
+
+    private List<String> startedNodes(String instanceId) {
+        return events(instanceId).stream()
+                .filter(e -> "node.started".equals(e.event()))
+                .map(e -> e.payload().path("nodeId").asString())
+                .toList();
+    }
+
+    @Test
+    void multiActivationFansOutAndDeadEndConverges() throws Exception {
+        // 一个源节点两条满足条件的出边 → 双扇出
+        Definition fanout = store.saveDefinition("ws_run", DefinitionValidatorTest.def(
+                DefinitionValidatorTest.node("s", "start"),
+                DefinitionValidatorTest.node("c", "command").command("echo hello").maxRuns(10),
+                DefinitionValidatorTest.node("t1", "ai").maxRuns(10),
+                DefinitionValidatorTest.node("t2", "ai").maxRuns(10),
+                DefinitionValidatorTest.node("t3", "ai").maxRuns(10),
+                DefinitionValidatorTest.edge("e1", "s", "c"),
+                DefinitionValidatorTest.edge("e2", "c", "t1", new ConditionDef("onSuccess", null, null, null)),
+                DefinitionValidatorTest.edge("e3", "c", "t2", new ConditionDef("outputContains", null, "hello", null)),
+                DefinitionValidatorTest.edge("e4", "c", "t3", new ConditionDef("outputContains", null, "zzz", null))));
+        InstanceMeta m = start(fanout);
+        awaitTerminal(m.id());
+        assertThat(meta(m.id()).status()).isEqualTo(InstanceStatus.DONE);
+        assertThat(startedNodes(m.id())).contains("t1", "t2").doesNotContain("t3");
+        // node.output 事件的 activatedEdges 记录两条
+        var outputEv = events(m.id()).stream().filter(e -> "node.output".equals(e.event())
+                && "c".equals(e.payload().path("nodeId").asString())).findFirst().orElseThrow();
+        assertThat(outputEv.payload().path("activatedEdges").size()).isEqualTo(2);
+        assertThat(outputEv.payload().path("outputPreview").asString()).contains("hello");
+    }
+
+    // ══════════════════════════ 同 agent 互斥 / 并行 ══════════════════════════
+
+    @Test
+    void sameAgentNodesSerializeAndLaterRunSeesUpstreamConversation() throws Exception {
+        AtomicInteger seq = new AtomicInteger();
+        factory.script("writer", key -> Fakes.Script.delayed("产出" + seq.incrementAndGet(), 150));
+        Definition d = save(
+                DefinitionValidatorTest.node("s", "start"),
+                DefinitionValidatorTest.node("a", "ai").agent("writer").input("任务A").maxRuns(10),
+                DefinitionValidatorTest.node("b", "ai").agent("writer").input("任务B").maxRuns(10),
+                DefinitionValidatorTest.edge("e1", "s", "a"),
+                DefinitionValidatorTest.edge("e2", "s", "b"),
+                new AgentDef("writer", null, null));
+        InstanceMeta m = start(d);
+        awaitTerminal(m.id());
+        assertThat(meta(m.id()).status()).as("事件=" + eventNames(m.id())).isEqualTo(InstanceStatus.DONE);
+
+        List<Fakes.FakeAgent> writers = factory.built.stream()
+                .filter(a -> a.agentId().startsWith("writer#")).toList();
+        assertThat(writers).hasSize(2);
+        // 互斥：两次 run 的时间区间不重叠（fair 锁排队）
+        Fakes.FakeAgent first = writers.get(0).runStartedAt <= writers.get(1).runStartedAt
+                ? writers.get(0) : writers.get(1);
+        Fakes.FakeAgent second = first == writers.get(0) ? writers.get(1) : writers.get(0);
+        boolean overlap = first.runStartedAt < second.runEndedAt
+                && second.runStartedAt < first.runEndedAt;
+        assertThat(overlap).as("同 agent 两次 run 必须串行").isFalse();
+        // 后跑者读到上游完整事件流（种子含先跑者的指令轮 + 回复轮）
+        assertThat(second.seed).hasSize(2);
+        assertThat(second.seed.get(0)).isInstanceOf(org.springframework.ai.chat.messages.UserMessage.class);
+        assertThat(second.seed.get(1).getText()).isEqualTo(first.lastText);
+        // per-agent jsonl：两轮 user.message/message(+usage) 交替、无交错（行数即完整性证据）
+        var lines = store.readAgentEvents("ws_run", m.id(), "writer");
+        assertThat(lines).hasSize(6);
+        assertThat(lines.stream().map(l -> l.event()).toList())
+                .containsExactly("user.message", "message", "usage",
+                        "user.message", "message", "usage");
+        Path writerFile = home.resolve("workspaces").resolve("ws_run").resolve("workflows")
+                .resolve("instances").resolve(m.id()).resolve("agents").resolve("writer.jsonl");
+        assertThat(Files.readAllLines(writerFile)).hasSize(6);
+    }
+
+    @Test
+    void differentAgentsRunInParallel() throws Exception {
+        factory.script("a1", key -> Fakes.Script.delayed("a1-out", 400));
+        factory.script("a2", key -> Fakes.Script.delayed("a2-out", 400));
+        Definition d = save(
+                DefinitionValidatorTest.node("s", "start"),
+                DefinitionValidatorTest.node("n1", "ai").agent("a1").maxRuns(10),
+                DefinitionValidatorTest.node("n2", "ai").agent("a2").maxRuns(10),
+                DefinitionValidatorTest.edge("e1", "s", "n1"),
+                DefinitionValidatorTest.edge("e2", "s", "n2"),
+                new AgentDef("a1", null, null), new AgentDef("a2", null, null));
+        InstanceMeta m = start(d);
+        awaitTerminal(m.id());
+        assertThat(meta(m.id()).status()).isEqualTo(InstanceStatus.DONE);
+
+        Fakes.FakeAgent x = agent("a1#");
+        Fakes.FakeAgent y = agent("a2#");
+        boolean overlap = x.runStartedAt < y.runEndedAt && y.runStartedAt < x.runEndedAt;
+        assertThat(overlap).as("不同 agent 应真并行").isTrue();
+        // 各自会话线隔离
+        assertThat(store.readAgentEvents("ws_run", m.id(), "a1")).isNotEmpty();
+        assertThat(store.readAgentEvents("ws_run", m.id(), "a2")).isNotEmpty();
+    }
+
+    private Fakes.FakeAgent agent(String prefix) {
+        return factory.built.stream().filter(a -> a.agentId().startsWith(prefix))
+                .reduce((a, b) -> b).orElseThrow();
+    }
+
+    // ══════════════════════════ 循环上限 ══════════════════════════
+
+    @Test
+    void loopMaxRunsTriggersErrorPolicy() throws Exception {
+        Definition d = saveOnError(OnError.FAIL,
+                DefinitionValidatorTest.node("s", "start"),
+                DefinitionValidatorTest.node("a", "ai").maxRuns(2),
+                DefinitionValidatorTest.node("b", "ai").maxRuns(10),
+                DefinitionValidatorTest.edge("e1", "s", "a"),
+                DefinitionValidatorTest.edge("e2", "a", "b"),
+                DefinitionValidatorTest.edge("e3", "b", "a"));
+        InstanceMeta m = start(d);
+        awaitTerminal(m.id());
+        assertThat(meta(m.id()).status()).isEqualTo(InstanceStatus.FAILED);
+        assertThat(meta(m.id()).error().message()).contains("最大运行次数");
+        assertThat(meta(m.id()).error().nodeId()).isEqualTo("a");
+        assertThat(eventNames(m.id())).contains("node.error", "wf.status");
+        assertThat(meta(m.id()).nodeStates().get("a").runCount()).isEqualTo(2);
+        assertThat(runs(m.id()).stream().filter(r -> "a".equals(r.nodeId()))).hasSize(2);
+    }
+
+    // ══════════════════════════ 错误策略三态 ══════════════════════════
+
+    @Test
+    void errorPolicyFailFailsInstance() throws Exception {
+        factory.script("writer", key -> Fakes.Script.failing(
+                new IllegalStateException("模型调用失败")));
+        Definition d = saveOnError(OnError.FAIL,
+                DefinitionValidatorTest.node("s", "start"),
+                DefinitionValidatorTest.node("n", "ai").agent("writer"),
+                DefinitionValidatorTest.edge("e1", "s", "n"),
+                new AgentDef("writer", null, null));
+        InstanceMeta m = start(d);
+        awaitTerminal(m.id());
+        assertThat(meta(m.id()).status()).isEqualTo(InstanceStatus.FAILED);
+        assertThat(meta(m.id()).error().message()).contains("模型调用失败");
+        // runs 留档 error + node.error 事件
+        RunRecord rec = runs(m.id()).stream().filter(r -> "n".equals(r.nodeId()))
+                .findFirst().orElseThrow();
+        assertThat(rec.error().message()).contains("模型调用失败");
+        assertThat(eventNames(m.id())).contains("node.error");
+        // 指令轮已落盘（会话线自包含），无 message 事件
+        assertThat(store.readAgentEvents("ws_run", m.id(), "writer"))
+                .extracting(l -> l.event()).containsExactly("user.message");
+    }
+
+    @Test
+    void errorPolicyAskUserParksAndDecideWakes() throws Exception {
+        AtomicInteger calls = new AtomicInteger();
+        factory.script("writer", key -> calls.incrementAndGet() == 1
+                ? Fakes.Script.failing(new RuntimeException("第一次失败"))
+                : Fakes.Script.echo("重试成功"));
+        Definition d = saveOnError(OnError.ASK_USER,
+                DefinitionValidatorTest.node("s", "start"),
+                DefinitionValidatorTest.node("n", "ai").agent("writer").maxRuns(10),
+                DefinitionValidatorTest.node("t", "ai").maxRuns(10),
+                DefinitionValidatorTest.edge("e1", "s", "n"),
+                DefinitionValidatorTest.edge("e2", "n", "t"),
+                new AgentDef("writer", null, null));
+        InstanceMeta m = start(d);
+        awaitStatus(m.id(), InstanceStatus.WAITING_USER);
+
+        InstanceMeta parked = meta(m.id());
+        assertThat(parked.pendingDecision()).isNotNull();
+        assertThat(parked.pendingDecision().nodeId()).isEqualTo("n");
+        assertThat(parked.pendingDecision().options())
+                .containsExactly("retry", "skip", "fail", "retryWithInput");
+        assertThat(eventNames(m.id())).contains("wf.askUser");
+
+        // 决策不匹配被拒
+        int wrongRunNo = parked.pendingDecision().runNo() + 100;
+        assertThatThrownBy(() -> engine.decide(m.id(), wrongRunNo, "retry", null))
+                .isInstanceOf(BadParamsException.class);
+        assertThatThrownBy(() -> engine.decide(m.id(), parked.pendingDecision().runNo(), "自创", null))
+                .isInstanceOf(BadParamsException.class);
+
+        engine.decide(m.id(), parked.pendingDecision().runNo(), "retry", null);
+        awaitTerminal(m.id());
+        assertThat(meta(m.id()).status()).isEqualTo(InstanceStatus.DONE);
+        assertThat(meta(m.id()).pendingDecision()).isNull();
+        assertThat(runs(m.id()).stream().filter(r -> "n".equals(r.nodeId()))).hasSize(2);
+        assertThat(startedNodes(m.id())).contains("t");
+        assertThat(eventNames(m.id())).filteredOn("wf.status"::equals).hasSizeGreaterThanOrEqualTo(3);
+    }
+
+    @Test
+    void errorPolicySupervisorSkipContinuesDownstream() throws Exception {
+        factory.script("writer", key -> Fakes.Script.failing(new RuntimeException("命令性失败")));
+        factory.script("supervisor", key -> Fakes.Script.echo(
+                "```json\n{\"action\":\"skip\",\"reason\":\"不可重试的配置错误\"}\n```"));
+        Definition d = saveOnError(OnError.SUPERVISOR,
+                DefinitionValidatorTest.node("s", "start"),
+                DefinitionValidatorTest.node("n", "ai").agent("writer").maxRuns(10),
+                DefinitionValidatorTest.node("t", "ai").maxRuns(10),
+                DefinitionValidatorTest.edge("e1", "s", "n"),
+                DefinitionValidatorTest.edge("e2", "n", "t"),
+                new AgentDef("writer", null, null));
+        InstanceMeta m = start(d);
+        awaitTerminal(m.id());
+        assertThat(meta(m.id()).status()).isEqualTo(InstanceStatus.DONE);
+
+        assertThat(eventNames(m.id())).contains("supervisor.decision", "node.skipped");
+        var decisionEv = events(m.id()).stream()
+                .filter(e -> "supervisor.decision".equals(e.event())).findFirst().orElseThrow();
+        assertThat(decisionEv.payload().path("decision").path("action").asString()).isEqualTo("skip");
+        assertThat(decisionEv.payload().path("reason").asString()).contains("配置错误");
+        // 跳过节点继续下游
+        assertThat(startedNodes(m.id())).contains("t");
+        // supervisor 会话线落盘（user.message + message + usage）
+        assertThat(store.readAgentEvents("ws_run", m.id(), "supervisor"))
+                .extracting(l -> l.event()).containsExactly("user.message", "message", "usage");
+        // runs 记录介入链
+        RunRecord rec = runs(m.id()).stream().filter(r -> "n".equals(r.nodeId()))
+                .findFirst().orElseThrow();
+        assertThat(rec.supervisor()).hasSize(1);
+        assertThat(rec.supervisor().get(0).decision().action()).isEqualTo("skip");
+    }
+
+    @Test
+    void supervisorRetryWithInputReplacesNodeInput() throws Exception {
+        AtomicInteger calls = new AtomicInteger();
+        factory.script("writer", key -> calls.incrementAndGet() == 1
+                ? Fakes.Script.failing(new RuntimeException("输入不当"))
+                : Fakes.Script.echo("按新输入完成"));
+        factory.script("supervisor", key -> Fakes.Script.echo(
+                "{\"action\":\"retryWithInput\",\"input\":\"改用英文重写\",\"reason\":\"输入语言不匹配\"}"));
+        Definition d = saveOnError(OnError.SUPERVISOR,
+                DefinitionValidatorTest.node("s", "start"),
+                DefinitionValidatorTest.node("n", "ai").agent("writer").maxRuns(10).input("原始输入"),
+                DefinitionValidatorTest.edge("e1", "s", "n"),
+                new AgentDef("writer", null, null));
+        InstanceMeta m = start(d);
+        awaitTerminal(m.id());
+        assertThat(meta(m.id()).status()).isEqualTo(InstanceStatus.DONE);
+
+        List<RunRecord> recs = runs(m.id()).stream()
+                .filter(r -> "n".equals(r.nodeId())).sorted((x, y) -> x.runNo() - y.runNo()).toList();
+        assertThat(recs).hasSize(2);
+        assertThat(recs.get(0).input().rendered()).isEqualTo("原始输入");
+        assertThat(recs.get(1).input().rendered()).isEqualTo("改用英文重写");
+        // 第二次运行实际收到新输入
+        List<Fakes.FakeAgent> writers = factory.built.stream()
+                .filter(a -> a.agentId().startsWith("writer#")).toList();
+        assertThat(writers.get(1).userInput).isEqualTo("改用英文重写");
+    }
+
+    @Test
+    void supervisorUnparseableDegradesToAskUser() throws Exception {
+        factory.script("writer", key -> Fakes.Script.failing(new RuntimeException("持续失败")));
+        factory.script("supervisor", key -> Fakes.Script.echo("我觉得应该再试试看（非 JSON）"));
+        Definition d = saveOnError(OnError.SUPERVISOR,
+                DefinitionValidatorTest.node("s", "start"),
+                DefinitionValidatorTest.node("n", "ai").agent("writer").maxRuns(10),
+                DefinitionValidatorTest.edge("e1", "s", "n"),
+                new AgentDef("writer", null, null));
+        InstanceMeta m = start(d);
+        awaitStatus(m.id(), InstanceStatus.WAITING_USER);
+        assertThat(eventNames(m.id())).contains("wf.askUser");
+        // 解析失败重试一次：supervisor 会话线两轮指令（每轮 user/message/usage）
+        assertThat(store.readAgentEvents("ws_run", m.id(), "supervisor"))
+                .extracting(l -> l.event())
+                .containsExactly("user.message", "message", "usage",
+                        "user.message", "message", "usage");
+        // 降级后用户决策 fail 收口
+        InstanceMeta parked = meta(m.id());
+        engine.decide(m.id(), parked.pendingDecision().runNo(), "fail", null);
+        awaitTerminal(m.id());
+        assertThat(meta(m.id()).status()).isEqualTo(InstanceStatus.FAILED);
+    }
+
+    @Test
+    void supervisorAttemptsCappedAtThree() throws Exception {
+        factory.script("writer", key -> Fakes.Script.failing(new RuntimeException("反复失败")));
+        factory.script("supervisor", key -> Fakes.Script.echo(
+                "{\"action\":\"retry\",\"reason\":\"再试一次\"}"));
+        Definition d = saveOnError(OnError.SUPERVISOR,
+                DefinitionValidatorTest.node("s", "start"),
+                DefinitionValidatorTest.node("n", "ai").agent("writer").maxRuns(10),
+                DefinitionValidatorTest.edge("e1", "s", "n"),
+                new AgentDef("writer", null, null));
+        InstanceMeta m = start(d);
+        awaitTerminal(m.id());
+        assertThat(meta(m.id()).status()).isEqualTo(InstanceStatus.FAILED);
+        assertThat(meta(m.id()).error().message()).contains("supervisor");
+        assertThat(meta(m.id()).error().message()).contains("上限");
+        // 3 次介入决策事件
+        assertThat(eventNames(m.id()).stream().filter("supervisor.decision"::equals).count()).isEqualTo(3);
+    }
+
+    // ══════════════════════════ 取消 ══════════════════════════
+
+    @Test
+    void cancelInterruptsRunningNode() throws Exception {
+        factory.script("writer", key -> Fakes.Script.delayed("不该完成", 30_000));
+        Definition d = save(
+                DefinitionValidatorTest.node("s", "start"),
+                DefinitionValidatorTest.node("n", "ai").agent("writer"),
+                DefinitionValidatorTest.edge("e1", "s", "n"),
+                new AgentDef("writer", null, null));
+        InstanceMeta m = start(d);
+        latest = m.id();
+        await(() -> eventNames(m.id()).contains("node.started"), "node.started");
+
+        engine.cancel(m.id(), "tester");
+        awaitTerminal(m.id());
+        assertThat(meta(m.id()).status()).isEqualTo(InstanceStatus.CANCELLED);
+        assertThat(eventNames(m.id())).contains("wf.cancelled");
+        var cancelledEv = events(m.id()).stream()
+                .filter(e -> "wf.cancelled".equals(e.event())).findFirst().orElseThrow();
+        assertThat(cancelledEv.payload().path("by").asString()).isEqualTo("tester");
+        // 已终态再取消被拒
+        assertThatThrownBy(() -> engine.cancel(m.id(), "again")).isInstanceOf(BadParamsException.class);
+        // 被取消节点未完成：无该节点的 node.output（start 节点的照常有）
+        assertThat(events(m.id()).stream().filter(e -> "node.output".equals(e.event())
+                && "n".equals(e.payload().path("nodeId").asString()))).isEmpty();
+    }
+
+    // ══════════════════════════ 匿名 vs 命名 agent ══════════════════════════
+
+    @Test
+    void anonymousAiNodeLeavesNoAgentFile() throws Exception {
+        Definition d = save(
+                DefinitionValidatorTest.node("s", "start"),
+                DefinitionValidatorTest.node("anon", "ai").input("匿名一次性"),
+                DefinitionValidatorTest.node("named", "ai").agent("writer").input("命名会话"),
+                DefinitionValidatorTest.edge("e1", "s", "anon"),
+                DefinitionValidatorTest.edge("e2", "s", "named"),
+                new AgentDef("writer", null, null));
+        InstanceMeta m = start(d);
+        awaitTerminal(m.id());
+        assertThat(meta(m.id()).status()).isEqualTo(InstanceStatus.DONE);
+
+        Path agentsDir = home.resolve("workspaces").resolve("ws_run").resolve("workflows")
+                .resolve("instances").resolve(m.id()).resolve("agents");
+        try (var s = Files.list(agentsDir)) {
+            assertThat(s.map(p -> p.getFileName().toString()).toList())
+                    .containsExactly("writer.jsonl");
+        }
+        RunRecord anon = runs(m.id()).stream().filter(r -> "anon".equals(r.nodeId()))
+                .findFirst().orElseThrow();
+        assertThat(anon.agent()).isNull();
+        assertThat(anon.output().text()).isEqualTo("ok:anon.2"); // 默认脚本按 agentKey 回声
+        RunRecord named = runs(m.id()).stream().filter(r -> "named".equals(r.nodeId()))
+                .findFirst().orElseThrow();
+        assertThat(named.agent()).isNotNull();
+    }
+
+    // ══════════════════════════ 工具剔除 + 事件查询 ══════════════════════════
+
+    @Test
+    void aiAgentsGetAgentFamilyAndWorkflowToolsRemoved() throws Exception {
+        Definition d = save(
+                DefinitionValidatorTest.node("s", "start"),
+                DefinitionValidatorTest.node("n", "ai").agent("writer"),
+                DefinitionValidatorTest.edge("e1", "s", "n"),
+                new AgentDef("writer", null, null));
+        InstanceMeta m = start(d);
+        awaitTerminal(m.id());
+
+        List<Fakes.FakeAgent> writers = factory.built.stream()
+                .filter(a -> a.agentId().startsWith("writer#")).toList();
+        assertThat(writers).isNotEmpty();
+        // 断言在 builder 层：REMOVE 表收到了九个名字
+        assertThat(factory.removeTables).isNotEmpty();
+        List<String> removed = factory.removeTables.get(factory.removeTables.size() - 1).stream()
+                .map(tc -> tc.getToolDefinition().name())
+                .toList();
+        assertThat(removed).containsExactlyInAnyOrder(
+                "run_agent", "list_agents", "wait_agents", "stop_agent",
+                "workflow_create", "workflow_get", "workflow_update",
+                "workflow_delete", "workflow_list");
+    }
+
+    @Test
+    void queryEventsServesTailWithAfterSeqCursor() throws Exception {
+        Definition d = save(
+                DefinitionValidatorTest.node("s", "start"),
+                DefinitionValidatorTest.node("c", "command").command("echo tail"),
+                DefinitionValidatorTest.edge("e1", "s", "c"));
+        InstanceMeta m = start(d);
+        awaitTerminal(m.id());
+
+        List<EventLine> all = engine.queryEvents(m.id(), 0, 0, 0);
+        assertThat(all.size()).isGreaterThanOrEqualTo(5);
+        // afterSeq 游标
+        long mid = all.get(all.size() - 3).seqValue();
+        List<EventLine> tail = engine.queryEvents(m.id(), mid, 0, 0);
+        assertThat(tail).hasSize(2);
+        assertThat(tail.get(0).seqValue()).isGreaterThan(mid);
+        // limit
+        List<EventLine> limited = engine.queryEvents(m.id(), 0, 0, 2);
+        assertThat(limited).hasSize(2);
+        // 终态实例：等待立即返回空（游标之后无事件）
+        long last = all.get(all.size() - 1).seqValue();
+        assertThat(engine.queryEvents(m.id(), last, 5_000, 0)).isEmpty();
+    }
+
+    // ══════════════════════════ 命名会话线续跑（链式） ══════════════════════════
+
+    @Test
+    void chainedSameAgentNodesShareConversationLine() throws Exception {
+        AtomicInteger round = new AtomicInteger();
+        factory.script("writer", key -> Fakes.Script.echo("第" + round.incrementAndGet() + "稿"));
+        Definition d = save(
+                DefinitionValidatorTest.node("s", "start"),
+                DefinitionValidatorTest.node("a", "ai").agent("writer").input("第一段"),
+                DefinitionValidatorTest.node("b", "ai").agent("writer").input("第二段"),
+                DefinitionValidatorTest.edge("e1", "s", "a"),
+                DefinitionValidatorTest.edge("e2", "a", "b"),
+                new AgentDef("writer", null, null));
+        InstanceMeta m = start(d);
+        awaitTerminal(m.id());
+        assertThat(meta(m.id()).status()).isEqualTo(InstanceStatus.DONE);
+
+        List<Fakes.FakeAgent> writers = factory.built.stream()
+                .filter(a -> a.agentId().startsWith("writer#")).toList();
+        assertThat(writers).hasSize(2);
+        // 第二节点种子 = 第一节点的 指令轮 + 回复轮
+        assertThat(writers.get(1).seed).hasSize(2);
+        assertThat(writers.get(1).seed.get(1).getText()).isEqualTo(writers.get(0).lastText);
+        // 会话线单文件两轮有序（usage 也随事件流落档）
+        var lines = store.readAgentEvents("ws_run", m.id(), "writer");
+        assertThat(lines.stream().map(l -> l.event()).toList())
+                .containsExactly("user.message", "message", "usage",
+                        "user.message", "message", "usage");
+        assertThat(lines.get(0).payload().path("content").asString()).isEqualTo("第一段");
+        assertThat(lines.get(3).payload().path("content").asString()).isEqualTo("第二段");
+    }
+
+    @Test
+    void nodeOutputPreviewTruncatedToOneKb() throws Exception {
+        Definition d = save(
+                DefinitionValidatorTest.node("s", "start"),
+                DefinitionValidatorTest.node("c", "command").command("echo " + "A".repeat(2000)),
+                DefinitionValidatorTest.edge("e1", "s", "c"));
+        InstanceMeta m = start(d);
+        awaitTerminal(m.id());
+        var ev = events(m.id()).stream().filter(e -> "node.output".equals(e.event())
+                && "c".equals(e.payload().path("nodeId").asString())).findFirst().orElseThrow();
+        String preview = ev.payload().path("outputPreview").asString();
+        assertThat(preview.length()).isLessThanOrEqualTo(1030); // 1024 + 截断后缀
+        // stdout 全量入 runs 文件
+        RunRecord rec = runs(m.id()).stream().filter(r -> "c".equals(r.nodeId()))
+                .findFirst().orElseThrow();
+        assertThat(rec.output().stdout().length()).isGreaterThan(1024);
+    }
+}

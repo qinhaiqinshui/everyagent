@@ -21,14 +21,23 @@ import dev.everyagent.plugin.api.execution.ExecContext;
  *   <li>ctx 本身 instanceof 本标记（若未来聚合层直传 ExecContext，此通道即生效）；</li>
  *   <li>{@code metadata()} 含 {@link #MARKER_KEY}=true——WorkflowRuntime 构造时把标记
  *       放进主体 metadata（ExecContext 槽位经委托包装可见，是步骤 5 的实现约定）；</li>
- *   <li>{@code dataDir()} 布局兜底：工作流实例目录 = {@code workspaces/<wsId>/workflows/<wiId>}
- *       （父目录名 workflows；task 域恒为 tasks，二者互斥）。</li>
+ *   <li>{@code dataDir()} 布局兜底：工作流实例目录 =
+ *       {@code workspaces/<wsId>/workflows/instances/<wiId>}（dataDir 向上最多两级——
+ *       parent=instances、grandparent=workflows——祖先目录名含 workflows 即命中；
+ *       直接父级即 workflows 的同域路径如 {@code workflows/definitions/<wfId>} 同样命中）。
+ *       task 域恒为 tasks 布局，二者互斥。</li>
  * </ol>
  */
 public interface WorkflowSubject {
 
     /** 通道②的 metadata 标记键（WorkflowRuntime 实现约定写入 {@code Boolean.TRUE}）。 */
     String MARKER_KEY = "everyagent.workflow.subject";
+
+    /** 通道③向上查找的祖先层级数（parent 与 grandparent 两级）。 */
+    int LAYOUT_ANCESTOR_LEVELS = 2;
+
+    /** 布局兜底命中的目录名（workspaces/&lt;wsId&gt;/workflows/instances/&lt;wiId&gt;）。 */
+    String LAYOUT_DIR_NAME = "workflows";
 
     /** 判定 ctx 是否工作流执行主体（三通道见类注释）。 */
     static boolean isWorkflowSubject(ExecContext ctx) {
@@ -44,10 +53,15 @@ public interface WorkflowSubject {
         }
         Path dataDir = ctx.dataDir();
         if (dataDir != null) {
-            Path parent = dataDir.getParent();
-            if (parent != null && parent.getFileName() != null
-                    && "workflows".equals(parent.getFileName().toString())) {
-                return true;
+            // 实例目录 …/workspaces/<wsId>/workflows/instances/<wiId>：workflows 在两级之上；
+            // 兼容直接父级即 workflows 的同域路径。只查两级——更深的同名目录不算（防误伤）。
+            Path ancestor = dataDir.getParent();
+            for (int level = 0; level < LAYOUT_ANCESTOR_LEVELS && ancestor != null; level++) {
+                if (ancestor.getFileName() != null
+                        && LAYOUT_DIR_NAME.equals(ancestor.getFileName().toString())) {
+                    return true;
+                }
+                ancestor = ancestor.getParent();
             }
         }
         return false;

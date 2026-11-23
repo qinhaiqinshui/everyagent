@@ -62,10 +62,17 @@ class WorkflowToolProviderTest {
         ToolContext marked = taskCtx(Map.of(WorkflowSubject.MARKER_KEY, Boolean.TRUE), null);
         assertThat(provider.appliesTo(marked)).isFalse();
 
-        // 通道③：dataDir 布局（workspaces/<ws>/workflows/<wi>）
-        ToolContext wfDataDir = taskCtx(null,
-                home.resolve("workspaces").resolve(WS_A).resolve("workflows").resolve("wi_x"));
-        assertThat(provider.appliesTo(wfDataDir)).isFalse();
+        // 通道③：dataDir 布局兜底——真实实例目录 workspaces/<ws>/workflows/instances/<wi>
+        // （workflows 在 grandparent 层；修复前只查 parent，此布局漏判）
+        ToolContext wfInstanceDir = taskCtx(null,
+                home.resolve("workspaces").resolve(WS_A).resolve("workflows")
+                        .resolve("instances").resolve("wi_x"));
+        assertThat(provider.appliesTo(wfInstanceDir)).isFalse();
+
+        // 通道③兼容：直接父级即 workflows 的同域路径（如 definitions/<wfId>）同样命中
+        ToolContext wfDirectParent = taskCtx(null,
+                home.resolve("workspaces").resolve(WS_A).resolve("workflows").resolve("wf_y"));
+        assertThat(provider.appliesTo(wfDirectParent)).isFalse();
 
         // task 域布局不受影响
         ToolContext taskDataDir = taskCtx(null,
