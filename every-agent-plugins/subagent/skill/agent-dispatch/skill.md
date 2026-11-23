@@ -5,47 +5,77 @@ description: 当任务可并行执行以提高效率、只需结论但自行探�
 
 # 子 Agent 编排
 
-注意！子Agent上下文独立于你，它无法看到你的上下文，所以你给它的任务务必说明清楚。它有与你一样的工具，以及可以看到当前工作区目录内的文件。
+子 Agent 上下文独立于你：它看不到你的对话，任务描述务必自包含。它拥有与你一样的工具，可读写当前工作区文件。
+本技能的四工具**未随请求下发工具定义**，按本文档的名称与参数直接调用即可（调用失败请核对参数拼写）。
+
 ## 适用条件
-- 当某个任务可以并行执行来提高效率时，交给子 Agent 执行。
-- 当你只需要一个结果，但是探索这个结果会读取大量无用历史上下文时，可以派发子Agent来帮你探索并得出你要的结论。
-- 当需要等待、停止、重启子 Agent，或查看它们的运行状态与结果时，使用本技能。
-## 一、核心原则
+- 某个任务可并行执行以提高效率时，交给子 Agent。
+- 只需一个结论、但自行探索会读取大量无用历史上下文时，派子 Agent 去探索并取回结论。
+- 需要等待、停止、重启子 Agent，或查看其状态与结果时。
 
-1. 派发子Agent时必须明确其目标。
-2. 派发子Agent后必须进行收尾工作。不可派发后不管。
+## 核心原则
+1. 派发时必须明确目标（自包含、不引用本对话内容）。
+2. 派发后必须收尾：用 `wait_agents` 等待并收集结果，不可派发后不管。
 
-## 二、工具操作（派发、等待、续跑、停止）
-
+## 工具参考
 | 工具 | 关键参数 | 作用 |
 | --- | --- | --- |
-| `run_agent` | `input`（必需）、`title`（新建时必需）、`agentId`（续跑时填） | 异步派发或续跑一个子 Agent，立即返回 `agentId` |
-| `wait_agents` | `agentId`（可选）、`timeoutMs`（默认 30000） | 等待子 Agent 完成；传 `agentId` 返回 `{ mode: "single", waitStatus, agent }`，不传则等待后返回 `{ mode: "list", waitStatus, agents }` |
-| `stop_agent` | `agentId`（必需） | 按 `agentId` 中止一个运行中的子 Agent |
-| `list_agents` | 无 | 列出当前任务下全部子 Agent（**含之前轮次已结束的**，含 `agentId` / `title` / `status` / `latestActivity`），是 wait/stop 的 `agentId` 来源 |
+| `run_agent` | `input`（必填）；新建时 `title` 必填；续跑时填 `agentId` | 异步派发或续跑子 Agent，立即返回 `agentId` |
+| `wait_agents` | `agentId`（可选）；`timeoutMs`（默认 30000） | 等待完成：传 `agentId` 返回 `{mode:"single",waitStatus,agent}`，省略则等全部返回 `{mode:"list",waitStatus,agents}` |
+| `list_agents` | 无 | 列出当前任务全部子 Agent（**含之前轮次已结束的**），是 wait/stop 的 `agentId` 来源 |
+| `stop_agent` | `agentId`（必填） | 停止一个运行中的子 Agent |
 
-## 三、派发方式
-- `run_agent` 始终异步派发，立即返回 `agentId`。
-- 彼此无依赖、不读写同一中间产物的多个子 Agent 可全部异步派发，再统一用 `wait_agents` 收集结果。
-- 你使用 `run_agent` 派发后，必须再用 `wait_agents` 等待完成，不可派发后不收口。
-- 若你在产出最终回复前没来得及 wait，子 Agent 会被系统等待到自然完成（约 5 分钟上限）后才收口；用户继续对话的下一轮里，你可用 `list_agents` / `wait_agents` 查看其终态与结果并汇报。
+### run_agent
+```json
+{"input": "交给子 agent 的完整任务描述(必填,自包含)", "title": "简短标题(新建时必填)", "agentId": "复用的 agentId(续跑时填,可省)"}
+```
+调用示例（新建派发）：
+```json
+{"input": "统计 src/main/java 下 TODO 注释数量并按模块归类输出", "title": "TODO 清点"}
+```
 
-## 四、续跑 / 重启 / 重试
-- 你给 `run_agent` 传入已存在的 `agentId`，即在该 agent 上继续（复用其历史上下文，不重做已完成部分）；不传 `agentId` 则新建 agent 全新执行（此时 `title` 必填）。续跑**跨轮有效**：`list_agents` 里出现的历史 `agentId`（含用户中断、点停止后遗留的）都可以继续，其历史上下文已持久化，跨轮、跨系统重启都不丢。
-- 子 Agent 卡住时：先 `stop_agent` 停止它，再以同一 `agentId` 调 `run_agent` 重启续跑。
-- 子 Agent 失败（`run_agent` 报错或 `wait_agents` 的 `agent.status` 为 `error`）时：修复 `input` 后以同一 `agentId` 重试（续跑），或不传 `agentId` 来以新的子Agent重跑该工作。
-- **错误处理优先级**：如果子 Agent 出错，为了利用子 Agent 已积累的上下文，尽量先解决问题后复用该子 Agent（传入同一 `agentId` 续跑）；否则即使重新派发新子 Agent 也会遇到同样问题。
-- 如果你无法解决该问题，可以让子 Agent 重试一次（以同一 `agentId` 续跑重试）。
-- 如果子 Agent 重试后仍然失败，你要报告给用户，由用户决定下一步。
+### wait_agents
+```json
+{"agentId": "要等待的 agentId(可省,省略=等全部)", "timeoutMs": 30000}
+```
+调用示例（等全部）：
+```json
+{"timeoutMs": 60000}
+```
 
-## 五、状态语义
-- `agent.status` 的 `completed` / `stopped` / `error` 为终态（已完成或终止）；`running` 为仍在运行；`waiting-user` 表示该子 agent 挂起等待用户回答（回答后自动恢复 `running`）。
-- `wait_agents` 的 `waitStatus` 只表示本次等待行为：`completed` 表示等到返回，`timeout` 表示本次等待超时；超时时仍返回最新 `agent.latestActivity` 供判断进度。
-- `agent.latestActivity` 承载最近活动与错误信息，包含 `reasoning` / `content` / `error` / `createdAt` / `updatedAt`，不会包含完整 `messages` 历史。
+### list_agents
+```json
+{}
+```
+调用示例：
+```json
+{}
+```
 
-## 六、边界与注意事项
-- 子 Agent 的历史上下文按 `agentId` 隔离。若你想让先后运行的两个子任务共享历史，就传入相同的 `agentId`；但**不可让多个子 Agent 同时运行在同一 `agentId` 上**（运行中的 agent 再次 `run_agent` 会报错，须先 `stop_agent`）。
-- `wait_agents` / `stop_agent` 的 `agentId` 应来自 `list_agents()` 返回结果，不要凭空捏造。
-- 你作为主Agent负责子Agent的管理、完成情况验收、最终任务完成情况总结，子 Agent 负责执行被明确界定的子任务。
-- 若子 Agent 有疑问你需要回答并让它继续。
-- 多个子Agent可并行派发，同时下发多个run_agent工具调用即可并行执行。
+### stop_agent
+```json
+{"agentId": "要停止的 agentId(必填)"}
+```
+调用示例：
+```json
+{"agentId": "a_123"}
+```
+
+## 派发方式
+- `run_agent` 始终异步，立即返回 `agentId`；彼此无依赖、不读写同一中间产物的多个子 Agent 可并行派发（同批多个 run_agent 调用），再统一 `wait_agents` 收集。
+- 派发后必须 `wait_agents` 收口。若产出最终回复前没来得及 wait，系统会等待子 Agent 自然完成（约 5 分钟上限）后才收口；下一轮可用 `list_agents`/`wait_agents` 查看终态与结果并汇报。
+
+## 续跑 / 重启 / 重试
+- 传已存在的 `agentId` 即续跑（复用其历史上下文，不重做已完成部分）；不传则新建（此时 `title` 必填）。续跑**跨轮有效**：`list_agents` 里的历史 `agentId`（含中断、停止后遗留的）都可继续，上下文已持久化，跨轮、跨重启不丢。
+- 卡住：先 `stop_agent` 停止，再以同一 `agentId` `run_agent` 重启续跑。
+- 失败（`run_agent` 报错或 `wait_agents` 的 `agent.status` 为 error）：修复 `input` 后以同一 `agentId` 重试，尽量复用已积累的上下文；重试仍失败则报告用户决定。无法解决时最多再让子 Agent 以同一 `agentId` 重试一次。
+
+## 状态语义
+- `agent.status`：`completed`/`stopped`/`error` 为终态；`running` 运行中；`waiting-user` 挂起等用户回答（回答后自动恢复）。
+- `wait_agents` 的 `waitStatus` 只描述本次等待行为：`completed` 等到返回；`timeout` 本次等待超时，仍返回最新摘要（`agent.latestActivity`）供判断进度。
+- `latestActivity` 含 `reasoning`/`content`/`error`/`createdAt`/`updatedAt`，不含完整历史。
+
+## 边界与注意
+- 上下文按 `agentId` 隔离：想让两个子任务共享历史就传同一 `agentId`，但**不可多个子 Agent 同时跑在同一 `agentId` 上**（运行中再 `run_agent` 会报错，须先 `stop_agent`）。
+- `wait_agents`/`stop_agent` 的 `agentId` 必须来自 `list_agents` 或 `run_agent` 返回值，不要凭空捏造。
+- 你（主 Agent）负责子 Agent 的管理、验收与最终总结；子 Agent 只执行被明确界定的子任务。子 Agent 有疑问时你需回答并让它继续。

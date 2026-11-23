@@ -78,6 +78,11 @@ public class AgentRunner {
      */
     public void run(AgentEntity a) throws InterruptedException {
         // 2.0.1:prompt options 原样透传并强转 OpenAiChatOptions(且不与默认 options 合并),
+            // 正交性(与 SchemaStrippedToolCallback,核实结论):SchemaStripped = 工具进请求
+            // 但 schema 精简(剥 $schema 键省 token);hidden = 连工具名都不进请求(模型经
+            // skill 文档认知后按名调用)。两者作用对象不相交——hidden 工具不参与
+            // SchemaStripped 包装(它根本不进 a.tools → toolCallbacks 这条请求侧通路,
+            // 无 schema 可剥),常规工具照常包装。
             OpenAiChatOptions.Builder options = a.options.mutate();
             if (!a.tools.isEmpty()) {
                 options.toolCallbacks(a.tools.stream()
@@ -91,6 +96,13 @@ public class AgentRunner {
             // 原样透传,工具回调只按自己的键取值不受影响。
             options.toolContext(PerCallToolCallingManager.RUN_CONTEXT_KEY,
                     new PerCallToolCallingManager.RunContext(a.agentId, a.emitter, a.execution, a.toolOutcomes));
+            // hidden 池同 map 独立键下行(与 RUN_CONTEXT_KEY 共存、互不可见;builder 的
+            // toolContext(key,value) 为累积 put):回调解析在请求 tool 定义未命中时先查
+            // 本池(PerCallToolCallingManager.resolveOutsideRequestTools)——hidden 工具不进
+            // 请求 tool 定义,模型按 skill 文档认知的工具名调用即在此命中,执行链照常。
+            if (!a.hiddenTools.isEmpty()) {
+                options.toolContext(PerCallToolCallingManager.HIDDEN_TOOLS_KEY, a.hiddenTools);
+            }
             Prompt prompt = new Prompt(new ArrayList<>(a.conversation), options.build());
 
             CountDownLatch done = new CountDownLatch(1);

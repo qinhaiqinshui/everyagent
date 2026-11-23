@@ -1717,12 +1717,29 @@ public class WorkerProperties implements WorkerConfig {
         /** ripgrep 可执行文件绝对路径(如 /opt/rg 或 C:\rg\rg.exe);为空 = 程序根 runtime/bin/ 定位。 */
         private String rgPath = "";
 
+        /**
+         * hidden 工具机制开关(默认 true):provider 经 {@code createHiddenTools} 产出的工具
+         * 不进请求 tool 定义,模型经 skill 文档认知后按名调用,解析走本请求 hidden 池
+         * (prompt options 框架 ToolContext map 独立键)。false = 应急回退:hidden 池在
+         * AgentBuilder 聚合处回落为常规工具(进请求 tool 定义、带 schema),语义在聚合层
+         * 统一生效,provider 侧不感知。
+         */
+        private boolean hiddenEnabled = true;
+
         public String getRgPath() {
             return rgPath;
         }
 
         public void setRgPath(String rgPath) {
             this.rgPath = rgPath;
+        }
+
+        public boolean isHiddenEnabled() {
+            return hiddenEnabled;
+        }
+
+        public void setHiddenEnabled(boolean hiddenEnabled) {
+            this.hiddenEnabled = hiddenEnabled;
         }
     }
 

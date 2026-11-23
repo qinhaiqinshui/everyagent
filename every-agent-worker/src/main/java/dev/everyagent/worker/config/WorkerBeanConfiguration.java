@@ -55,9 +55,9 @@ public class WorkerBeanConfiguration {
     /**
      * 基础工具调用管理器:per-call 化的照抄实现(PerCallToolCallingManager,§7.14.3)。
      * <p>原 {@code ToolCallingManager.builder()} 四槽位显式传构造,行为逐位保真:
-     * 异常处理器(CANCELLING_PROCESSOR)/回调解析器(MissingToolCallbackResolver 兜底,
-     * resolutionFallback=true)/limits(maxCallsPerTool=200, maxTotalToolCalls=500,
-     * behavior=THROW 与 builder 缺省一致)/resolutionFallbackEnabled。
+     * 异常处理器(CANCELLING_PROCESSOR)/回调解析器(先查本请求 hidden 池,未命中
+     * MissingToolCallbackResolver 兜底,resolutionFallback=true)/limits(maxCallsPerTool=200,
+     * maxTotalToolCalls=500,behavior=THROW 与 builder 缺省一致)/resolutionFallbackEnabled。
      * per-call 切口的拦截链经 {@link ToolExecutionInterceptorRegistry} 查得;
      * 内置发射节点(tool.started/tool.result)在此注册。per-run 上下文由 AgentRunner
      * 经 prompt options 的 toolContext 下行,不依赖 ThreadLocal。

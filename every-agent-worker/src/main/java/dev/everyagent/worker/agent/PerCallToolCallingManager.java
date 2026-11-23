@@ -50,10 +50,13 @@ import java.util.Optional;
  * {@link #buildToolContext}/{@link #buildConversationHistoryAfterToolExecution} 照抄自
  * <b>Spring AI 2.0.1</b> 的 {@code org.springframework.ai.model.tool.DefaultToolCallingManager}
  * (自建 {@code InternalToolExecutionResult} 与 {@link ToolCallLimits} 等价物——后者框架侧
- * package-private 包外不可引用),<b>逐语义对齐,不自行重设计</b>;差异仅两处:
+ * package-private 包外不可引用),<b>逐语义对齐,不自行重设计</b>;差异仅三处:
  * <ol>
  *   <li>{@code executeToolCall} 签名增 {@code chatResponse} 参数(切口 ctx 契约成员需要);</li>
- *   <li>工具调用 for 循环内插<b>两处切口</b>调用项目 per-call 工具执行拦截链(方案 B,见下)。</li>
+ *   <li>工具调用 for 循环内插<b>两处切口</b>调用项目 per-call 工具执行拦截链(方案 B,见下);</li>
+ *   <li>回调解析的 resolution fallback 分支前插<b>本请求 hidden 池</b>查找(见
+ *       {@link #HIDDEN_TOOLS_KEY}:hidden 工具注册但不进请求 tool 定义,模型经 skill
+ *       文档认知后按名调用;未命中仍走上游同款 soft-fail 兜底,语义不变)。</li>
  * </ol>
  * <b>升级 Spring AI 版本时 diff 框架源码对齐本类,禁止顺手重设计</b>(照抄纪律)。
  *
@@ -118,6 +121,15 @@ public final class PerCallToolCallingManager implements ToolCallingManager {
      * ({@code AgentRunner} 写入,切口读取)。
      */
     public static final String RUN_CONTEXT_KEY = "everyagent.runContext";
+
+    /**
+     * prompt options 框架 {@code ToolContext} map 里携带本请求 hidden 工具池的键
+     * ({@code AgentRunner} 写入,回调解析读取)——与 {@link #RUN_CONTEXT_KEY} 同 map
+     * 共存、互不可见(各按自己的键取值);map 每 run 组装期一次定型 → 池随 prompt
+     * options 下行、per-run 生命周期,并发任务间无串扰(解析查的是本请求池)。
+     * 值类型 {@code Map<String, ToolCallback>}(键 = 工具名)。
+     */
+    public static final String HIDDEN_TOOLS_KEY = "everyagent.hiddenTools";
 
     /**
      * per-run 四件套(agentId + agent 级 emitter(agentId 包装)/执行上下文/工具结果账本),
@@ -278,16 +290,13 @@ public final class PerCallToolCallingManager implements ToolCallingManager {
                 toolCallArguments = "{}";
             }
 
-            // ── 照抄:回调解析(options 内回调名匹配 → resolutionFallbackEnabled 回退 → 未找到抛 ISE) ──
+            // ── 照抄 + 第三处差异:回调解析(options 内回调名匹配 → 本请求 hidden 池 →
+            // resolutionFallbackEnabled 回退 → 未找到抛 ISE)── hidden 池命中即返回
+            //(执行链/事件/授权照常,与常规工具完全一致);未命中走上游同款 soft-fail。──
             ToolCallback toolCallback = toolCallbacks.stream()
                     .filter(tool -> toolName.equals(tool.getToolDefinition().name()))
                     .findFirst()
-                    .orElseGet(() -> {
-                        if (this.resolutionFallbackEnabled) {
-                            return this.toolCallbackResolver.resolve(toolName);
-                        }
-                        return null;
-                    });
+                    .orElseGet(() -> resolveOutsideRequestTools(toolName, toolContext));
             if (toolCallback == null) {
                 if (logger.isWarnEnabled()) {
                     logger.warn(POSSIBLE_LLM_TOOL_NAME_CHANGE_WARNING_START + toolName
@@ -320,6 +329,29 @@ public final class PerCallToolCallingManager implements ToolCallingManager {
 
         ToolResponseMessage toolResponseMessage = ToolResponseMessage.builder().responses(toolResponses).build();
         return new InternalToolExecutionResult(toolResponseMessage, Objects.requireNonNullElse(returnDirect, false));
+    }
+
+    /**
+     * 请求内回调未命中后的解析(第三处差异,上游原逻辑内联在 orElseGet 里):
+     * <b>先查本请求 hidden 池</b>(prompt options 框架 ToolContext map 的
+     * {@link #HIDDEN_TOOLS_KEY} 键,查的是本请求池 → 并发任务无串扰)→ 命中即返回;
+     * 未命中走 {@code resolutionFallbackEnabled} + {@code toolCallbackResolver} 的
+     * soft-fail 兜底(生产装配 {@code MissingToolCallbackResolver}:未注册工具名降级为
+     * 错误文本回传模型,不中断任务——语义与上游逐位不变)。hidden 查找不受
+     * {@code resolutionFallbackEnabled} 开关管辖:开关只治理「兜底 resolver」这一层。
+     */
+    private ToolCallback resolveOutsideRequestTools(String toolName, ToolContext toolContext) {
+        Object pool = toolContext.getContext().get(HIDDEN_TOOLS_KEY);
+        if (pool instanceof Map<?, ?> hiddenPool) {
+            Object callback = hiddenPool.get(toolName);
+            if (callback instanceof ToolCallback tc) {
+                return tc;
+            }
+        }
+        if (this.resolutionFallbackEnabled) {
+            return this.toolCallbackResolver.resolve(toolName);
+        }
+        return null;
     }
 
     // ════════════════════════ 照抄:框架原生单调用执行(observation + call + 异常处理) ════════════════════════

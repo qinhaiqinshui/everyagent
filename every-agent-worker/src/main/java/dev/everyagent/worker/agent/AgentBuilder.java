@@ -123,15 +123,28 @@ public class AgentBuilder {
         // (tool.result 的 data.status)三者共用同一实例；键 = 工具名 + 该次调用可复现载荷。
         ToolOutcomeLog toolOutcomes = new ToolOutcomeLog();
 
-        // 聚合全部工具: 遍历 toolRegistry.getProviders() → appliesTo → createTools
+        // 聚合全部工具: 遍历 toolRegistry.getProviders() → appliesTo → createTools;
+        // hidden 池同链聚合(createHiddenTools,键=工具名,同名先到先得):不进请求
+        // tool 定义,随 prompt options 框架 ToolContext map 独立键下行(见 AgentRunner)。
         ToolContextImpl toolCtx = createToolContext(agentId, exec, toolOutcomes);
         List<ToolCallback> tools = new ArrayList<>();
+        Map<String, ToolCallback> hiddenTools = new java.util.LinkedHashMap<>();
         for (ToolProvider p : toolRegistry.getProviders()) {
             if (p.appliesTo(toolCtx)) {
                 tools.addAll(p.createTools(toolCtx));
+                for (ToolCallback tc : p.createHiddenTools(toolCtx)) {
+                    hiddenTools.putIfAbsent(toolNameOf(tc), tc);
+                }
             }
         }
-        return new Build(agentId, chatModel, options, exec, configId, tools, toolOutcomes);
+        // 应急回退(worker.tools.hidden-enabled=false,默认 true):hidden 池回落常规池
+        //(进请求 tool 定义、带 schema)。开关语义只在聚合层生效,provider 侧不感知。
+        if (!props.getTools().isHiddenEnabled()) {
+            tools.addAll(hiddenTools.values());
+            hiddenTools.clear();
+        }
+        return new Build(agentId, chatModel, options, exec, configId, tools, toolOutcomes,
+                java.util.Collections.unmodifiableMap(new java.util.LinkedHashMap<>(hiddenTools)));
     }
 
     /** 从 exec 槽位构造 ToolContext（S2 起不再从 map 逐个 get）。 */
@@ -139,6 +152,15 @@ public class AgentBuilder {
             ToolOutcomeLog toolOutcomes) {
         return new ToolContextImpl(exec, agentId, sandbox, gate, workspaces,
                 rgBinary != null ? rgBinary.path() : null, pathRegistry, toolOutcomes);
+    }
+
+    /** 工具回调名(定义异常时回退类名,不阻断聚合/REMOVE 匹配)。 */
+    private static String toolNameOf(ToolCallback tc) {
+        try {
+            return tc.getToolDefinition().name();
+        } catch (Exception e) {
+            return tc.getClass().getSimpleName();
+        }
     }
 
     /**
@@ -202,6 +224,8 @@ public class AgentBuilder {
 
         // create() 时已聚合填充，后续可按模式增删改
         private List<ToolCallback> tools;
+        /** 本 run 的 hidden 工具池(键=工具名,不可变;聚合期一次定型,REMOVE 可删)。 */
+        private final Map<String, ToolCallback> hiddenTools;
         // build() 时从注册表聚合（需 entity），存储修改请求
         private List<Advisor> advisorMods;
         private ModifyMode advisorMode;
@@ -214,7 +238,8 @@ public class AgentBuilder {
 
         Build(String agentId, ChatModel chatModel, OpenAiChatOptions options,
                 ExecContext execution, String configId,
-                List<ToolCallback> tools, ToolOutcomeLog toolOutcomes) {
+                List<ToolCallback> tools, ToolOutcomeLog toolOutcomes,
+                Map<String, ToolCallback> hiddenTools) {
             this.agentId = agentId;
             this.chatModel = chatModel;
             this.options = options;
@@ -222,29 +247,28 @@ public class AgentBuilder {
             this.configId = configId;
             this.tools = new ArrayList<>(tools);
             this.toolOutcomes = toolOutcomes;
+            this.hiddenTools = new java.util.LinkedHashMap<>(hiddenTools);
         }
 
-        /** 按模式增删改工具。 */
+        /** 按模式增删改工具(REMOVE 按工具名匹配,常规池与 hidden 池同步删——子 agent 禁递归即依赖此语义)。 */
         public Build tools(List<ToolCallback> t, ModifyMode mode) {
             if (mode == ModifyMode.REPLACE) {
                 this.tools = new ArrayList<>(t);
             } else if (mode == ModifyMode.ADD) {
                 this.tools.addAll(t);
             } else if (mode == ModifyMode.REMOVE) {
-                var namesToRemove = t.stream().map(this::toolName).collect(java.util.stream.Collectors.toSet());
+                var namesToRemove = t.stream().map(AgentBuilder::toolNameOf).collect(java.util.stream.Collectors.toSet());
                 this.tools = this.tools.stream()
-                        .filter(tc -> !namesToRemove.contains(toolName(tc)))
+                        .filter(tc -> !namesToRemove.contains(toolNameOf(tc)))
                         .collect(java.util.stream.Collectors.toList());
+                // hidden 池是 Map(键=工具名),按名删即可;删空后 AgentRunner 不再下发该键。
+                this.hiddenTools.keySet().removeAll(namesToRemove);
             }
             return this;
         }
 
         private String toolName(ToolCallback tc) {
-            try {
-                return tc.getToolDefinition().name();
-            } catch (Exception e) {
-                return tc.getClass().getSimpleName();
-            }
+            return toolNameOf(tc);
         }
 
         /** 按模式增删改 advisor（在 build() 时应用，因为 advisor 聚合需要 entity）。 */
@@ -295,6 +319,8 @@ public class AgentBuilder {
             AgentEntity entity = new AgentEntity(agentId, title, chatModel, options,
                     List.copyOf(tools), execution.emitter(), execution, creator, agentMetadata);
             entity.toolOutcomes = toolOutcomes;
+            // hidden 池转交 entity(不可变;AgentRunner 随 prompt options 下行,见其 run())
+            entity.hiddenTools = Map.copyOf(hiddenTools);
             entity.conversation.addAll(conversation);
 
             // 2. 装配 TCM(两层,架构 §7.14.3):共享 PerCallToolCallingManager 单例

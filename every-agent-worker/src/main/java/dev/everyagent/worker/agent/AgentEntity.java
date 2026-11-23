@@ -69,6 +69,16 @@ public final class AgentEntity implements Agent {
     public final OpenAiChatOptions options;
     public final List<ToolCallback> tools;
 
+    /**
+     * 本 run 的 hidden 工具池(键 = 工具名):<b>注册但不进请求 tool 定义</b>——模型经
+     * skill 文档认知后按名调用,由 {@link AgentBuilder} 聚合 createHiddenTools 产出、
+     * {@code build()} 转交(不可变;直接 new 本类的场景缺省空表,使用方无须判空)。
+     * {@link AgentRunner} 组装 prompt 时放入框架 ToolContext map 独立键
+     * {@code PerCallToolCallingManager.HIDDEN_TOOLS_KEY} 随 prompt options 下行,
+     * 回调解析期命中即执行(拦截链/事件/授权与常规工具完全一致)。
+     */
+    public Map<String, ToolCallback> hiddenTools = Map.of();
+
     /** 仅由本 agent 的执行线程读写(任务线程 / 子 agent 线程)。 */
     public final List<Message> conversation = new ArrayList<>();
 
