@@ -7,7 +7,7 @@
  * - SidebarScrollArea 滚动区（自宿主复制，CSS 类为宿主全局样式）；
  * - 分组卡片（padding 6 / radius-md / border-light / bg-primary）：组头=折叠箭头（仅点击图标
  *   折叠，rotate 过渡）+ 粗体组名 + 右侧图标按钮（▶ 运行 / 管理 / ⋯ 刷新）；
- * - 组内「实例」可折叠子区（箭头交互同组头）；
+ * - 组内实例行**直接平铺**（无子区头、无折叠、无计数——数量与状态在行卡片药丸自明）；
  * - 行卡片（.ui-row）=标题行（粗体单行名称 + hover 浮现的 ⋯「更多操作」菜单）+ 元数据行
  *   （等宽 id 省略 + 可点击切换的相对/绝对时间 + 状态药丸）+ 次要信息行。
  *
@@ -346,26 +346,22 @@ function InstanceRow({
 
 // ─── 折叠头（组头 / 子区头共用一套交互：仅点击箭头折叠） ──────────────────────
 
+/** 折叠头（仅组头使用：箭头折叠 + 组名 + 右侧工具位；实例行直接平铺无子区头）。 */
 function CollapsibleHeader({
   label,
   labelTitle,
-  count,
   collapsed,
   onToggle,
-  sub = false,
   tools,
 }: {
   label: string
   labelTitle?: string
-  count?: string
   collapsed: boolean
   onToggle: () => void
-  /** 子区头：更弱的字重与字色，与组名形成层级。 */
-  sub?: boolean
   tools?: React.ReactNode
 }): React.ReactElement {
   return (
-    <div style={sub ? subHeaderStyle : groupHeaderStyle}>
+    <div style={groupHeaderStyle}>
       <span
         style={groupChevronButtonStyle}
         title={collapsed ? '展开' : '折叠'}
@@ -378,8 +374,7 @@ function CollapsibleHeader({
           style={collapsed ? { ...groupChevronStyle, ...groupChevronCollapsedStyle } : groupChevronStyle}
         />
       </span>
-      <span style={sub ? subLabelStyle : groupLabelStyle} title={labelTitle}>{label}</span>
-      {count !== undefined ? <span style={sub ? subCountStyle : groupCountStyle}>{count}</span> : null}
+      <span style={groupLabelStyle} title={labelTitle}>{label}</span>
       {tools ? <span style={groupToolsStyle}>{tools}</span> : null}
     </div>
   )
@@ -407,7 +402,7 @@ export default function SidebarPanel() {
   const [instances, setInstances] = React.useState<WorkflowInstanceSummary[] | null>(null)
   const [defsError, setDefsError] = React.useState<string | null>(null)
   const [instancesError, setInstancesError] = React.useState<string | null>(null)
-  /** 折叠键集合（组 ws:<id>；子区 ws:<id>/inst）；不在集合=展开。 */
+  /** 折叠键集合（组 ws:<id>）；不在集合=展开。 */
   const [collapsedKeys, setCollapsedKeys] = React.useState<Set<string>>(() => new Set())
   /** 行级/动作级 busy 标记（`inst:<id>`）。 */
   const [busyKey, setBusyKey] = React.useState<string | null>(null)
@@ -635,30 +630,6 @@ export default function SidebarPanel() {
 
   // ── 渲染 ──
 
-  /** 子区（组内「实例」段）：折叠箭头 + 标签 + 计数 → 行卡片列表 / 单行空态。 */
-  const renderSubSection = (
-    groupKey: string,
-    section: 'inst',
-    label: string,
-    count: string,
-    emptyText: string,
-    rows: React.ReactNode,
-  ) => {
-    const key = `${groupKey}/${section}`
-    const collapsed = collapsedKeys.has(key)
-    return (
-      <>
-        <CollapsibleHeader sub label={label} count={count} collapsed={collapsed} onToggle={() => toggleCollapsed(key)} />
-        {collapsed ? null : (
-          <div style={groupTasksStyle}>
-            {rows}
-            {emptyText ? <div style={subEmptyStyle}>{emptyText}</div> : null}
-          </div>
-        )}
-      </>
-    )
-  }
-
   return (
     <div style={shellStyle}>
       <SidebarScrollArea style={listStyle}>
@@ -672,9 +643,7 @@ export default function SidebarPanel() {
           groups.map(group => {
             const collapsed = collapsedKeys.has(group.key)
             const groupDefCount = group.defs.length
-            const groupInstCount = group.instances.length
-            const groupEmpty = instances !== null && !instancesError && groupInstCount === 0
-            const running = group.instances.filter(i => instanceActive(i.status)).length
+            const groupEmpty = instances !== null && !instancesError && group.instances.length === 0
             const orphanChip = group.entry === null
             return (
               <div key={group.key} style={groupSectionStyle}>
@@ -726,22 +695,10 @@ export default function SidebarPanel() {
                     </>
                   }
                 />
-                {collapsed ? null : groupEmpty ? (
-                  <div style={emptyStyle}>
-                    {group.entry ? '暂无运行实例——点右上「管理」新建或运行工作流。' : '暂无数据。'}
-                  </div>
-                ) : (
-                  renderSubSection(
-                    group.key,
-                    'inst',
-                    '实例',
-                    instances === null
-                      ? '…'
-                      : `${groupInstCount}${running > 0 ? `（${running} 活跃）` : ''}`,
-                    groupInstCount === 0 && instances !== null && !instancesError
-                      ? '暂无运行实例——从「管理」页运行工作流后在此查看。'
-                      : '',
-                    group.instances.map(inst => (
+                {/* 实例平铺（无子区头/折叠/计数）；空态收一行弱文案。 */}
+                {collapsed ? null : (
+                  <div style={groupTasksStyle}>
+                    {group.instances.map(inst => (
                       <InstanceRow
                         key={inst.id}
                         inst={inst}
@@ -751,8 +708,13 @@ export default function SidebarPanel() {
                         onCancel={() => onCancelInstance(inst)}
                         onDelete={() => onDeleteInstance(inst)}
                       />
-                    )),
-                  )
+                    ))}
+                    {groupEmpty ? (
+                      <div style={subEmptyStyle}>
+                        {group.entry ? '暂无运行实例——点右上「管理」新建或运行工作流。' : '暂无数据。'}
+                      </div>
+                    ) : null}
+                  </div>
                 )}
               </div>
             )
@@ -811,12 +773,6 @@ const groupHeaderStyle: React.CSSProperties = {
   minWidth: 0,
 }
 
-/** 组内子区头（「定义」/「实例」）：与组头同布局，字重字色更弱以示层级。 */
-const subHeaderStyle: React.CSSProperties = {
-  ...groupHeaderStyle,
-  padding: '4px 2px 0',
-}
-
 /** 折叠/展开触发图标：仅点击该图标才折叠或展开（与任务侧边栏一致）。 */
 const groupChevronButtonStyle: React.CSSProperties = {
   display: 'inline-flex',
@@ -848,24 +804,6 @@ const groupLabelStyle: React.CSSProperties = {
   whiteSpace: 'nowrap',
   minWidth: 0,
   flex: '0 1 auto',
-}
-
-const subLabelStyle: React.CSSProperties = {
-  ...groupLabelStyle,
-  fontWeight: 600,
-  color: 'var(--text-secondary)',
-}
-
-const groupCountStyle: React.CSSProperties = {
-  fontSize: 'var(--text-xs)',
-  fontWeight: 400,
-  color: 'var(--text-muted)',
-  flexShrink: 0,
-}
-
-const subCountStyle: React.CSSProperties = {
-  ...groupCountStyle,
-  color: 'var(--text-faint)',
 }
 
 const groupToolsStyle: React.CSSProperties = {
@@ -1018,7 +956,7 @@ const confirmFooterStyle: React.CSSProperties = {
 }
 
 /*
- * ── 人工验证清单（侧边栏 · 工作区分组 · 只展示实例 · 管理页承载定义）──────────
+ * ── 人工验证清单（侧边栏 · 工作区分组 · 实例平铺 · 管理页承载定义）──────────
  * 1. 打开侧边栏「工作流」：注册表里每个工作区一张分组卡片同时并陈（含空工作区，
  *    显示「暂无运行实例——点右上「管理」新建或运行工作流。」），**无**顶部下拉/工具条，
  *    **无定义子区**（定义只在管理标签页展示）；组序=注册表顺序。
@@ -1026,7 +964,7 @@ const confirmFooterStyle: React.CSSProperties = {
  *    **无 ＋ 新建、无导入**——两者都在管理页）。▶ 打开工作区级运行窗（选定义→填变量，
  *    无定义时禁用；见 RunDialog 清单 §6-8）；「管理」打开 workflow-manage 标签页
  *    （每工作区一个，重复点击聚焦；见 ManagePanel 尾部清单）。
- * 3. 组内「实例」段：箭头可独立折叠；头带计数（含「k 活跃」）。
+ * 3. 组内实例行**直接平铺**（无「实例」子区头、无折叠箭头、无计数）。
  * 4. 实例行卡片：hover 时右侧浮现 ⋯ 菜单=取消实例（活跃时）/删除；点行打开实例页
  *    （tab.data 正确）。
  * 5. **推送**：在管理页/编辑器保存定义 / 另一端运行工作流 / AI 调 workflow_create 工具 /
