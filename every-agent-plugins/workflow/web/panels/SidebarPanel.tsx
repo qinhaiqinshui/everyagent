@@ -8,8 +8,9 @@
  * - 分组卡片（padding 6 / radius-md / border-light / bg-primary）：组头=折叠箭头（仅点击图标
  *   折叠，rotate 过渡）+ 粗体组名 + 右侧图标按钮（▶ 运行 / 管理 / ⋯ 刷新）；
  * - 组内实例行**直接平铺**（无子区头、无折叠、无计数——数量与状态在行卡片药丸自明）；
- * - 行卡片（.ui-row）=标题行（粗体单行名称 + hover 浮现的 ⋯「更多操作」菜单）+ 元数据行
- *   （等宽 id 省略 + 可点击切换的相对/绝对时间 + 状态药丸）+ 次要信息行。
+ * - 行卡片（.ui-row）=**单行**：粗体工作流名（弹性占位、悬浮 title 见实例 id）+
+ *   可点击切换的相对/绝对时间 + 状态药丸 + hover 浮现的 ⋯「更多操作」菜单；
+ *   失败实例追加错误行，尾组「工作区缺失」追加归属 chip 行。
  *
  * 与任务面板的一处刻意差异：空工作区也展示——任务在输入框创建、侧栏可隐藏空组；工作流
  * 的定义创建入口在管理页（组头「管理」直达），隐藏空组会让首个工作流无处可建。
@@ -306,14 +307,11 @@ function InstanceRow({
       : ''
   return (
     <div className="ui-row" style={cardStyle} onClick={onOpen} title={`实例 ${inst.id}\n点击打开实例运行页`}>
-      <div style={cardHeaderStyle}>
-        <span style={cardTitleStyle}>{inst.definitionName || inst.definitionId}</span>
-        <RowActions items={menuItems} title="实例更多操作" disabled={busy} />
-      </div>
       <div style={cardMetaRowStyle}>
-        <span style={cardIdStyle} title={inst.id}>{inst.id}</span>
+        <span style={cardTitleStyle}>{inst.definitionName || inst.definitionId}</span>
         <CardTime ms={inst.createdAt} label="创建于" />
         <span style={{ ...cardPillStyle, color: pillColor }}>{instanceStatusLabel(inst.status)}</span>
+        <RowActions items={menuItems} title="实例更多操作" disabled={busy} />
       </div>
       {workspaceChip ? (
         <div style={cardSubRowStyle}>
@@ -818,13 +816,7 @@ const cardStyle: React.CSSProperties = {
   cursor: 'pointer',
 }
 
-const cardHeaderStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'flex-start',
-  justifyContent: 'space-between',
-  gap: 6,
-}
-
+/** 实例行首列名称：粗体单行省略，flex:1 占据剩余宽度（时间/药丸/⋯ 靠右）。 */
 const cardTitleStyle: React.CSSProperties = {
   fontSize: 'var(--text-sm)',
   fontWeight: 700,
@@ -833,6 +825,7 @@ const cardTitleStyle: React.CSSProperties = {
   overflow: 'hidden',
   textOverflow: 'clip',
   whiteSpace: 'nowrap',
+  color: 'var(--text-primary)',
 }
 
 const cardMetaRowStyle: React.CSSProperties = {
@@ -841,17 +834,6 @@ const cardMetaRowStyle: React.CSSProperties = {
   gap: 8,
   flexWrap: 'nowrap',
   minWidth: 0,
-}
-
-const cardIdStyle: React.CSSProperties = {
-  minWidth: 0,
-  flex: '1 1 auto',
-  overflow: 'hidden',
-  textOverflow: 'ellipsis',
-  whiteSpace: 'nowrap',
-  fontSize: 'var(--text-xs)',
-  color: 'var(--text-muted)',
-  fontFamily: 'var(--font-mono, monospace)',
 }
 
 const cardTimeStyle: React.CSSProperties = {
@@ -948,8 +930,8 @@ const confirmFooterStyle: React.CSSProperties = {
  *    无定义时禁用；见 RunDialog 清单 §6-8）；「管理」打开 workflow-manage 标签页
  *    （每工作区一个，重复点击聚焦；见 ManagePanel 尾部清单）。
  * 3. 组内实例行**直接平铺**（无「实例」子区头、无折叠箭头、无计数）。
- * 4. 实例行卡片：hover 时右侧浮现 ⋯ 菜单=取消实例（活跃时）/删除；点行打开实例页
- *    （tab.data 正确）。
+ * 4. 实例行卡片（**单行**）：粗体工作流名 + 创建时间 + 状态药丸 + hover 浮现 ⋯ 菜单
+ *    （取消实例〔活跃时〕/删除；行悬浮 title 显示实例 id）；点行打开实例页（tab.data 正确）。
  * 5. **推送**：在管理页/编辑器保存定义 / 另一端运行工作流 / AI 调 workflow_create 工具 /
  *    实例运行态翻转（running→waiting-user→done）→ 侧栏在 ~150ms 内自动更新，**无需手动
  *    刷新**（kind=definition 的推送只校准 ▶ 运行窗选项，不渲染定义行）；取消实例 → 状态
