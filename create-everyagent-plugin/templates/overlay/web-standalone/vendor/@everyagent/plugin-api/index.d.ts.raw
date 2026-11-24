@@ -1173,36 +1173,6 @@ export interface UiRegistry {
   }>
 
   /**
-   * 宿主注入的「AI 流式消息」渲染组件：思考折叠块（折叠头常驻「思考过程 +
-   * 耗时/读秒 + 折叠图标」，思考中展开并实时读秒，收束后自动折叠、耗时冻结为
-   * 权威值）+ 正文容器（缺省 Markdown 直渲），与宿主会话面板消息渲染同一实现
-   * （本包零运行时代码、只声明类型）。
-   *
-   * `thinking` 非空才渲染思考块、`content` 空白不渲染正文；`renderBody` 可替换
-   * 正文渲染器（入参为正文文本与流式标记，如富文本分段渲染），缺省 Markdown
-   * 直渲。用途：插件自建 AI 输出场景获得与会话面板一致的思考/正文流式体验。
-   * 可选注入（旧宿主可能缺席）：插件侧缺席时降级为自渲染纯文本 / Markdown。
-   */
-  readonly AiStreamMessage?: ComponentType<{
-    /** 思考链文本（非空才渲染思考折叠块）。 */
-    thinking?: string
-    /** 正文内容（空白正文不渲染正文容器）。 */
-    content: string
-    /** 所属消息是否仍在流式输出。 */
-    streaming?: boolean
-    /** 思考是否已收束（true = 自动折叠并冻结耗时）。 */
-    reasoningDone?: boolean
-    /** 思考起点时间戳（毫秒）：流式思考中按 now - 起点实时读秒。 */
-    thinkingStartedAt?: number
-    /** 思考耗时权威值（毫秒）：收束后展示。 */
-    thinkingDurationMs?: number
-    /** 追加到正文容器上的类名。 */
-    className?: string
-    /** 正文渲染器，缺省 Markdown 直渲；入参为（正文文本， 流式标记）。 */
-    renderBody?: (content: string, streaming: boolean | undefined) => ReactNode
-  }>
-
-  /**
    * 把可含 opaque token 串的文本拍平为纯 label 明文（嵌套递归拍平）。
    * 纯文本展示场景（标签标题、toast 文案、tooltip 等）用；胶囊展示场景用 TokenRichText。
    */

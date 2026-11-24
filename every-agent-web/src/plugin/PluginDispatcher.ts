@@ -48,7 +48,6 @@ import { registerTraceType as registerToTraceRegistry, unregisterTraceType as un
 import { outputBlockRegistry } from './outputBlockRegistry'
 import HostTokenRichText from '@/composerToken/TokenRichText'
 import HostRichComposer, { type RichComposerProps } from '@/components/richComposer/RichComposer'
-import { AiStreamMessage as HostAiStreamMessage, type AiStreamMessageProps } from '@/components/shared/AiStreamMessage'
 import {
   ExtensionRegistry,
   ExtensionRegistryFactory,
@@ -291,14 +290,6 @@ export interface RealPluginDispatcher {
    * 胶囊，惰性取用避开模块初始化环。插件侧缺席时降级（类型 optional 已表达）。
    */
   readonly RichComposer?: ComponentType<RichComposerProps>
-  /**
-   * 宿主注入的「AI 流式消息」渲染组件（声明见 @everyagent/plugin-api
-   * UiRegistry.AiStreamMessage）：思考折叠块（思考中展开实时读秒、收束后自动
-   * 折叠冻结耗时）+ 正文容器（缺省 Markdown 直渲），与会话面板消息渲染同一实现
-   * （components/shared/AiStreamMessage.tsx 单点）。与前两者同理 getter 惰性解引用，
-   * 惰性取用避开与宿主组件链的模块初始化环。插件侧缺席时降级（类型 optional 已表达）。
-   */
-  readonly AiStreamMessage?: ComponentType<AiStreamMessageProps>
   /** 把可含 opaque token 串（嵌套递归）的文本拍平为纯 label 明文。 */
   toPlainText: (text: string) => string
 }
@@ -556,11 +547,6 @@ export const pluginDispatcher: RealPluginDispatcher = {
   // 富输入场景（如工作流节点编辑）复用；插件侧经 ctx.ui.RichComposer 消费。
   get RichComposer(): ComponentType<RichComposerProps> {
     return HostRichComposer
-  },
-  // 宿主注入的 AI 流式消息渲染（同上惰性解引用）：会话面板思考折叠块 + 正文
-  // 流式渲染同一实现，供插件自建 AI 输出场景复用；经 ctx.ui.AiStreamMessage 消费。
-  get AiStreamMessage(): ComponentType<AiStreamMessageProps> {
-    return HostAiStreamMessage
   },
   toPlainText(text) {
     return stripTokensToLabels(text)
