@@ -6,7 +6,7 @@ description: 当需要创建、查询、修改、删除或列出可复用的工�
 # 工作流编排
 
 工作流 = 可复用的多步骤执行图：开始节点先行，命令节点跑 shell，AI 节点由命名 agent（持续会话线）执行；边条件决定路由（支持循环，maxRuns 兜限）；运行变量在 command/input 里以 `{{varName}}` 注入。
-本技能的十工具**未随请求下发工具定义**，按本文档的名称与参数直接调用即可（调用失败请核对参数拼写与 JSON 格式）。
+本技能的十一工具**未随请求下发工具定义**，按本文档的名称与参数直接调用即可（调用失败请核对参数拼写与 JSON 格式）。
 
 ## 适用条件
 - 用户要建立可复用、可多次运行的多步骤流程（生成/构建/检查流水线等）。
@@ -23,6 +23,7 @@ description: 当需要创建、查询、修改、删除或列出可复用的工�
 | `workflow_delete` | `id` | 删除定义（历史运行实例保留） |
 | `workflow_list` | `workspace`（可选，工作区根绝对路径） | 定义摘要列表，按更新时间倒序 |
 | `workflow_run` | `definitionId`（必填）、`variables`（可选 JSON 文本 `{k:v}`）、`workspace`（可选） | **在当前任务内运行工作流，阻塞至终态**；成功返回结构化摘要，失败返回 `{error,nodeId,runNo,context,hint}` |
+| `workflow_rerun` | `instanceId`（必填）、`nodeId`（可选，缺省=失败节点）、`input`（可选，替换该节点输入） | **从失败实例的中断节点续跑**（阻塞至终态，语义同 run）；已完成节点不重跑，runNo 延续 |
 | `workflow_instance_status` | `instanceId` | 实例状态摘要（status/nodeStates/error/pendingDecision/变量/耗时；不含定义快照） |
 | `workflow_instance_log` | `instanceId`、`nodeId`（可选）、`tail`（可选，缺省 10） | 实例节点运行日志（runs 过滤投影；stdout/stderr/text 各截断 4000 字符） |
 | `workflow_instance_events` | `instanceId`、`afterSeq`（可选）、`limit`（可选，缺省 50） | 实例事件流直通 `{events:[{seq(字符串),ts,event,payload}],nextSeq}` |
@@ -89,6 +90,20 @@ description: 当需要创建、查询、修改、删除或列出可复用的工�
 - 挂起等用户（onError=askUser）：`{"status":"waiting-user","pendingDecision":{...}}`——把 question 呈现给用户，决策经工作流实例页落地，之后用 `workflow_instance_status` 跟进。
 - 运行中实例在任务页实时可见（AI 节点=子 agent 会话条目，命令节点=wf.node 轨迹卡片），无需轮询。
 
+### workflow_rerun
+```json
+{"instanceId": "wi_xxx"}
+```
+带输入替换重开失败节点（修正提示词后从该节点续跑）：
+```json
+{"instanceId": "wi_xxx", "nodeId": "n2", "input": "请改用英文重写上一版"}
+```
+阻塞至终态后返回（形态同 workflow_run）：
+- 续跑成功：`{"instanceId":"wi_...","status":"done","durationMs":...,"nodes":[...]}`——从中断节点续跑后的完整节点进度。
+- 再失败：`{"error":...,"nodeId":...,"runNo":...,"context":[...],"hint":"可用 workflow_rerun 从中断节点续跑..."}`——可诊断后再次调用（幂等链），或换 `nodeId` 重开其它节点。
+- 语义要点：仅 `failed` 实例可重开；已完成节点（done/skipped）不重跑，只重跑指定节点及其下游；runNo/runs/events 续号追加；命名 agent 复用同一会话（上下文从任务档案恢复，无需也不能重建）；`input` 替换目标节点输入并持久化到实例快照（AI 节点支持 `{{var}}` 模板；命令节点的输入=command 本体，不参与 input 替换）。
+- 边界：实例关联的原任务已结束/删除（或当前任务不是原任务）时报错——会话档案在原任务目录，只能重新 `workflow_run` 全新运行；实例非 failed（含运行中/挂起）报错。
+
 ### workflow_instance_status
 ```json
 {"instanceId": "wi_xxx"}
@@ -117,3 +132,4 @@ description: 当需要创建、查询、修改、删除或列出可复用的工�
 - `variables` 同理是 JSON 文本；必填变量缺失、引用的模型配置不存在会在运行前报错（`{error}`）。
 - 实例 id（`wi_` 前缀）来自 workflow_run 返回；事件 `seq` 是雪花 ID，一律按字符串处理，续读传上次 `nextSeq`。
 - 运行工作流直接调 `workflow_run`；管理页/侧栏的运行按钮与画布查看是用户侧入口，与工具路径等价。
+- 失败修复优先 `workflow_rerun`（从中断节点续跑，已完成节点不重跑，命名 agent 上下文经任务档案保留）；只有要换变量/从头执行时才重新 `workflow_run`。目标节点重开视为一次决策级重试（不受 maxRuns 次数限制，但次数会累计入 runCount）。

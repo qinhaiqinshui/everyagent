@@ -254,6 +254,11 @@ class DefinitionValidatorTest {
                     c, def.timeoutMs(), def.maxRuns(), def.agent(), def.modelConfigId(), def.input()));
         }
 
+        N timeoutMs(Long t) {
+            return new N(new NodeDef(def.id(), def.type(), def.name(), def.x(), def.y(),
+                    def.command(), t, def.maxRuns(), def.agent(), def.modelConfigId(), def.input()));
+        }
+
         N input(String i) {
             return new N(new NodeDef(def.id(), def.type(), def.name(), def.x(), def.y(),
                     def.command(), def.timeoutMs(), def.maxRuns(), def.agent(), def.modelConfigId(), i));

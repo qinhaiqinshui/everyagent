@@ -27,7 +27,7 @@ import tools.jackson.databind.node.ObjectNode;
 
 /**
  * workflow 工具集（hidden：模型经「工作流编排」skill 文档按名调用）——定义 CRUD 五件 +
- * 运行/查询五件（workflow_run + instance_status/log/events/cancel，§7.20）。
+ * 运行/查询/重开六件（workflow_run + instance_status/log/events/cancel + workflow_rerun，§7.20）。
  *
  * <p>绑定 createHiddenTools 传入的 {@link ToolContext}（随工具回调同生命周期）——
  * <b>零 per-run 捕获</b>，且 ToolContext 本身即 origin 任务的 ExecContext（subjectId=
@@ -39,11 +39,12 @@ import tools.jackson.databind.node.ObjectNode;
  * JSON 编码一层）。错误约定：{@code {"error": "...", "details": [...]}}（details 仅
  * 校验失败带，逐项错误供模型自纠）。
  *
- * <p><b>workflow_run 的阻塞语义（§7.20）</b>：校验（与 workflow.run RPC 共用
- * {@link WorkflowEngine#validateForRun}）→ createInstance(originTaskId=任务 ID) →
- * engine.start(绑定任务) → 阻塞至终态/失败——可中断等待（虚拟线程上阻塞合法）+ 任务
- * terminal() 轮询兜底；任务停止（中断到达或任务收口）→ 级联 engine.cancel 后抛
- * {@link AgentCancelledException}（穿透工具执行回栈，不被转成模型可读错误）。
+ * <p><b>workflow_run 的阻塞语义（§7.20，workflow_rerun 同款复用）</b>：校验（与
+ * workflow.run RPC 共用 {@link WorkflowEngine#validateForRun}）→ createInstance(
+ * originTaskId=任务 ID) → engine.start(绑定任务) → 阻塞至终态/失败——可中断等待
+ * （虚拟线程上阻塞合法）+ 任务 terminal() 轮询兜底；任务停止（中断到达或任务收口）→
+ * 级联 engine.cancel 后抛 {@link AgentCancelledException}（穿透工具执行回栈，不被
+ * 转成模型可读错误）。
  */
 public final class WorkflowTools {
 
@@ -186,6 +187,49 @@ public final class WorkflowTools {
             Thread.currentThread().interrupt();
             cascadeCancel(meta.id());
             throw new AgentCancelledException("task cancelled");
+        }
+        return runResult(terminal);
+    }
+
+    @Tool(description = "从<b>失败</b>的工作流实例中断节点续跑(介入修复:failed→running,runNo 延续,events/runs 继续追加;"
+            + "已完成节点不重跑,只重跑指定节点及其下游;命名 agent 复用同一会话,上下文从任务档案原样恢复)。"
+            + "参数:instanceId 必填(失败实例);nodeId 可选(缺省=失败节点,可指定任意节点重开该分支);"
+            + "input 可选(替换该节点输入,retryWithInput 语义,AI 节点输入支持 {{var}} 模板)。"
+            + "仅 failed 实例可重跑;再失败可再次调用(幂等链);实例关联的原任务已结束/删除时报错"
+            + "(会话档案在原任务目录,只能重新 workflow_run 全新运行)。阻塞语义同 workflow_run"
+            + "(运行至终态才返回,任务停止级联取消),返回形态同 workflow_run。",
+            resultConverter = PlainTextToolCallResultConverter.class)
+    public String workflow_rerun(
+            @ToolParam(description = "失败实例 id(wi_ 前缀,来自 workflow_run 失败返回)") String instanceId,
+            @ToolParam(description = "重开节点 id(可选,缺省=失败节点;可指定任意节点从头重开该分支)", required = false) String nodeId,
+            @ToolParam(description = "替换该节点输入的文本(可选,retryWithInput 语义;AI 节点支持 {{var}} 变量模板)", required = false) String input) {
+        String id = requireInstanceId(instanceId);
+        Optional<InstanceMeta> found = store.findInstance(id);
+        if (found.isEmpty()) {
+            return err("NOT_FOUND: " + id);
+        }
+        InstanceMeta m = found.get();
+        if (m.status() != InstanceStatus.FAILED) {
+            return err("实例不可重跑(当前状态 " + statusWire(m.status()) + "): 仅 failed 实例可从中断节点续跑");
+        }
+        // origin 任务存活校验:实例关联任务须即当前任务且未收口(会话档案在任务目录,
+        // 任务结束/换任务即不可复用——AI 节点上下文无法重建,只能全新运行);
+        // 无 originTaskId(RPC 直启的纯命令流)允许无绑定重跑(无 AI 节点无需任务域)
+        if (m.originTaskId() != null
+                && (!m.originTaskId().equals(ctx.subjectId()) || ctx.terminal())) {
+            return err("原任务已结束/删除,无法复用会话上下文,只能全新运行(重新 workflow_run):"
+                    + " 实例关联任务 " + m.originTaskId() + ",当前任务 " + ctx.subjectId());
+        }
+        InstanceMeta terminal;
+        try {
+            engine.rerun(id, nodeId, input, ctx);
+            terminal = awaitTerminalInterruptible(id);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            cascadeCancel(id);
+            throw new AgentCancelledException("task cancelled");
+        } catch (BadParamsException | dev.everyagent.plugin.api.exception.NotFoundException e) {
+            return err(e.getMessage());
         }
         return runResult(terminal);
     }

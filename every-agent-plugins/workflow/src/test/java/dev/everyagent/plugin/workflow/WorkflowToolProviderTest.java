@@ -52,9 +52,9 @@ class WorkflowToolProviderTest {
         List<ToolCallback> hidden = provider.createHiddenTools(taskCtx());
         assertThat(hidden).extracting(tc -> tc.getToolDefinition().name()).containsExactlyInAnyOrder(
                 "workflow_create", "workflow_get", "workflow_update", "workflow_delete", "workflow_list",
-                "workflow_run", "workflow_instance_status", "workflow_instance_log",
+                "workflow_run", "workflow_rerun", "workflow_instance_status", "workflow_instance_log",
                 "workflow_instance_events", "workflow_instance_cancel");
-        // 常规池为空（十工具全部 hidden）
+        // 常规池为空（十一工具全部 hidden）
         assertThat(provider.createTools(taskCtx())).isEmpty();
         assertThat(provider.pluginId()).isEqualTo("workflow");
     }

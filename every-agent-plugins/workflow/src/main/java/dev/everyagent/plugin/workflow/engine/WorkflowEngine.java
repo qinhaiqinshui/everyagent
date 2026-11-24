@@ -76,6 +76,8 @@ import dev.everyagent.plugin.workflow.store.WorkflowStore;
  * workflow.run RPC 的后端入口。任务内运行经
  * {@link #start(InstanceMeta, ExecContext)} 传入 origin 任务 ExecContext（AI 节点
  * 装配与事件单写任务域的绑定源，§7.20.8）；无绑定的含 AI 节点定义在 start 即拒。
+ * 失败实例的介入修复走 {@link #rerun}（failed→running、runNo 延续、从中断节点重开，
+ * workflow_rerun 工具的后端入口）。
  */
 public final class WorkflowEngine {
 
@@ -183,6 +185,137 @@ public final class WorkflowEngine {
             }
         }
         return false;
+    }
+
+    /**
+     * 失败实例从节点重开（workflow_rerun 工具的引擎内核，§7.20）：failed → running
+     * （meta 原子重写 + wf.status 事件），调度目标节点重跑；阻塞等待在工具层
+     * （{@link #awaitTerminalMeta} 同 run）。
+     *
+     * <p><b>运行态重建</b>：从磁盘 meta + definitionSnapshot 构造新 InstanceRun
+     * （nodeStates/outEdges 从快照重建；runCounter 从 meta.runCounter() 恢复 → runNo
+     * 延续，runs 文件名与 events.jsonl 追加续号；meta 残留 pendingDecision/error 不带入）。
+     * 节点状态经 {@link #restoreNodeStates}：runCount 延续、done/skipped 保持不重跑、
+     * 被失败中断的 running 节点重置 pending 但不激活。
+     *
+     * <p><b>目标节点重开 = 决策级授权</b>：走 {@link #forceSchedule}（与 decide 的 retry
+     * 同源——绕过 maxRuns 上限；否则默认 maxRuns=1 的失败节点一次失败即永锁，重开形同
+     * 虚设）。runCount 不清零：重开运行期内的后续调度（环回/再激活）仍受 maxRuns 约束，
+     * 防无限循环；反复重开由调用方（主 agent 显式工具调用）自律，与督导删除后「决策即
+     * 授权」的口径一致。
+     *
+     * <p><b>input 替换持久化</b>：input 非空时先 {@link #replaceNodeInput}（内存快照换
+     * 引用），随后 failed→running 迁移经 transitionLocked 以 r.snapshot 原子重写 meta.json
+     * ——节点重跑与后续再 rerun 读到的都是新输入（不持久化则重建态读回旧输入）。
+     *
+     * @param nodeId   重开节点（缺省=meta.error.nodeId 失败节点；可指定任意节点重开）
+     * @param input    替换该节点输入（null/空白=不替换；替换 AI 节点 input，retryWithInput 语义）
+     * @param taskExec origin 任务绑定（守卫与 start 同款：与 meta.originTaskId 一致；含 AI
+     *                 节点时必须可用。无 originTaskId 的纯命令流允许 null）
+     * @return 已迁移为 running 的实例元数据
+     * @throws NotFoundException  实例不存在
+     * @throws BadParamsException 非 failed 态 / 已在运行 / 缺快照 / 工作区不在注册表 /
+     *                           无法确定重开节点 / 节点不在快照 / 绑定不一致或不可用
+     */
+    public InstanceMeta rerun(String instanceId, String nodeId, String input, ExecContext taskExec) {
+        InstanceMeta meta = store.findInstance(instanceId)
+                .orElseThrow(() -> new NotFoundException("实例不存在: " + instanceId));
+        if (meta.status() != InstanceStatus.FAILED) {
+            throw new BadParamsException("实例不可重跑(当前状态 " + statusWire(meta.status())
+                    + ",仅 failed 实例可从中断节点续跑): " + instanceId);
+        }
+        if (runs.containsKey(instanceId)) {
+            throw new BadParamsException("实例已在运行: " + instanceId);
+        }
+        Definition snapshot = meta.definitionSnapshot();
+        if (snapshot == null || snapshot.nodesOrEmpty().isEmpty()) {
+            throw new BadParamsException("实例缺定义快照: " + instanceId);
+        }
+        String root = resolveWorkspaceRoot(meta.workspaceId());
+        if (root == null) {
+            throw new BadParamsException("工作区不在注册表(无法解析 workspaceRoot): " + meta.workspaceId());
+        }
+        String targetId = nodeId != null && !nodeId.isBlank() ? nodeId.trim() : null;
+        if (targetId == null && meta.error() != null) {
+            targetId = meta.error().nodeId();
+        }
+        if (targetId == null) {
+            throw new BadParamsException("无法确定重开节点(实例无失败节点记录),请显式指定 nodeId: " + instanceId);
+        }
+        NodeDef target = nodeOf(snapshot, targetId);
+        if (target == null) {
+            throw new BadParamsException("重开节点不在定义快照中: " + targetId);
+        }
+        if (taskExec != null && meta.originTaskId() != null
+                && !meta.originTaskId().equals(taskExec.subjectId())) {
+            throw new BadParamsException("originTaskId 与绑定的任务不一致(meta=" + meta.originTaskId()
+                    + ", 绑定=" + taskExec.subjectId() + "): " + instanceId);
+        }
+        if (containsAiNode(snapshot) && !NodeRunners.usableTaskBinding(taskExec)) {
+            throw new BadParamsException("工作流含 AI 节点,拒绝无任务绑定重跑: " + instanceId
+                    + "。" + NodeRunners.NO_TASK_BINDING_MESSAGE);
+        }
+        InstanceRun r = new InstanceRun(meta, snapshot, root, taskExec);
+        InstanceRun prev = runs.putIfAbsent(instanceId, r);
+        if (prev != null) {
+            throw new BadParamsException("实例已在运行: " + instanceId);
+        }
+        log.info("[workflow] 实例重跑 id={} 定义={} 重开节点={} 替换输入={} originTask={} 绑定任务={}",
+                instanceId, meta.definitionId(), targetId, input == null || input.isBlank() ? "-" : "是",
+                meta.originTaskId(), taskExec == null ? "-" : taskExec.subjectId());
+        synchronized (r.schedLock) {
+            restoreNodeStates(r, meta);
+            if (input != null && !input.isBlank()) {
+                replaceNodeInput(r, target, input);
+            }
+            // failed→running：meta 重写清空 error/pendingDecision + 替换后快照落盘 + wf.status 事件
+            transitionLocked(r, InstanceStatus.RUNNING, null, null, null);
+            forceSchedule(r, target);
+        }
+        return r.meta;
+    }
+
+    /**
+     * 失败实例的节点状态重建（rerun 专用，schedLock 内调用）：runCount 从终态投影延续
+     * （maxRuns 预算跨 rerun 不重置——防无限循环；目标节点经决策级授权绕上限重开）；
+     * done/skipped 保持终态不重跑；running（实例失败时被中断的并行节点）与 failed 重置
+     * pending 但<b>不激活</b>（不在失败路径上，等待未来激活）。投影缺失（worker 重启中断
+     * 实例 nodeStates=null）回退按磁盘 runs 记录数恢复 runCount。
+     */
+    private void restoreNodeStates(InstanceRun r, InstanceMeta meta) {
+        Map<String, InstanceMeta.NodeState> projection = meta.nodeStates();
+        Map<String, Integer> fromRecords = null;
+        for (Map.Entry<String, NodeState> e : r.nodeStates.entrySet()) {
+            String nodeId = e.getKey();
+            NodeState st = e.getValue();
+            InstanceMeta.NodeState p = projection == null ? null : projection.get(nodeId);
+            if (p != null) {
+                st.runCount = p.runCount() == null ? 0 : p.runCount();
+                String s = p.status();
+                st.status = "done".equals(s) || "skipped".equals(s) ? s : "pending";
+            } else {
+                if (fromRecords == null) {
+                    fromRecords = new LinkedHashMap<>();
+                    for (RunRecord rec : store.listRunRecords(r.wsId, r.instanceId)) {
+                        if (rec.nodeId() != null) {
+                            fromRecords.merge(rec.nodeId(), 1, Integer::sum);
+                        }
+                    }
+                }
+                st.runCount = fromRecords.getOrDefault(nodeId, 0);
+                st.status = "pending";
+            }
+        }
+    }
+
+    /** 快照内查节点（id 精确匹配；无= null）。 */
+    private static NodeDef nodeOf(Definition d, String nodeId) {
+        for (NodeDef n : d.nodesOrEmpty()) {
+            if (n != null && n.id().equals(nodeId)) {
+                return n;
+            }
+        }
+        return null;
     }
 
     /** 实例是否在运行（终态即不在）。 */
