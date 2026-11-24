@@ -840,7 +840,7 @@ Input:  queued → consumed | discarded(任务取消)
 - **id 规则**:目录名即 skill id,`[a-z0-9][a-z0-9-]*`;realpath 必须仍在 `skillsDir` 内(拒绝符号链接越界)。
 - **目录扫描(首次懒加载缓存)**:`SkillCatalog` 首次 `scan()` 实扫并缓存,此后只读内存快照;skill 目录变更需重启生效(低频运维,可接受),**唯一例外**:`skill.import` 成功后显式失效缓存重扫。
 - **暴露控制(黑白名单并存,黑名单优先,默认全部暴露)**:**黑名单** = 列出的工作区不暴露;**白名单**非空 = 仅列出的工作区暴露;同时命中按黑名单处理;两个清单都空 = 恢复默认(删除键)。`/` 菜单不受影响(永远全量);配置随 worker 而非全局(换 worker 需重配);旧格式自动迁移。
-- **prompt 注入与菜单(同一份数据)**:`SkillAdvisor` **per-run 装配**(per-run 取 workspaceRoot 现取暴露配置),注入集合 = 目录扫描按当前工作区暴露配置过滤(**无配置 = 全部注入**;workspaceRoot 缺失时宁多勿漏);知识包路径按当前沙箱后端翻译注入(WSL 系翻译为沙箱内路径,非 WSL 原样);`/` 菜单同一份 `SkillCatalog.scan()` 全量列出。**「一次目录扫描 = prompt 与菜单的同一份数据」是本节核心不变量**:不存在「对模型可见但对用户不可见」(或反之)的 skill。子 agent 同规则注入(与主 agent 共用执行入口)。
+- **prompt 注入与菜单(同一份数据)**:`SkillAdvisor` **per-run 装配**(per-run 取 workspaceRoot 现取暴露配置),注入集合 = 目录扫描按当前工作区暴露配置过滤(**无配置 = 全部注入**;workspaceRoot 缺失时宁多勿漏);知识包路径按当前沙箱后端翻译注入(WSL 系翻译为沙箱内路径,非 WSL 原样);索引尾部默认声明**知识包文档化工具可直接调用,即使未出现在随请求下发的工具列表中**(工具全集不随请求下发,skill 文档即 hidden 工具的说明书,§7.14;平台级默认声明,不依赖各 skill 文档自行说明);`/` 菜单同一份 `SkillCatalog.scan()` 全量列出。**「一次目录扫描 = prompt 与菜单的同一份数据」是本节核心不变量**:不存在「对模型可见但对用户不可见」(或反之)的 skill。子 agent 同规则注入(与主 agent 共用执行入口)。
 - **导入/导出**:zip 是**跨 worker/跨机器的迁移格式**(每 skill 一个一级目录,与 skillsDir 布局同构);导出不含 `skill-exposure.json`(身份键是本机工作区根路径,跨机无意义);导入成功即失效缓存重扫(无需重启);同 id 的内置/插件 skill 被覆盖后,重启/插件重载仍按源内容重物化。
 - **不兼容变更**:skill 代码注册通道删除;第三方插件需把 skill 文件搬到插件根 `skill/<id>/skill.md`、在 plugin.json 声明 `"skills": "skill"`、删除 `activate()` 里的物化调用。
 - **明确不做**:目录监听/watch、脚本注册为独立 AI 工具(一律由 AI 用对应解释器执行——bash/python/node 等不限语言,复用现有沙箱与 PermissionGate)、完整 YAML 语法支持、跨 worker 全局暴露配置。

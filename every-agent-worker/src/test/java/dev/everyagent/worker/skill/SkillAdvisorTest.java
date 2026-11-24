@@ -33,10 +33,12 @@ import dev.everyagent.worker.modules.SkillExposureStore;
 import dev.everyagent.worker.plugin.adapters.SkillAdvisorProvider;
 
 /**
- * SkillAdvisor 单源 + 按工作区排除过滤测试。四条钉子:
+ * SkillAdvisor 单源 + 按工作区排除过滤测试。五条钉子:
  * <ol>
  *   <li>无排除配置时<b>全部 skill 进 prompt</b>(含外部/无 frontmatter 的
  *       用户自制 skill——默认全部暴露);</li>
+ *   <li>工具说明<b>默认注入</b>——知识包文档化工具可直接调用,即使未进请求
+ *       工具列表(hidden 工具认知通道,§7.14);</li>
  *   <li>给 {@code plan} 配置排除当前工作区 root 后 {@code plan} 消失而其余仍在
  *       (root 比对两边同款 normalize);</li>
  *   <li>{@code workspaceRoot} 为 null/空白时放行注入(宁多勿漏,即便存在排除配置);</li>
@@ -143,6 +145,22 @@ class SkillAdvisorTest {
         assertInjected(text, "md-to-pdf");
         assertTrue(text.contains("把对话导出为 PDF 文件"),
                 "外部无 frontmatter skill 的 description(正文首行回落)也一并注入");
+    }
+
+    // ---- 钉子 1b:工具说明默认注入(知识包文档化工具可直接调用,即使未进工具列表) ----
+
+    @Test
+    void toolHintInjectedByDefault() throws Exception {
+        SkillAdvisor advisor = new SkillAdvisor(catalog(), store(), null,
+                Path.of("C:", "ws", "alpha").toString());
+
+        String text = injectedSkillsText(advisor);
+        assertNotNull(text, "应注入「# 可用技能」区块");
+        // 工具说明与技能清单同一条 system 消息注入(不单独追加消息,不落会话末位)
+        assertTrue(text.contains("工具说明"), "应默认注入工具说明段落:" + text);
+        assertTrue(text.contains("未出现在工具列表"),
+                "应声明:未出现在工具列表中的工具也可直接调用:" + text);
+        assertTrue(text.contains("直接调用"), "应给出直接调用的指引:" + text);
     }
 
     // ---- 钉子 2:排除当前工作区 root 后该 skill 消失、其余仍在 ----

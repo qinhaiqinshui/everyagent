@@ -38,7 +38,10 @@ import dev.everyagent.worker.os.SandboxPathRegistry;
  * Spring AI 的 prompt / advisor 原语,不手搓 prompt 拼接。知识包正文不在此注入:
  * 文件已物化到系统技能目录 {@code <skillsDir>/<id>/skill.md}(§7.17,对 AI 工具只读
  * 放行),AI 需要执行某技能时自行 {@code read_file} 按知识包绝对路径读取,
- * 避免完整方法论每轮全量占用上下文。
+ * 避免完整方法论每轮全量占用上下文。清单尾部默认追加两条规则:①渐进式披露使用规则
+ * (读知识包再操作);②<b>工具说明</b>——知识包中介绍的工具可直接调用,即使未出现在
+ * 随请求下发的工具列表中(hidden 工具即此形态,§7.14:工具全集不随请求下发,
+ * skill 文档是这些工具的说明书;该声明是平台级默认,不依赖各 skill 文档自行说明)。
  *
  * <p>顺序:作为外层 advisor({@link Ordered#HIGHEST_PRECEDENCE} + 100,高于
  * {@code ToolCallingAdvisor}),保证 skill 索引对整轮(含工具循环每一迭代)可见。
@@ -134,6 +137,12 @@ public class SkillAdvisor implements BaseAdvisor {
         sb.append("\n使用规则:以上技能只需知道其存在与适用场景。实际要执行某个技能时,"
                 + "先按上面的路径用 read_file 读取对应知识包文件,再按其中的详细步骤与规则操作;"
                 + "用不到时不要读取,避免浪费上下文。");
+        // 工具提示(默认注入,§7.14 hidden 工具认知通道):可用工具数量多,平台不把全部
+        // 工具写入随请求下发的工具列表(hidden 池即此形态);没有这句默认声明,模型会以
+        // 「不在工具列表」为由拒绝调用知识包文档化的工具——各 skill 文档无法逐一自证。
+        sb.append("\n工具说明:可用工具数量多,平台不会把所有工具都写入随请求下发的工具列表;"
+                + "知识包中介绍的工具均可直接调用——即使某工具未出现在工具列表中,"
+                + "也按文档给出的名称与参数直接调用,不要以「未在工具列表」为由拒绝调用。");
         List<Message> instructions = new ArrayList<>(chatClientRequest.prompt().getInstructions());
         // 插入位置:首部连续 SystemMessage 区的末尾(系统指令区)。
         // 不得 add 到会话末位——末位必须是 user/ToolResponse 消息,追加系统消息会破坏
