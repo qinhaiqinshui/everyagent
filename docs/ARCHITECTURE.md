@@ -252,7 +252,7 @@ worker 端 `RpcDispatcher` 注册方法;应答回**请求来源连接**的 `evt`
 | `search` | **统一搜索入口(破坏性变更:取代已移除的 `fs.search`/`fs.find`/`task.search`,不保留兼容壳)**——**核心零类型感知**:只「遍历 `SearchProviderRegistry`(可选按 `kinds` 过滤)→ 触发 provider → 聚合」,类型清单完全来自注册表;入参仅 `workspace`(必带,沙箱 jailed)/`pattern`(核心不解释)/`kinds?`/`filters?`(**不透明参数袋**,key 为 `${kind}.${field}`,核心绝不解释内容);内置 `file-content`/`file-name`/`task` 三引擎均为 `SearchProvider`,与插件 provider 同权(§8.5);大结果复用 `rpc.data` 分批 |
 | `git.status` / `log` / `diff` / `show` / `commit` / `pull` / `push` / `discard` / `init` / `clone` / `remote.add` / `remote.list` | 工作区 git 快操作(git 插件注册,必带 workspace);由 `NativeGit` 调宿主原生 git argv 直传执行(§7.12);大型迁移(批量 checkout / 大仓库迁移)建为 Task,进度走任务流 |
 | `git.credential.save` | 保存 git 远端凭证(AES-GCM 加密落盘,§7.12;只写不读回) |
-| `workflow.*` | 工作流插件自注册的方法族:`def.list`/`def.get`/`def.save`/`def.delete`/`def.export`/`def.import`、`run`、`instance.list`/`instance.get`/`instance.runLog`/`instance.events`/`instance.cancel`/`instance.delete`/`instance.decide`/`instance.dataDir`(实例目录绝对路径,前端「复制工作流路径」按需拉取,`task.dataDir` 同款纪律:路径不进列表 wire);**写操作必带 workspace 参数**(同 `task.run` 纪律);数据住 `workspaces/<id>/workflows/`(§7.15);实例事件混合模型:实时增量由插件扇出到实例流频道(§5.2),历史/断线补齐走 `instance.events` 拉取,前端按 seq 去重合流(§7.13 广播形态) |
+| `workflow.*` | 工作流插件自注册的方法族:`def.list`/`def.get`/`def.save`/`def.delete`/`def.export`/`def.import`、`run`(RPC 直启仅限无 AI 节点的定义——含 AI 节点须任务内运行,§7.20.8)、`instance.list`/`instance.get`/`instance.runLog`/`instance.events`/`instance.cancel`/`instance.delete`/`instance.decide`/`instance.dataDir`(实例目录绝对路径,前端「复制工作流路径」按需拉取,`task.dataDir` 同款纪律:路径不进列表 wire);**写操作必带 workspace 参数**(同 `task.run` 纪律);数据住 `workspaces/<id>/workflows/`(§7.15);实例事件混合模型:实时增量由插件扇出到实例流频道(§5.2),历史/断线补齐走 `instance.events` 拉取,前端按 seq 去重合流(§7.13 广播形态) |
 | `slash.list` / `select` / `cancel` / `taskTokens.apply` / `taskTokens.list` | 斜杠命令清单与选中/取消、任务级 token 应用与现值拉取(§7.16) |
 | `mention.query` | `@` 文件搜索(后端子序列模糊匹配,独立于统一 `search`,不属搜索面板) |
 | `rpc.cancel` | 取消进行中的长 RPC(Future.cancel) |
@@ -698,8 +698,8 @@ worker 的运行期责任链统一为 filter 形态（`result = next(ctx)`）：
 │   └─ <workspaceId>/workflows/      # 工作流插件自持数据(与 tasks/ 平级;工作区即隔离边界,RPC 写操作必带 workspace、root 运行时经注册表解析,同 task 域纪律)
 │       ├─ definitions/<wf_id>/definition.json     # 工作流定义
 │       └─ instances/<wi_id>/                      # 一次运行 = 一个实例(自包含、可独立回放;实例持定义深拷贝快照)
-│           ├─ meta.json / events.jsonl / runs/   # 实例元数据 / 实例事件日志(追加写) / 每次节点运行一文件
-│           └─ agents/<name>.jsonl                 # 命名 agent 会话日志(形态同 task 域 per-agent jsonl,§7.20.7)
+│           ├─ meta.json / events.jsonl / runs/   # 实例元数据(含 originTaskId 关联锚点) / 实例事件日志(追加写) / 每次节点运行一文件
+│           └─ (agents/ 已移除:AI 节点会话单写 origin 任务域 tasks/<taskId>/<agentId>.jsonl,§7.20.8)
 ├─ sandbox/                          # 沙箱持久状态(home/opt/usr-local/resolv.conf/env;worker.sandbox.persistent-root 可覆盖)
 │   └─ distro/                       # WSL 托管发行版 rootfs(原 wsl/distro 迁入;运行期状态,可整体重装)
 ├─ skill-exposure.json             # skill 按工作区暴露配置(黑白名单并存,黑名单优先) {"<skillId>":{"blacklist":["<workspaceRoot>",...],"whitelist":["<workspaceRoot>",...]}}(身份键=工作区根路径;缺文件=空表=全部暴露,§7.17)
@@ -1056,11 +1056,20 @@ public interface AgentFactory {
 
 #### 7.20.7 工作流层复用终态
 
-工作流层(workflow 内置插件)`WorkflowRuntime implements ExecContext`(subjectId=实例 ID、dataDir=工作流数据目录、emitter=工作流事件口、agentFactory 槽位经 `agentFactoryFor(this)` 预绑定)——同一条授权链、同一工具链、同一批**域中性** advisor 零改动复用(§7.14.2 分层:工作区 → task 层/工作流层平级编排 → agent 层 → 基础设施层,下层不知道上层);subagent/审议能力的执行链同样零任务域假设,是否对工作流开放由工作流层在装配期决定(如剔除 agent 族工具防生命周期逃逸)。事件管道(§14.0)与执行上下文管道双通道同构:工作流层实现自己的语义事件→wire 映射与自持事件日志。
+工作流层(workflow 内置插件)`WorkflowRuntime implements ExecContext`(subjectId=实例 ID、dataDir=工作流数据目录、emitter=工作流事件口——实例域事件路由进 events.jsonl)——同一条授权链、同一工具链、同一批**域中性** advisor 零改动复用(§7.14.2 分层:工作区 → task 层/工作流层平级编排 → agent 层 → 基础设施层,下层不知道上层);subagent/审议能力的执行链同样零任务域假设,是否对工作流开放由工作流层在装配期决定(如剔除 agent 族工具防生命周期逃逸)。事件管道(§14.0)与执行上下文管道双通道同构:工作流层实现自己的语义事件→wire 映射与自持事件日志。agent 装配不在本层:`WorkflowRuntime.agentFactory()` 恒 null,AI 会话一律经 origin 任务的 ExecContext(§7.20.8)。
 
 - **非任务主体的两个获取口**(plugin-api `WorkerServices`):`agentFactoryFor(ExecContext)` 返回绑定到该 ExecContext 的 `AgentFactory`(静态代理,与任务域 `ExecContext.agentFactory()` 同一绑定形态——非任务主体没有任务域槽位可走,经 worker 服务口取绑定工厂);`modelConfigs()` 返回模型配置全表(apiKey 天然不在返回值,同 `config.get` 掩码纪律),供非任务主体解析节点级模型配置。
 - **不变式:任务域 advisor 不上非任务主体**。`AdvisorContext.isTaskSubject()` 是统一域判定(实现 = `agentEntity().execution() instanceof TaskRuntime`,不用 `ctx instanceof`、不依赖按 subjectId 查任务服务);任务域专属 advisor——消费任务域持久化契约(rounds.jsonl、file-changes 分片)或任务级开关副作用(git 自动同步 token)的——其 provider 的 `appliesTo` 必须以它过滤;后续新增 advisor 注册时必须自检「是否任务域专属」,是则同样过滤。
-- **工作流 agent 上下文模型**:命名 agent = 实例内一条持续会话线(跨节点延续)。会话持久化照抄 task 域形态:per-agent jsonl 事件流 + `conversationArchive()` 槽位全保真重建;运行即销毁、冷启动(同任务域 D18/D22 哲学)。隔离边界五层互相独立:工作区(存储隔离,§7.15)/ 实例间 / agent 间 / supervisor 介入会话 / 与 task 子 agent 体系。**同 agent 名节点全局互斥 = 会话线串行的不变式**:同一条会话线被并行节点交错读写即上下文损坏,调度器以互斥保证串行。
+- **工作流 agent 上下文模型**:命名 agent = 实例内一条持续会话线(跨节点延续),会话档案与呈现**单写 origin 任务域**(§7.20.8);运行即销毁、冷启动(同任务域 D18/D22 哲学)。隔离边界互相独立:工作区(存储隔离,§7.15)/ 实例间 / agent 间 / supervisor 介入会话 / 与 task 子 agent 体系。**同 agent 名节点全局互斥 = 会话线串行的不变式**:同一条会话线被并行节点交错读写即上下文损坏,调度器以互斥保证串行。
+
+#### 7.20.8 工作流层任务嵌入契约
+
+工作流嵌入任务体系运行:任务层是 AI 会话/呈现的唯一载体,工作流域只记节点级事实。契约四条:
+
+- **originTaskId 关联**:`InstanceMeta.originTaskId`(可空;`wf.created` 事件 payload 同步携带)是实例↔任务的持久锚点;运行期绑定 = 引擎运行入口传入的 origin 任务 `ExecContext`(存实例运行态),AI 会话的 agentFactory/emitter/conversationArchive 全部经它取。RPC 直启(`workflow.run`)无绑定,仅限无 AI 节点的定义(测试/兼容通道)。
+- **AI 节点会话单写任务域**:AI 节点 = origin 任务里的子 agent——经任务 ExecContext 的 agentFactory 装配(creator=workflow),事件(user.message/message/tool.result/usage 与瞬态)单写任务 EventLog(落 `tasks/<taskId>/<agentId>.jsonl`,任务页呈现/回放/rerun 重建的唯一档案);agentId 约定 `<name>#<instanceId>`(命名,跨节点复用)/`<nodeId>.<runNo>`(匿名一次性)。**fail-fast**:无 originTaskId 绑定或绑定任务事件口已失效时,含 AI 节点的工作流运行被拒绝(错误引导经任务运行)。
+- **实例只记节点级三样**:`instances/<wiId>/` 下 meta.json / events.jsonl(node.* 输入输出错误预览) / `runs/<0007_nodeId>.json`,所有节点类型一律;agents/ 目录职责移除(含督导会话——supervisor 会话同样走任务域)。
+- **任务内运行的错误语义(目标契约)**:supervisor=主 agent,节点失败即工作流运行失败、错误上下文回传调用方(fail-fast;独立督导 agent 会话退役,retry/retryWithInput 决策内核保留供 rerun);`workflow_rerun` 从中断节点续跑——同 agentId 复用、上下文从任务档案重建、依赖 origin 任务存活(任务已删除/不在运行则只能全新运行)。
 
 ---
 

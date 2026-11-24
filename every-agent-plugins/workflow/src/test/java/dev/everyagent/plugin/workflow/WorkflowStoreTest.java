@@ -14,7 +14,6 @@ import org.junit.jupiter.api.io.TempDir;
 
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.plugin.api.exception.BadParamsException;
-import dev.everyagent.plugin.workflow.model.AgentEventLine;
 import dev.everyagent.plugin.workflow.model.Definition;
 import dev.everyagent.plugin.workflow.model.EventLine;
 import dev.everyagent.plugin.workflow.model.InstanceMeta;
@@ -181,26 +180,56 @@ class WorkflowStoreTest {
     @Test
     void createInstanceDeepCopiesSnapshotAndEmitsCreatedEvent() {
         Definition def = store.saveDefinition(WS_A, sampleDef());
-        InstanceMeta meta = store.createInstance(def, Map.of("novelName", "星际牧羊人"));
+        InstanceMeta meta = store.createInstance(def, Map.of("novelName", "星际牧羊人"), "task_origin9");
         assertThat(meta.id()).startsWith("wi_");
         assertThat(meta.status()).isEqualTo(InstanceStatus.CREATED);
         assertThat(meta.definitionSnapshot()).isEqualTo(def);
+        assertThat(meta.originTaskId()).isEqualTo("task_origin9");
         // 快照独立：深拷贝经 JSON 往返（不同对象图），原定义引用不串扰实例
         InstanceMeta reread = store.findInstance(meta.id()).orElseThrow();
         assertThat(reread.definitionSnapshot().nodesOrEmpty())
                 .isNotSameAs(def.nodesOrEmpty())
                 .hasSize(2);
-        // 目录布局
+        assertThat(reread.originTaskId()).isEqualTo("task_origin9");
+        // 目录布局：只建实例目录与 runs/（无 agents/——AI 会话单写任务域）
         Path dir = workflowsRoot(WS_A).resolve("instances").resolve(meta.id());
         assertThat(dir.resolve("meta.json")).isRegularFile();
         assertThat(dir.resolve("runs")).isDirectory();
-        assertThat(dir.resolve("agents")).isDirectory();
-        // wf.created 事件
+        assertThat(dir.resolve("agents")).doesNotExist();
+        // wf.created 事件（originTaskId 同步携带）
         List<EventLine> events = store.readEvents(WS_A, meta.id(), 0, 0);
         assertThat(events).hasSize(1);
         assertThat(events.get(0).event()).isEqualTo("wf.created");
         assertThat(events.get(0).payload().path("instanceId").asString()).isEqualTo(meta.id());
         assertThat(events.get(0).payload().path("variables").path("novelName").asString()).isEqualTo("星际牧羊人");
+        assertThat(events.get(0).payload().path("originTaskId").asString()).isEqualTo("task_origin9");
+        // 无 origin：meta 省略字段（NON_NULL），payload 不带 originTaskId（前向兼容）
+        InstanceMeta plain = store.createInstance(def, Map.of());
+        assertThat(plain.originTaskId()).isNull();
+        assertThat(Json.write(plain)).doesNotContain("originTaskId");
+        assertThat(store.readEvents(WS_A, plain.id(), 0, 0).get(0).payload().has("originTaskId"))
+                .isFalse();
+    }
+
+    @Test
+    void originTaskIdSerializationForwardCompatible() throws Exception {
+        // 旧版本 meta.json（无 originTaskId 字段）→ 反序列化得 null，不抛（前向兼容）
+        Definition def = store.saveDefinition(WS_A, sampleDef());
+        InstanceMeta meta = store.createInstance(def, Map.of());
+        Path file = workflowsRoot(WS_A).resolve("instances").resolve(meta.id()).resolve("meta.json");
+        tools.jackson.databind.node.ObjectNode legacy = (tools.jackson.databind.node.ObjectNode) Json.parse(
+                Files.readString(file));
+        legacy.remove("originTaskId");
+        dev.everyagent.plugin.api.util.AtomicFiles.writeText(file, Json.write(legacy));
+        InstanceMeta back = Json.MAPPER.readValue(file.toFile(), InstanceMeta.class);
+        assertThat(back.originTaskId()).isNull();
+        assertThat(back.id()).isEqualTo(meta.id());
+        // 带值往返保留
+        InstanceMeta withOrigin = store.createInstance(def, Map.of(), "task_keep");
+        InstanceMeta reread = Json.MAPPER.readValue(
+                workflowsRoot(WS_A).resolve("instances").resolve(withOrigin.id())
+                        .resolve("meta.json").toFile(), InstanceMeta.class);
+        assertThat(reread.originTaskId()).isEqualTo("task_keep");
     }
 
     @Test
@@ -240,7 +269,7 @@ class WorkflowStoreTest {
 
     private static InstanceMeta withStatus(InstanceMeta m, InstanceStatus status) {
         return new InstanceMeta(m.schemaVersion(), m.id(), m.definitionId(), m.definitionName(),
-                m.workspaceId(), m.definitionSnapshot(), m.variables(), status,
+                m.workspaceId(), m.originTaskId(), m.definitionSnapshot(), m.variables(), status,
                 m.createdAt(), m.startedAt(), m.endedAt(), m.durationMs(),
                 m.error(), m.pendingDecision(), m.nodeStates(), m.runCounter());
     }
@@ -361,26 +390,6 @@ class WorkflowStoreTest {
         assertThat(store.readEvents(WS_A, meta.id(), 0, 2)).hasSize(2);
         // 内存尾部
         assertThat(store.tailEvents(WS_A, meta.id(), 2)).hasSize(2);
-    }
-
-    @Test
-    void agentJsonlAppendOnlyAndCorruptLineSkipped() throws Exception {
-        Definition def = store.saveDefinition(WS_A, sampleDef());
-        InstanceMeta meta = store.createInstance(def, Map.of());
-        AgentEventLine l1 = store.appendAgentEvent(WS_A, meta.id(), "writer",
-                "user.message", "writer#" + meta.id(), Json.obj().put("content", "拟大纲"));
-        store.appendAgentEvent(WS_A, meta.id(), "writer",
-                "message", "writer#" + meta.id(), Json.obj().put("text", "大纲如下"));
-        Path file = workflowsRoot(WS_A).resolve("instances").resolve(meta.id())
-                .resolve("agents").resolve("writer.jsonl");
-        List<String> lines = Files.readAllLines(file);
-        assertThat(lines).hasSize(2); // 追加不重写
-        assertThat(l1.agentId()).isEqualTo("writer#" + meta.id());
-
-        Files.writeString(file, "{ broken line\n", java.nio.file.StandardOpenOption.APPEND);
-        List<AgentEventLine> back = store.readAgentEvents(WS_A, meta.id(), "writer");
-        assertThat(back).hasSize(2); // 坏行跳过
-        assertThat(back.get(0).event()).isEqualTo("user.message");
     }
 
     // ── 变更监听（worker 级插件通知频道的信号源，架构 §5.2） ──

@@ -14,13 +14,14 @@ import dev.everyagent.contract.json.Json;
 import dev.everyagent.plugin.api.WorkerServices;
 import dev.everyagent.plugin.api.agent.Agent;
 import dev.everyagent.plugin.api.agent.AgentBuilder;
+import dev.everyagent.plugin.api.agent.ConversationArchive;
 import dev.everyagent.plugin.api.event.Usage;
 import dev.everyagent.plugin.api.event.Events;
+import dev.everyagent.plugin.api.execution.ExecContext;
 import dev.everyagent.plugin.api.model.EmitEvent;
 import dev.everyagent.plugin.api.proto.SnowflakeId;
 import dev.everyagent.plugin.api.spi.ExecResult;
 import dev.everyagent.plugin.api.util.RootCause;
-import dev.everyagent.plugin.workflow.engine.WorkflowRuntime.NodeExecView;
 import dev.everyagent.plugin.workflow.model.AgentDef;
 import dev.everyagent.plugin.workflow.model.ConditionDef;
 import dev.everyagent.plugin.workflow.model.Definition;
@@ -31,8 +32,9 @@ import dev.everyagent.plugin.workflow.model.VariableDef;
 import org.springframework.ai.chat.messages.Message;
 
 /**
- * 节点执行器三件套：命令节点（NativeExec 直跑）/ AI 节点（严格按「会话时序 ①-⑥」
- * 走 agentFactoryFor 装配链）/ supervisor 节点（错误策略督导决策协议）。
+ * 节点执行器三件套：命令节点（NativeExec 直跑）/ AI 节点（照搬子 agent 插件模式，经
+ * origin 任务 ExecContext 的 agentFactory 装配，事件单写任务域，§7.20.8）/ supervisor
+ * 节点（错误策略督导决策协议，同一任务 ExecContext 装配链）。
  *
  * <p>执行器只负责「把一个节点跑出结果」，调度/落盘/事件/错误策略收口在 {@link WorkflowEngine}
  * ——本类无状态、不持实例内存（锁由引擎传入）。
@@ -196,18 +198,43 @@ public final class NodeRunners {
         }
     }
 
+    // ══════════════════════════ 任务绑定守卫 ══════════════════════════
+
+    /** 无/失效任务绑定时 AI 会话的拒绝文案（引擎 start 与节点运行共用一条口径）。 */
+    static final String NO_TASK_BINDING_MESSAGE =
+            "工作流 AI 会话必须运行在任务内(实例未绑定 origin 任务,或绑定任务的事件口已失效): "
+            + "请经任务运行工作流(在任务中触发运行,使 AI 节点作为任务子 agent 落任务事件流); "
+            + "workflow.run RPC 直启不支持含 AI 节点的工作流";
+
+    /** 绑定是否可用：非 null、事件口在场且主体未收口（emitterOf 语义，终态=null 等价）。 */
+    static boolean usableTaskBinding(ExecContext taskExec) {
+        return taskExec != null && taskExec.emitter() != null && !taskExec.terminal();
+    }
+
+    /** 节点级守卫：绑定不可用即抛（走节点失败路径，错误信息即 {@link #NO_TASK_BINDING_MESSAGE}）。 */
+    static void requireTaskBinding(ExecContext taskExec) {
+        if (!usableTaskBinding(taskExec)) {
+            throw new IllegalStateException(NO_TASK_BINDING_MESSAGE);
+        }
+    }
+
     // ══════════════════════════ AI 节点 ══════════════════════════
 
     /**
-     * AI 节点执行器——严格按「Agent 上下文模型 §2」会话时序 ①-⑥：
-     * ①持 agent fair 锁 → ②conversationArchive 载种子（含交替不变量补齐）→
-     * ③发 user.message 指令轮（agentId={@code <name>#<wi>}，落盘，文件自包含）→
-     * ④agentFactoryFor(view).create(agentKey, configId).systemPrompt(声明).conversation(种子)
-     * .userInput(渲染后输入).tools(剔除表, REMOVE).build() → ⑤run()（事件实时落盘）→
+     * AI 节点执行器——照搬 SubAgentManager 的子 agent 模式（AI 节点 = origin 任务里的
+     * 子 agent，§7.20.8）：
+     * ①持 agent fair 锁 → ②经任务 {@code conversationArchive} 载种子（命名 agent；
+     * 含交替不变量补齐）→ ③经任务 emitter 发 user.message 指令轮（agentId=
+     * {@code <name>#<wi>}，落 {@code tasks/<taskId>/<agentId>.jsonl}，文件自包含）→
+     * ④{@code taskExec.agentFactory().create(agentKey, configId)}.systemPrompt(声明)
+     * .conversation(种子).userInput(渲染后输入).tools(剔除表, REMOVE).creator("workflow").build()
+     * → ⑤run()（事件实时单写任务 EventLog——瞬态 thinking/delta 与持久 user.message/
+     * message/tool.result/usage 全走任务事件口，实例目录不落 agent 会话）→
      * ⑥lastText()/conversation()/usage() 收口交引擎；锁在 finally 释放（锁粒度=整个 run）。
      *
-     * <p>匿名 AI 节点（agent 未指定）= 一次性会话：无种子、不发指令轮、不落 agents/、
-     * agentId={@code <nodeId>.<runNo>}（不带 {@code #<wi>} 归户后缀 → 事件不持久化）。
+     * <p>匿名 AI 节点（agent 未指定）= 一次性会话：无种子、agentId={@code <nodeId>.<runNo>}
+     * （不复用）；指令轮照发（任务页可见、档案自包含）。无任务绑定的 AI 节点运行拒绝
+     * （{@link #requireTaskBinding}——fail-fast，引导经任务运行）。
      */
     public static final class AiNodeRunner {
 
@@ -215,13 +242,14 @@ public final class NodeRunners {
         }
 
         /**
-         * @param agentLock 命名 agent 的 fair 锁（匿名节点传 null）
+         * @param agentLock   命名 agent 的 fair 锁（匿名节点传 null）
          * @param visibleToAi token 拍平后的输入（AI 实际所见）
          * @param rendered    变量渲染后的原文（opaque token 原串留档）
          */
-        public NodeResult run(WorkerServices services, WorkflowRuntime runtime, String instanceId,
+        public NodeResult run(ExecContext taskExec, String instanceId,
                 Definition snapshot, NodeDef node, int runNo, String rendered, String visibleToAi,
                 ReentrantLock agentLock) throws InterruptedException {
+            requireTaskBinding(taskExec);
             if (agentLock != null) {
                 agentLock.lockInterruptibly();
             }
@@ -231,25 +259,21 @@ public final class NodeRunners {
                 AgentDef agentDef = agentName == null ? null : findAgent(snapshot, agentName);
                 String configId = node.modelConfigId() != null ? node.modelConfigId()
                         : (agentDef != null ? agentDef.modelConfigId() : null);
-                NodeExecView view = runtime.view(configId);
                 String agentKey = agentName != null
                         ? agentName + "#" + instanceId
                         : node.id() + "." + runNo;
 
-                // ① 载种子（磁盘事件流 → 全保真会话；失败空表不抛）
+                // ① 载种子（任务档案 → 全保真会话；匿名一次性无种子；档案口缺失/读失败空表不抛）
                 List<Message> seed = List.of();
                 if (agentName != null) {
-                    seed = AgentSessions.ensureAlternation(
-                            runtime.conversationArchive().load(agentKey));
+                    seed = AgentSessions.ensureAlternation(loadArchive(taskExec, agentKey));
                 }
 
-                // ② 指令轮先行落盘（user.message 带归户 agentId——jsonl 自包含，续跑重建依据）
-                if (agentName != null) {
-                    emitInstruction(runtime, agentKey, visibleToAi, rendered);
-                }
+                // ② 指令轮经任务事件口落盘（user.message 带归户 agentId——任务档案自包含，续跑重建依据）
+                emitInstruction(taskExec, agentKey, visibleToAi, rendered);
 
-                // ③ 装配：每 run 新建 AgentEntity，运行即销毁（连续性由磁盘事件流保证）
-                AgentBuilder builder = services.agentFactoryFor(view)
+                // ③ 装配：任务 ExecContext 的 agentFactory（每 run 新建实体，连续性由任务档案保证）
+                AgentBuilder builder = taskExec.agentFactory()
                         .create(agentKey, configId)
                         .title(node.name() == null ? node.id() : node.name())
                         .creator("workflow")
@@ -264,7 +288,7 @@ public final class NodeRunners {
                 builder.userInput(visibleToAi);
                 Agent agent = builder.build();
 
-                // ④ run（同步阻塞本虚拟线程；事件经 emitter 双路由实时追加 per-agent jsonl）
+                // ④ run（同步阻塞本虚拟线程；事件经 agent 级 emitter 单写任务 EventLog）
                 try {
                     agent.run();
                     agent.claimTerminal("completed");
@@ -298,7 +322,7 @@ public final class NodeRunners {
 
     /**
      * supervisor 执行器（错误策略 onError=supervisor）：以结构化错误上下文跑督导会话线
-     * （固定名 supervisor，agents/supervisor.jsonl 续写——连续介入记得此前决策），
+     * （固定名 supervisor，经任务档案续写——连续介入记得此前决策），
      * 输出纯 JSON 决策（剥 ```json 围栏容忍）；解析失败重试一次，再失败返回 null
      * （调用方降级 askUser）。督导自身异常（模型故障等）同样返回 null 走降级。
      */
@@ -311,14 +335,14 @@ public final class NodeRunners {
          * @param errorContext 结构化错误上下文（{@link #buildErrorContext} 产出）
          * @return 解析成功的决策；两轮均不可解析/督导自身失败 → null（降级 askUser）
          */
-        public Decision decide(WorkerServices services, WorkflowRuntime runtime, String instanceId,
+        public Decision decide(ExecContext taskExec, String instanceId,
                 Definition snapshot, String errorContext, ReentrantLock supervisorLock)
                 throws InterruptedException {
             String input = errorContext;
             for (int attempt = 0; attempt <= SUPERVISOR_PARSE_RETRIES; attempt++) {
                 String output;
                 try {
-                    output = runSupervisorAgent(services, runtime, instanceId, snapshot, input,
+                    output = runSupervisorAgent(taskExec, instanceId, snapshot, input,
                             supervisorLock);
                 } catch (InterruptedException ie) {
                     throw ie;
@@ -337,12 +361,13 @@ public final class NodeRunners {
             return null;
         }
 
-        /** 督导会话线执行（同 AI 节点命名 agent 机制；失败抛出由 decide 处理）。 */
-        private String runSupervisorAgent(WorkerServices services, WorkflowRuntime runtime,
-                String instanceId, Definition snapshot, String input,
-                ReentrantLock supervisorLock) throws InterruptedException {
+        /** 督导会话线执行（同 AI 节点命名 agent 机制，经任务 ExecContext 装配；失败抛出由 decide 处理）。 */
+        private String runSupervisorAgent(ExecContext taskExec, String instanceId,
+                Definition snapshot, String input, ReentrantLock supervisorLock)
+                throws InterruptedException {
             supervisorLock.lockInterruptibly();
             try {
+                requireTaskBinding(taskExec);
                 String agentKey = SUPERVISOR_AGENT + "#" + instanceId;
                 String configId = snapshot.supervisor() == null ? null
                         : snapshot.supervisor().modelConfigId();
@@ -352,10 +377,9 @@ public final class NodeRunners {
                                 ? snapshot.supervisor().systemPrompt() : DEFAULT_SUPERVISOR_PROMPT;
 
                 List<Message> seed = AgentSessions.ensureAlternation(
-                        runtime.conversationArchive().load(agentKey));
-                emitInstruction(runtime, agentKey, input, input);
-                NodeExecView view = runtime.view(configId);
-                Agent agent = services.agentFactoryFor(view)
+                        loadArchive(taskExec, agentKey));
+                emitInstruction(taskExec, agentKey, input, input);
+                Agent agent = taskExec.agentFactory()
                         .create(agentKey, configId)
                         .title("工作流督导")
                         .creator("workflow-supervisor")
@@ -386,16 +410,33 @@ public final class NodeRunners {
 
     // ══════════════════════════ 共用 ══════════════════════════
 
-    /** 发 user.message 指令轮（带归户 agentId；rawContent 留档 opaque token 原串）。 */
-    static void emitInstruction(WorkflowRuntime runtime, String agentKey, String visibleToAi,
+    /** 经任务档案口读 agent 会话档案（未绑定/端口缺失/IO 失败返回空表，不抛）。 */
+    private static List<Message> loadArchive(ExecContext taskExec, String agentId) {
+        ConversationArchive archive = taskExec.conversationArchive();
+        if (archive == null) {
+            return List.of();
+        }
+        try {
+            List<Message> prior = archive.load(agentId);
+            return prior != null ? prior : List.of();
+        } catch (RuntimeException e) {
+            log.warn("[workflow] 会话档案读取失败(按无历史处理) agent={} subject={}",
+                    agentId, taskExec.subjectId(), e);
+            return List.of();
+        }
+    }
+
+    /** 发 user.message 指令轮（经任务事件口，带归户 agentId；rawContent 留档 opaque token 原串）。 */
+    static void emitInstruction(ExecContext taskExec, String agentKey, String visibleToAi,
             String rawRendered) {
         try {
-            runtime.emitter().emit(EmitEvent.of(SnowflakeId.next(), Events.USER_MESSAGE,
+            taskExec.emitter().emit(EmitEvent.of(SnowflakeId.next(), Events.USER_MESSAGE,
                     agentKey, null, null, visibleToAi, null,
                     Map.of("rawContent", rawRendered == null ? "" : rawRendered),
                     EmitEvent.Mode.REPLACE));
         } catch (RuntimeException e) {
-            log.warn("[workflow] 指令轮落盘失败 agent={}", agentKey, e);
+            log.warn("[workflow] 指令轮落盘失败 agent={} subject={}", agentKey,
+                    taskExec.subjectId(), e);
         }
     }
 

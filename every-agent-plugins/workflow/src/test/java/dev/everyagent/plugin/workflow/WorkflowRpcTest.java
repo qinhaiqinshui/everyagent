@@ -25,6 +25,7 @@ import dev.everyagent.plugin.api.rpc.RpcMethod;
 import dev.everyagent.plugin.workflow.engine.WorkflowEngine;
 import dev.everyagent.plugin.workflow.model.AgentDef;
 import dev.everyagent.plugin.workflow.model.Definition;
+import dev.everyagent.plugin.workflow.model.EventLine;
 import dev.everyagent.plugin.workflow.model.InstanceMeta;
 import dev.everyagent.plugin.workflow.model.InstanceStatus;
 import dev.everyagent.plugin.workflow.model.NodeDef;
@@ -143,10 +144,21 @@ class WorkflowRpcTest {
     }
 
     private InstanceMeta runToTerminal(Definition d, Map<String, String> vars) throws InterruptedException {
-        InstanceMeta m = engine.start(store.createInstance(d, vars));
+        Fakes.FakeTaskExec task = new Fakes.FakeTaskExec(home.resolve("workspaces"), "ws_run",
+                "task_" + taskSeq.incrementAndGet(), factory);
+        InstanceMeta m = engine.start(store.createInstance(d, vars, task.subjectId()), task);
         assertThat(engine.awaitTerminal(m.id(), 20_000)).as("实例终态").isTrue();
         return store.findInstance(m.id()).orElseThrow();
     }
+
+    /** 绑定任务 ExecContext 启动（长轮询/取消/决策等含 AI 节点定义的引擎直启路径）。 */
+    private InstanceMeta startBound(Definition d) {
+        Fakes.FakeTaskExec task = new Fakes.FakeTaskExec(home.resolve("workspaces"), "ws_run",
+                "task_" + taskSeq.incrementAndGet(), factory);
+        return engine.start(store.createInstance(d, Map.of(), task.subjectId()), task);
+    }
+
+    private final java.util.concurrent.atomic.AtomicInteger taskSeq = new java.util.concurrent.atomic.AtomicInteger();
 
     private void await(BooleanSupplier cond, String what) throws InterruptedException {
         long deadline = System.currentTimeMillis() + 20_000;
@@ -415,13 +427,12 @@ class WorkflowRpcTest {
 
     @Test
     void runCreatesInstanceAndStartsEngine() throws Exception {
-        factory.script("writer", key -> Fakes.Script.echo("写作完成"));
+        // RPC 直启兼容通道：无 AI 节点定义照常直启（含 AI 节点见下方拒绝测试）
         Definition d = store.saveDefinition("ws_run", DefinitionValidatorTest.withVariables(
                 DefinitionValidatorTest.def(
                         DefinitionValidatorTest.node("s", "start"),
-                        DefinitionValidatorTest.node("a", "ai").agent("writer").input("写《{{title}}》"),
-                        DefinitionValidatorTest.edge("e1", "s", "a"),
-                        new AgentDef("writer", "gpt5", null)),
+                        DefinitionValidatorTest.node("c", "command").command("echo 《{{title}}》"),
+                        DefinitionValidatorTest.edge("e1", "s", "c")),
                 new VariableDef("title", null, true, null, null)));
 
         Call c = call(p().put("workspace", "ws_run").put("definitionId", d.id())
@@ -434,6 +445,28 @@ class WorkflowRpcTest {
         assertThat(m.status()).isEqualTo(InstanceStatus.DONE);
         assertThat(m.variablesOrEmpty()).containsEntry("title", "星际牧羊人");
         assertThat(m.definitionId()).isEqualTo(d.id());
+        assertThat(m.originTaskId()).isNull();
+    }
+
+    @Test
+    void runRejectsAiDefinitionWithoutTaskBinding() {
+        factory.script("writer", key -> Fakes.Script.echo("ok"));
+        Definition d = save("ws_run",
+                DefinitionValidatorTest.node("s", "start"),
+                DefinitionValidatorTest.node("a", "ai").agent("writer"),
+                DefinitionValidatorTest.edge("e1", "s", "a"),
+                new AgentDef("writer", null, null));
+        // 含 AI 节点而无任务绑定 → 拒绝并引导经任务运行；已建实例停留在 created（从未启动）
+        assertThatThrownBy(() -> rpc.run(call(p().put("workspace", "ws_run")
+                .put("definitionId", d.id()))))
+                .isInstanceOf(BadParamsException.class)
+                .hasMessageContaining("AI")
+                .hasMessageContaining("任务");
+        assertThat(store.listInstances("ws_run", d.id()))
+                .allSatisfy(m -> assertThat(m.status()).isEqualTo(InstanceStatus.CREATED));
+        assertThat(store.readEvents("ws_run",
+                store.listInstances("ws_run", d.id()).get(0).id(), 0, 0))
+                .extracting(EventLine::event).containsExactly("wf.created");
     }
 
     @Test
@@ -681,7 +714,7 @@ class WorkflowRpcTest {
                 DefinitionValidatorTest.node("a", "ai").agent("writer"),
                 DefinitionValidatorTest.edge("e1", "s", "a"),
                 new AgentDef("writer", null, null));
-        InstanceMeta m = engine.start(store.createInstance(d, Map.of()));
+        InstanceMeta m = startBound(d);
         // 游标锚点=writer 节点自身的 node.started（此后到节点完成前无新事件）
         awaitNodeStarted(m.id(), "a");
         String tail = tailSeq(m.id());
@@ -705,7 +738,7 @@ class WorkflowRpcTest {
                 DefinitionValidatorTest.node("a", "ai").agent("writer"),
                 DefinitionValidatorTest.edge("e1", "s", "a"),
                 new AgentDef("writer", null, null));
-        InstanceMeta m = engine.start(store.createInstance(d, Map.of()));
+        InstanceMeta m = startBound(d);
         // 游标锚点=writer 节点自身的 node.started（其后只可能出现 node.output/wf.done/wf.status）
         awaitNodeStarted(m.id(), "a");
         String tail = tailSeq(m.id());
@@ -753,7 +786,7 @@ class WorkflowRpcTest {
                 DefinitionValidatorTest.node("a", "ai").agent("writer"),
                 DefinitionValidatorTest.edge("e1", "s", "a"),
                 new AgentDef("writer", null, null));
-        InstanceMeta m = engine.start(store.createInstance(d, Map.of()));
+        InstanceMeta m = startBound(d);
 
         Call c = call(p().put("instanceId", m.id()));
         rpc.instanceCancel(c);
@@ -798,7 +831,7 @@ class WorkflowRpcTest {
                 DefinitionValidatorTest.node("a", "ai").agent("writer"),
                 DefinitionValidatorTest.edge("e1", "s", "a"),
                 new AgentDef("writer", null, null));
-        InstanceMeta m = engine.start(store.createInstance(d, Map.of()));
+        InstanceMeta m = startBound(d);
         assertThatThrownBy(() -> rpc.instanceDelete(call(p().put("instanceId", m.id()))))
                 .isInstanceOf(BadParamsException.class).hasMessageContaining("拒绝删除");
         // 取消后（终态）可删
@@ -825,7 +858,7 @@ class WorkflowRpcTest {
                         DefinitionValidatorTest.node("t", "ai").maxRuns(10).def),
                 List.of(DefinitionValidatorTest.edge("e1", "s", "n"),
                         DefinitionValidatorTest.edge("e2", "n", "t"))));
-        InstanceMeta m = engine.start(store.createInstance(d, Map.of()));
+        InstanceMeta m = startBound(d);
         await(() -> store.findInstance(m.id()).orElseThrow().status() == InstanceStatus.WAITING_USER,
                 "waiting-user");
         InstanceMeta parked = store.findInstance(m.id()).orElseThrow();
@@ -852,7 +885,7 @@ class WorkflowRpcTest {
                 List.of(DefinitionValidatorTest.node("s", "start").def,
                         DefinitionValidatorTest.node("n", "ai").agent("writer").maxRuns(10).def),
                 List.of(DefinitionValidatorTest.edge("e1", "s", "n"))));
-        InstanceMeta m = engine.start(store.createInstance(d, Map.of()));
+        InstanceMeta m = startBound(d);
         await(() -> store.findInstance(m.id()).orElseThrow().status() == InstanceStatus.WAITING_USER,
                 "waiting-user");
         InstanceMeta parked = store.findInstance(m.id()).orElseThrow();

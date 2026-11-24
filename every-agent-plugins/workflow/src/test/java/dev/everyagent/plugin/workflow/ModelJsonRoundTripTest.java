@@ -66,6 +66,7 @@ class ModelJsonRoundTripTest {
     void instanceMetaRoundTripWithSnapshotAndProjections() {
         InstanceMeta meta = new InstanceMeta(
                 InstanceMeta.SCHEMA_VERSION, "wi_x9y8z", "wf_a1b2c", "小说生成", "w_x1",
+                "task_origin1",
                 fullDefinition(),
                 Map.of("novelName", "星际牧羊人"),
                 InstanceStatus.WAITING_USER,

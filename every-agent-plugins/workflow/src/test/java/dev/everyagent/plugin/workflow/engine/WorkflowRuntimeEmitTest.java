@@ -1,4 +1,4 @@
-// ea: WorkflowRuntime emitter 双路由与并发追加完整性（engine 包内直构 runtime）
+// ea: WorkflowRuntime emitter 单路由与并发发射完整性（engine 包内直构 runtime）
 package dev.everyagent.plugin.workflow.engine;
 
 import java.io.IOException;
@@ -18,12 +18,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import dev.everyagent.contract.json.Json;
-import dev.everyagent.plugin.api.WorkerServices;
 import dev.everyagent.plugin.api.event.Events;
 import dev.everyagent.plugin.api.model.EmitEvent;
-import dev.everyagent.plugin.api.model.ModelConfig;
-import dev.everyagent.plugin.api.spi.ExecResult;
-import dev.everyagent.plugin.api.spi.NativeExec;
 import dev.everyagent.plugin.api.spi.WorkspaceManager;
 import dev.everyagent.plugin.api.spi.WorkspaceSandbox;
 import dev.everyagent.plugin.workflow.model.EventLine;
@@ -32,9 +28,9 @@ import dev.everyagent.plugin.workflow.store.WorkflowStore;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * agents/&lt;name&gt;.jsonl 并发追加无交错：多线程经 runtime emitter 同名/异名并发发射，
- * 行完整性（无半行/无交错）、seq 单调、双路由分流正确（实例域进 events.jsonl，
- * agent 域进 per-agent jsonl，瞬态丢弃）。
+ * emitter 单路由与并发发射完整性：多线程并发发射下实例域事件（wf./node./supervisor.）
+ * 进 events.jsonl（行完整、seq 单调）；agent 域事件（user.message/message/usage 等）不再
+ * 入工作流持久面（AI 节点会话单写 origin 任务域，§7.20.8）——实例目录无 agents/。
  */
 class WorkflowRuntimeEmitTest {
 
@@ -90,102 +86,8 @@ class WorkflowRuntimeEmitTest {
         }
     }
 
-    /** 最小 WorkerServices 桩（emitter 双路由不触其余服务）。 */
-    private static final class Svc implements WorkerServices {
-        @Override
-        public dev.everyagent.plugin.api.spi.SandboxBackend sandbox() {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public NativeExec nativeExec() {
-            return (argv, cwd, env, timeoutMs) -> new ExecResult("", "", 0, false);
-        }
-
-        @Override
-        public WorkspaceManager workspaces() {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public dev.everyagent.plugin.api.spi.TokenEstimator tokenEstimator() {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public dev.everyagent.plugin.api.slash.SlashTokenService slashTokens() {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public dev.everyagent.plugin.api.interaction.InteractionService interaction() {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public dev.everyagent.plugin.api.config.WorkerConfig config() {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public dev.everyagent.plugin.api.spi.IdGenerator ids() {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public dev.everyagent.plugin.api.event.StreamEmitter stream() {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public Path dataDirOf(String subjectId) {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public dev.everyagent.plugin.api.model.EventEmitter emitterOf(String subjectId) {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public void addRoundClosedListener(dev.everyagent.plugin.api.task.RoundClosedListener listener) {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public void addFileWriteListener(dev.everyagent.plugin.api.spi.FileWriteListener listener) {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public String toSandboxPath(Path hostPath) {
-            return hostPath.toString();
-        }
-
-        @Override
-        public dev.everyagent.plugin.api.agent.AgentFactory agentFactoryFor(
-                dev.everyagent.plugin.api.execution.ExecContext exec) {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public List<ModelConfig> modelConfigs() {
-            return List.of();
-        }
-
-        @Override
-        public dev.everyagent.plugin.api.task.TaskService task() {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public dev.everyagent.plugin.api.task.TaskStoreService store() {
-            throw new UnsupportedOperationException();
-        }
-    }
-
     @Test
-    void concurrentAgentAndInstanceEmitKeepLinesIntact() throws Exception {
+    void concurrentEmitKeepsInstanceLinesIntactAndDropsAgentDomain() throws Exception {
         WorkspaceManager ws = new Ws(home);
         WorkflowStore store = new WorkflowStore(ws);
         // 注册 ws_emit 工作区（idOfRoot 恒返 ws_emit）
@@ -201,8 +103,8 @@ class WorkflowRuntimeEmitTest {
 
         Path instanceDir = home.resolve("workspaces").resolve("ws_emit").resolve("workflows")
                 .resolve("instances").resolve(meta.id());
-        WorkflowRuntime runtime = new WorkflowRuntime(store, new Svc(), "ws_emit", meta.id(),
-                instanceDir, home.toString());
+        WorkflowRuntime runtime = new WorkflowRuntime(store, "ws_emit", meta.id(),
+                instanceDir, home.toString(), null);
         runtime.status(dev.everyagent.plugin.workflow.model.InstanceStatus.RUNNING);
 
         var futures = new java.util.ArrayList<Future<Integer>>();
@@ -212,7 +114,7 @@ class WorkflowRuntimeEmitTest {
                 int ok = 0;
                 for (int i = 0; i < PER_THREAD; i++) {
                     String tag = thread + ":" + i;
-                    // 同名 agent 域事件（user.message/message 交替）——同名文件并发追加
+                    // agent 域事件（命名/匿名/瞬态）——一律不入工作流持久面
                     runtime.emitter().emit(EmitEvent.of(
                             dev.everyagent.plugin.api.proto.SnowflakeId.next(),
                             Events.USER_MESSAGE, "writer#wi_" + meta.id().substring(3),
@@ -222,20 +124,18 @@ class WorkflowRuntimeEmitTest {
                             dev.everyagent.plugin.api.proto.SnowflakeId.next(),
                             Events.MESSAGE, "writer#wi_" + meta.id().substring(3),
                             null, null, "m" + tag, null, null, EmitEvent.Mode.REPLACE));
-                    // 实例域事件
                     runtime.emitter().emit(EmitEvent.of(
                             dev.everyagent.plugin.api.proto.SnowflakeId.next(),
-                            "node.output", null, null, null, "n" + tag, null, null,
+                            Events.MESSAGE, "n1.7", null, null, "anon", null, null,
                             EmitEvent.Mode.REPLACE));
-                    // 瞬态与未知 kind 丢弃
                     runtime.emitter().emit(EmitEvent.transientOf(
                             dev.everyagent.plugin.api.proto.SnowflakeId.next(),
                             Events.DELTA, "writer#wi_" + meta.id().substring(3),
                             null, null, "d" + tag, null, null, EmitEvent.Mode.APPEND));
-                    // 匿名 agentId（无 #wi 后缀）不落 agents/
+                    // 实例域事件
                     runtime.emitter().emit(EmitEvent.of(
                             dev.everyagent.plugin.api.proto.SnowflakeId.next(),
-                            Events.MESSAGE, "n1.7", null, null, "anon", null, null,
+                            "node.output", null, null, null, "n" + tag, null, null,
                             EmitEvent.Mode.REPLACE));
                     ok++;
                 }
@@ -246,37 +146,24 @@ class WorkflowRuntimeEmitTest {
             f.get(60, TimeUnit.SECONDS);
         }
 
-        // agents/writer.jsonl：每线程 2 行（user.message + message），全部完整
-        var agentLines = store.readAgentEvents("ws_emit", meta.id(), "writer");
-        assertThat(agentLines).hasSize(THREADS * PER_THREAD * 2);
-        List<Long> seqs = agentLines.stream().map(l -> Long.parseLong(l.seq())).sorted().toList();
-        assertThat(seqs.stream().distinct().count()).isEqualTo((long) seqs.size());
-        for (var l : agentLines) {
-            assertThat(l.agentId()).startsWith("writer#");
-            String content = l.payload().path("content").asString();
-            assertThat(content).contains(":");
-            if ("user.message".equals(l.event())) {
-                assertThat(content).startsWith("u");
-            } else {
-                assertThat(content).startsWith("m");
-            }
-        }
-        // 磁盘行数与读侧一致（无半行/无交错）
-        Path writerFile = instanceDir.resolve("agents").resolve("writer.jsonl");
-        List<String> raw = Files.readAllLines(writerFile);
-        assertThat(raw).hasSize(THREADS * PER_THREAD * 2);
-        for (String line : raw) {
-            assertThat(Json.parse(line).path("event").asString()).isIn("user.message", "message");
-        }
-        // 只有一个 agent 文件（匿名不落盘）
-        try (var s = Files.list(instanceDir.resolve("agents"))) {
-            assertThat(s.map(p -> p.getFileName().toString()).toList())
-                    .containsExactly("writer.jsonl");
-        }
         // events.jsonl：实例域 node.output 全量（+ store.createInstance 的 wf.created）
         List<EventLine> evs = store.readEvents("ws_emit", meta.id(), 0, 0);
         assertThat(evs.stream().filter(e -> "node.output".equals(e.event())).count())
                 .isEqualTo((long) THREADS * PER_THREAD);
+        // agent 域事件零泄漏进实例持久面
+        assertThat(evs.stream().map(EventLine::event))
+                .doesNotContain(Events.USER_MESSAGE, Events.MESSAGE, Events.USAGE, Events.TOOL_RESULT);
+        // seq 唯一（磁盘 jsonl 的文件序与 seq 序一致）
+        List<Long> seqs = evs.stream().map(EventLine::seqValue).sorted().toList();
+        assertThat(seqs.stream().distinct().count()).isEqualTo((long) seqs.size());
+        // 磁盘行数与读侧一致（无半行/无交错）
+        List<String> raw = Files.readAllLines(instanceDir.resolve("events.jsonl"));
+        assertThat(raw).hasSize(evs.size());
+        for (String line : raw) {
+            assertThat(Json.parse(line).path("event").asString()).isNotEmpty();
+        }
+        // 实例目录不创建 agents/（会话单写任务域）
+        assertThat(instanceDir.resolve("agents")).doesNotExist();
         // 内存尾部与磁盘对齐
         assertThat(store.tailEvents("ws_emit", meta.id(), 0).size())
                 .isLessThanOrEqualTo(256);
@@ -286,32 +173,51 @@ class WorkflowRuntimeEmitTest {
                 EmitEvent.Mode.REPLACE));
     }
 
-    /** 步骤 4 契约钉子：三通道标记 + 拒绝式交互桩 + 档案口失败返回空表。 */
+    /** 契约钉子：三通道标记 + 拒绝式交互桩 + 档案口委托 origin 任务。 */
     @Test
-    void subjectMarkerAndInteractionStubAndArchiveFailurePath() throws Exception {
-        assertThat(dev.everyagent.plugin.workflow.engine.WorkflowSubject.isWorkflowSubject(runtime0())).isTrue();
-        WorkflowRuntime rt = runtime0();
+    void subjectMarkerAndInteractionStubAndArchiveDelegation() throws Exception {
+        assertThat(dev.everyagent.plugin.workflow.engine.WorkflowSubject.isWorkflowSubject(runtime0(null))).isTrue();
+        WorkflowRuntime rt = runtime0(null);
         assertThat(rt.metadata().get(WorkflowSubject.MARKER_KEY)).isEqualTo(Boolean.TRUE);
         assertThat(rt.metadata()).isInstanceOf(java.util.concurrent.ConcurrentHashMap.class);
-        // per-node 视图同标记 + snapshot 不共享
-        WorkflowRuntime.NodeExecView v = rt.view("cfg-x");
-        assertThat(WorkflowSubject.isWorkflowSubject(v)).isTrue();
-        assertThat(v.snapshot().configId()).isEqualTo("cfg-x");
-        assertThat(v.subjectId()).isEqualTo(rt.subjectId());
-        assertThat(rt.view(null).snapshot().configId()).isNull();
+        assertThat(rt.agentFactory()).isNull(); // agent 装配一律经 origin 任务 ExecContext
         // 拒绝式交互桩：非 null，ask 一律 cancelled（SubAgentManager waiting-user 判定用）
         assertThat(rt.interaction()).isNotNull();
         var res = rt.interaction().ask(List.of(), 100, Map.of());
         assertThat(res.status()).isEqualTo("cancelled");
         assertThat(rt.interaction().hasPendingFor("x", "y")).isFalse();
-        // 档案口：非法 agent 名（读侧抛 BadParams）容错为空表不抛
-        assertThat(rt.conversationArchive().load("bad/name#wi_x")).isEmpty();
-        assertThat(rt.conversationArchive().load(null)).isEmpty();
+        // 未绑定：档案口 null（AI 节点运行将由引擎/节点守卫拒绝）
+        assertThat(rt.conversationArchive()).isNull();
+        assertThat(rt.taskExec()).isNull();
+        // 绑定：档案口委托 origin 任务（任务域档案重建路径）
+        java.util.List<org.springframework.ai.chat.messages.Message> seed = List.of(
+                new org.springframework.ai.chat.messages.UserMessage("先前指令"));
+        WorkflowRuntime bound = runtime0(new dev.everyagent.plugin.api.execution.ExecContext() {
+            @Override public String subjectId() { return "task_1"; }
+            @Override public String workspaceRoot() { return home.toString(); }
+            @Override public String workspaceId() { return "ws_emit"; }
+            @Override public dev.everyagent.plugin.api.model.ModelConfig snapshot() { return null; }
+            @Override public dev.everyagent.plugin.api.model.EventEmitter emitter() { return e -> e.id(); }
+            @Override public dev.everyagent.plugin.api.agent.AgentFactory agentFactory() { return null; }
+            @Override public Map<String, Object> metadata() { return Map.of(); }
+            @Override public Path dataDir() { return home; }
+            @Override public boolean terminal() { return false; }
+            @Override public dev.everyagent.plugin.api.interaction.InteractionService interaction() { return null; }
+            @Override public dev.everyagent.plugin.api.agent.ConversationArchive conversationArchive() {
+                return agentId -> seed;
+            }
+            @Override public Map<String, dev.everyagent.plugin.api.agent.AgentContext> agents() {
+                return Map.of();
+            }
+        });
+        assertThat(bound.taskExec().subjectId()).isEqualTo("task_1");
+        assertThat(bound.conversationArchive()).isNotNull();
+        assertThat(bound.conversationArchive().load("writer#wi")).isSameAs(seed);
         // compressionSeed 走 default null（安全降级）
-        assertThat(rt.compressionSeed("a")).isNull();
+        assertThat(bound.compressionSeed("a")).isNull();
     }
 
-    private WorkflowRuntime runtime0() {
+    private WorkflowRuntime runtime0(dev.everyagent.plugin.api.execution.ExecContext taskExec) {
         WorkflowStore store = new WorkflowStore(new Ws(home));
         store.refreshWorkspaceRegistry();
         var def = new dev.everyagent.plugin.workflow.model.Definition(
@@ -324,7 +230,7 @@ class WorkflowRuntimeEmitTest {
         var meta = store.createInstance(saved, Map.of());
         Path instanceDir = home.resolve("workspaces").resolve("ws_emit").resolve("workflows")
                 .resolve("instances").resolve(meta.id());
-        return new WorkflowRuntime(store, new Svc(), "ws_emit", meta.id(), instanceDir,
-                home.toString());
+        return new WorkflowRuntime(store, "ws_emit", meta.id(), instanceDir,
+                home.toString(), taskExec);
     }
 }

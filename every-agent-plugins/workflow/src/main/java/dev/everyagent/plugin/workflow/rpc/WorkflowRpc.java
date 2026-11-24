@@ -183,6 +183,10 @@ public final class WorkflowRpc {
      * required 变量校验（缺→BAD_PARAMS）+ 模型配置存在性校验（不存在→BAD_PARAMS）；
      * 立即创建实例并异步开跑（engine.start 只做状态迁移与首次调度，调度器跑虚拟线程，
      * 不阻塞 RPC 线程）。
+     *
+     * <p><b>无任务绑定直启仅限无 AI 节点定义</b>（测试/兼容通道，§7.20.8）：AI 节点
+     * 会话/呈现单写 origin 任务域，故含 AI 节点的定义在 engine.start 即被拒
+     * （BAD_PARAMS，引导经任务运行）；任务内运行经绑定口传入任务 ExecContext。
      */
     public void run(RpcContext ctx) {
         String ws = ctx.strParam("workspace");

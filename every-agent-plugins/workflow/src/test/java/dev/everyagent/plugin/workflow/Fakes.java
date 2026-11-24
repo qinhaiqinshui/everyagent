@@ -15,6 +15,7 @@ import dev.everyagent.plugin.api.agent.AgentActivity;
 import dev.everyagent.plugin.api.agent.AgentBuilder;
 import dev.everyagent.plugin.api.agent.AgentContext;
 import dev.everyagent.plugin.api.agent.AgentFactory;
+import dev.everyagent.plugin.api.agent.ConversationArchive;
 import dev.everyagent.plugin.api.event.Usage;
 import dev.everyagent.plugin.api.event.Events.ToolCallPart;
 import dev.everyagent.plugin.api.event.Events;
@@ -36,8 +37,13 @@ import dev.everyagent.plugin.api.spi.SandboxBackend;
 import dev.everyagent.plugin.api.spi.TokenEstimator;
 import dev.everyagent.plugin.api.config.WorkerConfig;
 import dev.everyagent.plugin.api.slash.SlashTokenService;
+import dev.everyagent.plugin.workflow.engine.AgentSessions;
+import dev.everyagent.plugin.workflow.model.AgentEventLine;
 import tools.jackson.databind.JsonNode;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.file.StandardOpenOption;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
@@ -539,6 +545,175 @@ final class Fakes {
         @Override
         public ExecContext execution() {
             return null;
+        }
+    }
+
+    // ══════════════════════════ 任务 ExecContext ══════════════════════════
+
+    /**
+     * 伪造任务 ExecContext（origin 任务绑定桩，§7.20.8）：emitter 记录事件并按
+     * {@code ext.persist} 落 {@code <taskDir>/<agentId>.jsonl}（行形态照抄 task 域
+     * per-agent jsonl）；conversationArchive 从同目录读档重建（AgentSessions 谓词）——
+     * 「发射→落盘→档案重建」整环与 worker 任务域同构。terminal 可置 true 模拟任务收口。
+     */
+    static final class FakeTaskExec implements ExecContext {
+
+        final String taskId;
+        final String workspaceId;
+        final String workspaceRoot;
+        final Path taskDir;
+        final FakeAgentFactory factory;
+        /** 全部发射过的事件（含瞬态；时序/归户断言用）。 */
+        final List<EmitEvent> emitted = new java.util.concurrent.CopyOnWriteArrayList<>();
+        final Map<String, AgentContext> agents = new ConcurrentHashMap<>();
+        volatile boolean terminal;
+
+        FakeTaskExec(Path workspacesRoot, String workspaceId, String taskId,
+                FakeAgentFactory factory) {
+            this.taskId = taskId;
+            this.workspaceId = workspaceId;
+            this.workspaceRoot = workspacesRoot.toString();
+            this.taskDir = workspacesRoot.resolve(workspaceId).resolve("tasks").resolve(taskId);
+            this.factory = factory;
+            try {
+                java.nio.file.Files.createDirectories(taskDir);
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
+        }
+
+        @Override
+        public String subjectId() {
+            return taskId;
+        }
+
+        @Override
+        public String workspaceRoot() {
+            return workspaceRoot;
+        }
+
+        @Override
+        public String workspaceId() {
+            return workspaceId;
+        }
+
+        @Override
+        public ModelConfig snapshot() {
+            return new ModelConfig(null, null, null, null, null);
+        }
+
+        @Override
+        public EventEmitter emitter() {
+            return e -> {
+                emitted.add(e);
+                if (e.persist()) {
+                    appendLine(e);
+                }
+                return e.id();
+            };
+        }
+
+        @Override
+        public AgentFactory agentFactory() {
+            factory.bound(this);
+            return factory;
+        }
+
+        @Override
+        public Map<String, Object> metadata() {
+            return new ConcurrentHashMap<>();
+        }
+
+        @Override
+        public Path dataDir() {
+            return taskDir;
+        }
+
+        @Override
+        public boolean terminal() {
+            return terminal;
+        }
+
+        @Override
+        public dev.everyagent.plugin.api.interaction.InteractionService interaction() {
+            return null;
+        }
+
+        @Override
+        public ConversationArchive conversationArchive() {
+            return agentId -> {
+                try {
+                    return AgentSessions.rebuild(agentLines(agentId));
+                } catch (RuntimeException e) {
+                    return List.of();
+                }
+            };
+        }
+
+        @Override
+        public Map<String, AgentContext> agents() {
+            return agents;
+        }
+
+        /** 持久事件追加 per-agent jsonl（行序 = 发射序；与 task 域同形）。 */
+        private synchronized void appendLine(EmitEvent e) {
+            try {
+                AgentEventLine line = new AgentEventLine(Long.toString(e.id()),
+                        System.currentTimeMillis(), e.kind(), e.agentId(),
+                        AgentSessions.projectPayload(e));
+                java.nio.file.Files.writeString(taskDir.resolve(fileName(e.agentId())),
+                        Json.write(line) + "\n",
+                        StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+            } catch (IOException ex) {
+                throw new UncheckedIOException(ex);
+            }
+        }
+
+        /** 读指定 agent 的任务档案行（坏行跳过；无档案空表）。 */
+        List<AgentEventLine> agentLines(String agentId) {
+            return readLines(taskDir.resolve(fileName(agentId)));
+        }
+
+        /** 按前缀聚合全部匹配档案的行（匿名 agentId 含 runNo，测试不便全名时用）。 */
+        List<AgentEventLine> agentLinesByPrefix(String agentIdPrefix) {
+            List<AgentEventLine> out = new java.util.ArrayList<>();
+            try (var s = java.nio.file.Files.list(taskDir)) {
+                for (Path p : s.filter(f -> f.getFileName().toString()
+                        .startsWith(agentIdPrefix)).sorted().toList()) {
+                    out.addAll(readLines(p));
+                }
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
+            out.sort(java.util.Comparator.comparingLong(l -> Long.parseLong(l.seq())));
+            return out;
+        }
+
+        private static List<AgentEventLine> readLines(Path file) {
+            if (!java.nio.file.Files.isRegularFile(file)) {
+                return List.of();
+            }
+            List<AgentEventLine> out = new java.util.ArrayList<>();
+            try {
+                for (String raw : java.nio.file.Files.readAllLines(file)) {
+                    String line = raw.trim();
+                    if (line.isEmpty()) {
+                        continue;
+                    }
+                    try {
+                        out.add(Json.MAPPER.readValue(line, AgentEventLine.class));
+                    } catch (RuntimeException ignored) {
+                        // 坏行跳过（与 task 域读侧容错同纪律）
+                    }
+                }
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
+            return out;
+        }
+
+        private static String fileName(String agentId) {
+            return (agentId == null || agentId.isEmpty() ? "main" : agentId) + ".jsonl";
         }
     }
 

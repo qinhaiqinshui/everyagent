@@ -20,6 +20,12 @@ public record InstanceMeta(
         String definitionId,
         String definitionName,
         String workspaceId,
+        /**
+         * 关联的 origin 任务 ID（任务内运行时非 null；RPC 直启/独立运行为 null）。
+         * AI 节点会话/呈现的唯一载体在任务域（tasks/&lt;taskId&gt;/&lt;agentId&gt;.jsonl），
+         * 本字段是 rerun/桥接的锚点；wf.created 事件 payload 同步携带。
+         */
+        String originTaskId,
         /** 定义深拷贝快照（定义后续修改/删除不影响本实例）。 */
         Definition definitionSnapshot,
         /** 运行时用户实输入（name → value）。 */

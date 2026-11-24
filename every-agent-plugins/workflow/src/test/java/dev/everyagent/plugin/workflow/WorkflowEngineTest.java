@@ -47,6 +47,7 @@ class WorkflowEngineTest {
     Fakes.FakeAgentFactory factory;
     Fakes.FakeWorkerServices services;
     WorkflowEngine engine;
+    private final java.util.concurrent.atomic.AtomicInteger taskSeq = new java.util.concurrent.atomic.AtomicInteger();
 
     @BeforeEach
     void setUp() throws Exception {
@@ -79,12 +80,22 @@ class WorkflowEngineTest {
     }
 
     private InstanceMeta start(Definition d) {
-        return engine.start(store.createInstance(d, Map.of()));
+        return start(d, Map.of());
     }
 
     private InstanceMeta start(Definition d, Map<String, String> vars) {
-        return engine.start(store.createInstance(d, vars));
+        task = taskExec();
+        return engine.start(store.createInstance(d, vars, task.subjectId()), task);
     }
+
+    /** 新建任务 ExecContext 桩（每实例一个 origin 任务，任务 ID 全局递增）。 */
+    private Fakes.FakeTaskExec taskExec() {
+        return new Fakes.FakeTaskExec(home.resolve("workspaces"), "ws_run",
+                "task_" + taskSeq.incrementAndGet(), factory);
+    }
+
+    /** 最近一次 start() 绑定的任务桩（AI 节点事件断言用）。 */
+    private Fakes.FakeTaskExec task;
 
     private List<EventLine> events(String instanceId) {
         return store.readEvents("ws_run", instanceId, 0, 0);
@@ -167,6 +178,67 @@ class WorkflowEngineTest {
         assertThatThrownBy(() -> engine.start(created)).isInstanceOf(BadParamsException.class);
     }
 
+    // ══════════════════════════ 任务绑定（§7.20.8） ══════════════════════════
+
+    @Test
+    void aiDefinitionRejectedWithoutUsableTaskBinding() {
+        Definition d = save(
+                DefinitionValidatorTest.node("s", "start"),
+                DefinitionValidatorTest.node("n", "ai").agent("writer"),
+                DefinitionValidatorTest.edge("e1", "s", "n"),
+                new AgentDef("writer", null, null));
+        // 无绑定 → 拒绝（引导经任务运行）
+        assertThatThrownBy(() -> engine.start(store.createInstance(d, Map.of())))
+                .isInstanceOf(BadParamsException.class)
+                .hasMessageContaining("AI")
+                .hasMessageContaining("任务");
+        // 绑定任务已收口（emitter 失效语义）→ 同样拒绝
+        Fakes.FakeTaskExec dead = taskExec();
+        dead.terminal = true;
+        assertThatThrownBy(() -> engine.start(store.createInstance(d, Map.of(), dead.subjectId()), dead))
+                .isInstanceOf(BadParamsException.class)
+                .hasMessageContaining("AI");
+        // 绑定与 meta.originTaskId 不一致 → 拒绝
+        Fakes.FakeTaskExec bound = taskExec();
+        Fakes.FakeTaskExec other = taskExec();
+        assertThatThrownBy(() -> engine.start(
+                store.createInstance(d, Map.of(), other.subjectId()), bound))
+                .isInstanceOf(BadParamsException.class)
+                .hasMessageContaining("不一致");
+        // 无 AI 节点定义无绑定照常可跑（RPC 直启兼容通道）
+        Definition cmdOnly = save(
+                DefinitionValidatorTest.node("s", "start"),
+                DefinitionValidatorTest.node("c", "command").command("echo ok"),
+                DefinitionValidatorTest.edge("e2", "s", "c"));
+        assertThat(engine.start(store.createInstance(cmdOnly, Map.of())).status())
+                .isEqualTo(InstanceStatus.RUNNING);
+    }
+
+    @Test
+    void aiNodeEventsLandInTaskDomainOnly() throws Exception {
+        // 任务绑定后：AI 节点事件（指令轮/回复/usage）全走任务 emitter，实例域不落 agent 事件
+        factory.script("writer", key -> Fakes.Script.echo("产出"));
+        Definition d = save(
+                DefinitionValidatorTest.node("s", "start"),
+                DefinitionValidatorTest.node("n", "ai").agent("writer").input("做点事"),
+                DefinitionValidatorTest.edge("e1", "s", "n"),
+                new AgentDef("writer", null, null));
+        InstanceMeta m = start(d);
+        awaitTerminal(m.id());
+        assertThat(meta(m.id()).status()).isEqualTo(InstanceStatus.DONE);
+
+        // 任务档案：完整轮次（user.message → message → usage）
+        assertThat(task.agentLines("writer#" + m.id()).stream().map(l -> l.event()).toList())
+                .containsExactly("user.message", "message", "usage");
+        // agent 经任务 ExecContext 的 agentFactory 装配（绑定主体=任务）
+        assertThat(factory.bound).isSameAs(task);
+        // 实例 events.jsonl 只含实例域事件（无 user.message/message/usage）
+        assertThat(eventNames(m.id()))
+                .doesNotContain("user.message", "message", "usage", "tool.result");
+        // 实例目录无 agents/
+        assertThat(instanceAgentsDir(m.id())).doesNotExist();
+    }
+
     // ══════════════════════════ 命令节点 + 变量渲染 ══════════════════════════
 
     @Test
@@ -215,13 +287,14 @@ class WorkflowEngineTest {
         // rendered 留档 opaque token 原串；visibleToAi 拍平为 label
         assertThat(aiRun.input().rendered()).contains(token);
         assertThat(aiRun.input().visibleToAi()).isEqualTo("引用 a.png 写作");
-        // 指令轮 user.message：content=拍平文本，data.rawContent=原串
-        var lines = store.readAgentEvents("ws_run", m.id(), "writer");
+        // 指令轮 user.message：content=拍平文本，data.rawContent=原串（任务档案为唯一会话载体）
+        var lines = task.agentLines("writer#" + m.id());
         assertThat(lines).isNotEmpty();
         var instruction = lines.stream()
                 .filter(l -> "user.message".equals(l.event())).findFirst().orElseThrow();
         assertThat(instruction.payload().path("content").asString()).isEqualTo("引用 a.png 写作");
         assertThat(instruction.payload().path("data").path("rawContent").asString()).contains(token);
+        assertThat(instruction.agentId()).isEqualTo("writer#" + m.id());
         // agent 观测：seed 0 轮、结果轮 > 0、usage 落档
         assertThat(aiRun.agent().name()).isEqualTo("writer");
         assertThat(aiRun.agent().modelConfigId()).isEqualTo("gpt5");
@@ -344,19 +417,20 @@ class WorkflowEngineTest {
         boolean overlap = first.runStartedAt < second.runEndedAt
                 && second.runStartedAt < first.runEndedAt;
         assertThat(overlap).as("同 agent 两次 run 必须串行").isFalse();
-        // 后跑者读到上游完整事件流（种子含先跑者的指令轮 + 回复轮）
+        // 后跑者读到上游完整事件流（种子含先跑者的指令轮 + 回复轮——从任务档案重建）
         assertThat(second.seed).hasSize(2);
         assertThat(second.seed.get(0)).isInstanceOf(org.springframework.ai.chat.messages.UserMessage.class);
         assertThat(second.seed.get(1).getText()).isEqualTo(first.lastText);
-        // per-agent jsonl：两轮 user.message/message(+usage) 交替、无交错（行数即完整性证据）
-        var lines = store.readAgentEvents("ws_run", m.id(), "writer");
+        // 任务档案：两轮 user.message/message(+usage) 交替、无交错（行数即完整性证据）
+        var lines = task.agentLines("writer#" + m.id());
         assertThat(lines).hasSize(6);
         assertThat(lines.stream().map(l -> l.event()).toList())
                 .containsExactly("user.message", "message", "usage",
                         "user.message", "message", "usage");
-        Path writerFile = home.resolve("workspaces").resolve("ws_run").resolve("workflows")
-                .resolve("instances").resolve(m.id()).resolve("agents").resolve("writer.jsonl");
+        Path writerFile = task.taskDir.resolve("writer#" + m.id() + ".jsonl");
         assertThat(Files.readAllLines(writerFile)).hasSize(6);
+        // 实例目录不再产生 agents/ 写入（会话单写任务域）
+        assertThat(instanceAgentsDir(m.id())).doesNotExist();
     }
 
     @Test
@@ -378,9 +452,9 @@ class WorkflowEngineTest {
         Fakes.FakeAgent y = agent("a2#");
         boolean overlap = x.runStartedAt < y.runEndedAt && y.runStartedAt < x.runEndedAt;
         assertThat(overlap).as("不同 agent 应真并行").isTrue();
-        // 各自会话线隔离
-        assertThat(store.readAgentEvents("ws_run", m.id(), "a1")).isNotEmpty();
-        assertThat(store.readAgentEvents("ws_run", m.id(), "a2")).isNotEmpty();
+        // 各自会话线隔离（任务档案按 agentId 分文件）
+        assertThat(task.agentLines("a1#" + m.id())).isNotEmpty();
+        assertThat(task.agentLines("a2#" + m.id())).isNotEmpty();
     }
 
     private Fakes.FakeAgent agent(String prefix) {
@@ -429,8 +503,8 @@ class WorkflowEngineTest {
                 .findFirst().orElseThrow();
         assertThat(rec.error().message()).contains("模型调用失败");
         assertThat(eventNames(m.id())).contains("node.error");
-        // 指令轮已落盘（会话线自包含），无 message 事件
-        assertThat(store.readAgentEvents("ws_run", m.id(), "writer"))
+        // 指令轮已落任务档案（会话线自包含），无 message 事件
+        assertThat(task.agentLines("writer#" + m.id()))
                 .extracting(l -> l.event()).containsExactly("user.message");
     }
 
@@ -496,8 +570,8 @@ class WorkflowEngineTest {
         assertThat(decisionEv.payload().path("reason").asString()).contains("配置错误");
         // 跳过节点继续下游
         assertThat(startedNodes(m.id())).contains("t");
-        // supervisor 会话线落盘（user.message + message + usage）
-        assertThat(store.readAgentEvents("ws_run", m.id(), "supervisor"))
+        // supervisor 会话线落任务档案（user.message + message + usage）
+        assertThat(task.agentLines("supervisor#" + m.id()))
                 .extracting(l -> l.event()).containsExactly("user.message", "message", "usage");
         // runs 记录介入链
         RunRecord rec = runs(m.id()).stream().filter(r -> "n".equals(r.nodeId()))
@@ -546,8 +620,8 @@ class WorkflowEngineTest {
         InstanceMeta m = start(d);
         awaitStatus(m.id(), InstanceStatus.WAITING_USER);
         assertThat(eventNames(m.id())).contains("wf.askUser");
-        // 解析失败重试一次：supervisor 会话线两轮指令（每轮 user/message/usage）
-        assertThat(store.readAgentEvents("ws_run", m.id(), "supervisor"))
+        // 解析失败重试一次：supervisor 会话线两轮指令（每轮 user/message/usage，任务档案）
+        assertThat(task.agentLines("supervisor#" + m.id()))
                 .extracting(l -> l.event())
                 .containsExactly("user.message", "message", "usage",
                         "user.message", "message", "usage");
@@ -608,7 +682,7 @@ class WorkflowEngineTest {
     // ══════════════════════════ 匿名 vs 命名 agent ══════════════════════════
 
     @Test
-    void anonymousAiNodeLeavesNoAgentFile() throws Exception {
+    void anonymousAiNodeWritesTaskArchiveOnly() throws Exception {
         Definition d = save(
                 DefinitionValidatorTest.node("s", "start"),
                 DefinitionValidatorTest.node("anon", "ai").input("匿名一次性"),
@@ -620,12 +694,16 @@ class WorkflowEngineTest {
         awaitTerminal(m.id());
         assertThat(meta(m.id()).status()).isEqualTo(InstanceStatus.DONE);
 
-        Path agentsDir = home.resolve("workspaces").resolve("ws_run").resolve("workflows")
-                .resolve("instances").resolve(m.id()).resolve("agents");
-        try (var s = Files.list(agentsDir)) {
-            assertThat(s.map(p -> p.getFileName().toString()).toList())
-                    .containsExactly("writer.jsonl");
-        }
+        // 实例目录不再创建 agents/（会话单写任务域）
+        assertThat(instanceAgentsDir(m.id())).doesNotExist();
+        // 匿名一次性：agentId=<nodeId>.<runNo>，指令轮 + 回复轮落任务档案（任务页可见）
+        var anonLines = task.agentLinesByPrefix("anon.");
+        assertThat(anonLines).isNotEmpty();
+        assertThat(anonLines.stream().map(l -> l.event()).toList())
+                .contains("user.message", "message", "usage");
+        assertThat(anonLines.get(0).agentId()).startsWith("anon.");
+        // 命名会话：agentId=<name>#<wi>
+        assertThat(task.agentLines("writer#" + m.id())).isNotEmpty();
         RunRecord anon = runs(m.id()).stream().filter(r -> "anon".equals(r.nodeId()))
                 .findFirst().orElseThrow();
         assertThat(anon.agent()).isNull();
@@ -633,6 +711,12 @@ class WorkflowEngineTest {
         RunRecord named = runs(m.id()).stream().filter(r -> "named".equals(r.nodeId()))
                 .findFirst().orElseThrow();
         assertThat(named.agent()).isNotNull();
+    }
+
+    /** 实例目录下的 agents/ 路径（应永不创建）。 */
+    private Path instanceAgentsDir(String instanceId) {
+        return home.resolve("workspaces").resolve("ws_run").resolve("workflows")
+                .resolve("instances").resolve(instanceId).resolve("agents");
     }
 
     // ══════════════════════════ 工具剔除 + 事件查询 ══════════════════════════
@@ -708,8 +792,8 @@ class WorkflowEngineTest {
         // 第二节点种子 = 第一节点的 指令轮 + 回复轮
         assertThat(writers.get(1).seed).hasSize(2);
         assertThat(writers.get(1).seed.get(1).getText()).isEqualTo(writers.get(0).lastText);
-        // 会话线单文件两轮有序（usage 也随事件流落档）
-        var lines = store.readAgentEvents("ws_run", m.id(), "writer");
+        // 会话线单文件两轮有序（usage 也随事件流落任务档案）
+        var lines = task.agentLines("writer#" + m.id());
         assertThat(lines.stream().map(l -> l.event()).toList())
                 .containsExactly("user.message", "message", "usage",
                         "user.message", "message", "usage");

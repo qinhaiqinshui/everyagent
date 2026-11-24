@@ -22,6 +22,7 @@ import dev.everyagent.contract.json.Json;
 import dev.everyagent.plugin.api.WorkerServices;
 import dev.everyagent.plugin.api.exception.BadParamsException;
 import dev.everyagent.plugin.api.exception.NotFoundException;
+import dev.everyagent.plugin.api.execution.ExecContext;
 import dev.everyagent.plugin.api.slash.SlashTokenEncoder;
 import dev.everyagent.plugin.api.util.RootCause;
 import dev.everyagent.plugin.workflow.engine.NodeRunners.AiNodeRunner;
@@ -60,7 +61,9 @@ import dev.everyagent.plugin.workflow.store.WorkflowStore;
  * 节点失败 → 错误策略。agent 终态由 claimTerminal CAS 收口不重复（与 advisor 链双通道）。
  *
  * <p>引擎不阻塞 RPC 线程：{@link #start} 异步开跑（调度器跑虚拟线程），本类即
- * workflow.run RPC 的后端入口（RPC 装配在步骤 6）。
+ * workflow.run RPC 的后端入口（RPC 装配在步骤 6）。任务内运行经
+ * {@link #start(InstanceMeta, ExecContext)} 传入 origin 任务 ExecContext（AI 节点/督导
+ * 装配与事件单写任务域的绑定源，§7.20.8）；无绑定的含 AI 节点定义在 start 即拒。
  */
 public final class WorkflowEngine {
 
@@ -85,13 +88,27 @@ public final class WorkflowEngine {
     // ══════════════════════════ 公共 API（步骤 6 RPC 的后端） ══════════════════════════
 
     /**
-     * 启动实例（异步开跑）：created → running（meta 重写 + wf.status 事件），
-     * 调度开始节点。实例须为 store.createInstance 的产物（status=created）。
+     * 启动实例（异步开跑，无 origin 任务绑定）：created → running（meta 重写 + wf.status
+     * 事件），调度开始节点。实例须为 store.createInstance 的产物（status=created）。
      *
      * @return 已迁移为 running 的实例元数据
      * @throws BadParamsException 实例非 created 态 / 重复启动 / 定义快照缺 start / 工作区不在注册表
      */
     public InstanceMeta start(InstanceMeta meta) {
+        return start(meta, null);
+    }
+
+    /**
+     * 启动实例并绑定 origin 任务（任务内运行的入口）：任务 ExecContext 存入实例运行态
+     * （{@link WorkflowRuntime#taskExec()}），AI 节点/督导经它装配 agent 与单写任务事件流。
+     *
+     * <p><b>fail-fast 守卫</b>：定义快照含 AI 节点而绑定不可用（未传 / 任务事件口已失效）
+     * 时拒绝启动（引导经任务运行，§7.20.8）；绑定与 meta.originTaskId 不一致同样拒绝。
+     *
+     * @param taskExec origin 任务的执行上下文（null=无绑定，仅限无 AI 节点定义）
+     * @throws BadParamsException 含 AI 节点而无可用任务绑定 / originTaskId 与绑定不一致 / 其余同 {@link #start(InstanceMeta)}
+     */
+    public InstanceMeta start(InstanceMeta meta, ExecContext taskExec) {
         if (meta == null || meta.id() == null || meta.id().isBlank()) {
             throw new BadParamsException("实例 meta 缺 id");
         }
@@ -113,19 +130,39 @@ public final class WorkflowEngine {
         if (root == null) {
             throw new BadParamsException("工作区不在注册表(无法解析 workspaceRoot): " + meta.workspaceId());
         }
-        InstanceRun r = new InstanceRun(meta, snapshot, root);
+        if (taskExec != null && meta.originTaskId() != null
+                && !meta.originTaskId().equals(taskExec.subjectId())) {
+            throw new BadParamsException("originTaskId 与绑定的任务不一致(meta=" + meta.originTaskId()
+                    + ", 绑定=" + taskExec.subjectId() + "): " + meta.id());
+        }
+        if (containsAiNode(snapshot) && !NodeRunners.usableTaskBinding(taskExec)) {
+            throw new BadParamsException("工作流含 AI 节点,拒绝无任务绑定运行: " + meta.id()
+                    + "。" + NodeRunners.NO_TASK_BINDING_MESSAGE);
+        }
+        InstanceRun r = new InstanceRun(meta, snapshot, root, taskExec);
         InstanceRun prev = runs.putIfAbsent(meta.id(), r);
         if (prev != null) {
             throw new BadParamsException("实例已在运行: " + meta.id());
         }
-        log.info("[workflow] 实例启动 id={} 定义={} 节点数={}",
-                meta.id(), meta.definitionId(), snapshot.nodesOrEmpty().size());
+        log.info("[workflow] 实例启动 id={} 定义={} 节点数={} originTask={} 绑定任务={}",
+                meta.id(), meta.definitionId(), snapshot.nodesOrEmpty().size(),
+                meta.originTaskId(), taskExec == null ? "-" : taskExec.subjectId());
         synchronized (r.schedLock) {
             transitionLocked(r, InstanceStatus.RUNNING, null, null, null);
             r.pendingActivations.merge(startId, 1, Integer::sum);
             tryScheduleLocked(r, startId);
         }
         return r.meta;
+    }
+
+    /** 定义快照是否含 AI 节点（含 = 运行必须有可用任务绑定，§7.20.8 fail-fast 守卫）。 */
+    private static boolean containsAiNode(Definition snapshot) {
+        for (NodeDef n : snapshot.nodesOrEmpty()) {
+            if (n != null && NodeDef.TYPE_AI.equals(n.type())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** 实例是否在运行（终态即不在）。 */
@@ -264,7 +301,7 @@ public final class WorkflowEngine {
         /** 收口中（fail/cancel）——抑制新调度、节点线程按取消路径静默退场。 */
         volatile boolean stopping;
 
-        InstanceRun(InstanceMeta meta, Definition snapshot, String workspaceRoot) {
+        InstanceRun(InstanceMeta meta, Definition snapshot, String workspaceRoot, ExecContext taskExec) {
             this.meta = meta;
             this.snapshot = snapshot;
             this.wsId = meta.workspaceId();
@@ -275,8 +312,8 @@ public final class WorkflowEngine {
             Path instanceDir = services.workspaces().systemDir()
                     .resolve("workspaces").resolve(wsId)
                     .resolve("workflows").resolve("instances").resolve(instanceId);
-            this.runtime = new WorkflowRuntime(store, services, wsId, instanceId,
-                    instanceDir, workspaceRoot);
+            this.runtime = new WorkflowRuntime(store, wsId, instanceId,
+                    instanceDir, workspaceRoot, taskExec);
             for (NodeDef n : snapshot.nodesOrEmpty()) {
                 nodeStates.put(n.id(), new NodeState());
                 outEdges.put(n.id(), new ArrayList<>());
@@ -402,7 +439,7 @@ public final class WorkflowEngine {
                 case NodeDef.TYPE_AI -> {
                     ReentrantLock lock = node.agent() != null && !node.agent().isBlank()
                             ? r.agentLock(node.agent()) : null;
-                    result = new AiNodeRunner().run(services, r.runtime, r.instanceId,
+                    result = new AiNodeRunner().run(r.runtime.taskExec(), r.instanceId,
                             r.snapshot, node, runNo, in.rendered(), in.visibleToAi(), lock);
                 }
                 default -> throw new IllegalStateException("未知节点类型: " + node.type());
@@ -605,7 +642,7 @@ public final class WorkflowEngine {
         String context = NodeRunners.buildErrorContext(r.snapshot.name(), node, runNo, message,
                 historyPreviews(r, node, runNo), priorDecisionLines(r, node),
                 NodeRunners.SUPERVISOR_MAX_ATTEMPTS - attempt);
-        Decision d = new SupervisorRunner().decide(services, r.runtime, r.instanceId,
+        Decision d = new SupervisorRunner().decide(r.runtime.taskExec(), r.instanceId,
                 r.snapshot, context, r.agentLock(NodeRunners.SUPERVISOR_AGENT));
         if (d == null) {
             log.warn("[workflow] supervisor 决策不可解析,降级 askUser instance={} node={}",
@@ -772,8 +809,8 @@ public final class WorkflowEngine {
                 : m.nodeStates();
         InstanceMeta updated = new InstanceMeta(
                 InstanceMeta.SCHEMA_VERSION, m.id(), m.definitionId(), m.definitionName(),
-                m.workspaceId(), r.snapshot, m.variablesOrEmpty(), to, m.createdAt(), startedAt,
-                endedAt, durationMs, error, pd, projection, r.runCounter.get());
+                m.workspaceId(), m.originTaskId(), r.snapshot, m.variablesOrEmpty(), to, m.createdAt(),
+                startedAt, endedAt, durationMs, error, pd, projection, r.runCounter.get());
         r.meta = updated;
         r.status.set(to);
         r.runtime.status(to);

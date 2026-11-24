@@ -29,7 +29,6 @@ import dev.everyagent.plugin.api.proto.ShortIds;
 import dev.everyagent.plugin.api.proto.SnowflakeId;
 import dev.everyagent.plugin.api.spi.WorkspaceManager;
 import dev.everyagent.plugin.api.util.AtomicFiles;
-import dev.everyagent.plugin.workflow.model.AgentEventLine;
 import dev.everyagent.plugin.workflow.model.Definition;
 import dev.everyagent.plugin.workflow.model.EventLine;
 import dev.everyagent.plugin.workflow.model.InstanceMeta;
@@ -48,14 +47,16 @@ import tools.jackson.databind.node.ObjectNode;
  * └─ instances/&lt;wi_id&gt;/
  *     ├─ meta.json                              # 实例元数据+定义快照（状态迁移点原子重写）
  *     ├─ events.jsonl                           # 实例事件日志（单 writer 串行追加）
- *     ├─ runs/&lt;0007_wn_b7&gt;.json                 # 每次节点运行一文件（原子写，并行无冲突）
- *     └─ agents/&lt;name&gt;.jsonl                    # 命名 agent 会话日志（追加写永不重写）
+ *     └─ runs/&lt;0007_wn_b7&gt;.json                 # 每次节点运行一文件（原子写，并行无冲突）
  * </pre>
+ *
+ * <p><b>实例目录只记节点级三样</b>（meta/events/runs）：AI 节点会话单写 origin 任务域
+ * （tasks/&lt;taskId&gt;/&lt;agentId&gt;.jsonl，经任务 ExecContext 的事件口），实例目录不再
+ * 持 agents/ 职责（关联锚点=meta.originTaskId）。
  *
  * <p>写策略与并发安全（计划「存储设计 §3」）：
  * definition/meta 用 {@link AtomicFiles#writeText} 原子重写；events.jsonl 实例内一把小锁
- * 串行追加；runs 每运行一文件；agents/*.jsonl 由本类提供纯追加 API，串行化由上层
- * （引擎的同 agent fair 锁）保证。列表只读 definition.json/meta.json，<b>不触 events.jsonl</b>。
+ * 串行追加；runs 每运行一文件。列表只读 definition.json/meta.json，<b>不触 events.jsonl</b>。
  *
  * <p>内存索引：activate 时全扫建索引，之后增量维护（defId/instanceId 全局唯一键）；
  * workspaceId→root 注册表解析经 {@link WorkspaceManager}（redirect 安全），
@@ -193,10 +194,6 @@ public final class WorkflowStore {
 
     private Path runsDir(String wsId, String wiId) {
         return instanceDir(wsId, wiId).resolve("runs");
-    }
-
-    private Path agentsDir(String wsId, String wiId) {
-        return instanceDir(wsId, wiId).resolve("agents");
     }
 
     private Path runFile(String wsId, String wiId, int runNo, String nodeId) {
@@ -345,7 +342,7 @@ public final class WorkflowStore {
             Long duration = meta.startedAt() == null ? null : now - meta.startedAt();
             InstanceMeta failed = new InstanceMeta(
                     InstanceMeta.SCHEMA_VERSION, meta.id(), meta.definitionId(), meta.definitionName(),
-                    meta.workspaceId(), meta.definitionSnapshot(), meta.variables(),
+                    meta.workspaceId(), meta.originTaskId(), meta.definitionSnapshot(), meta.variables(),
                     InstanceStatus.FAILED, meta.createdAt(), meta.startedAt(), now, duration,
                     new InstanceMeta.Error(INTERRUPT_MESSAGE, null, null),
                     null, null, meta.runCounter() == null ? 0 : meta.runCounter());
@@ -504,8 +501,19 @@ public final class WorkflowStore {
     /**
      * 创建实例（一次运行 = 一个实例，自包含可独立回放）：深拷贝定义快照、
      * 分配 wi id、status=created、落 meta.json、追加 wf.created 事件。
+     * originTaskId=null（RPC 直启/独立运行，无任务绑定）。
      */
     public InstanceMeta createInstance(Definition def, Map<String, String> variables) {
+        return createInstance(def, variables, null);
+    }
+
+    /**
+     * 创建实例并关联 origin 任务（任务内运行）：AI 节点会话/呈现落在
+     * {@code workspaces/<wsId>/tasks/<originTaskId>/<agentId>.jsonl}（任务域单写），
+     * 本字段是 rerun/桥接的锚点；wf.created 事件 payload 同步携带（非 null 时）。
+     */
+    public InstanceMeta createInstance(Definition def, Map<String, String> variables,
+            String originTaskId) {
         if (def == null || def.workspaceId() == null || def.workspaceId().isBlank()) {
             throw new BadParamsException("创建实例需要挂靠工作区的定义(workspaceId 缺失)");
         }
@@ -513,24 +521,28 @@ public final class WorkflowStore {
         String wiId = uniqueInstanceId(wsId);
         Definition snapshot = deepCopy(def);
         Map<String, String> vars = variables == null ? Map.of() : Map.copyOf(variables);
+        String origin = originTaskId == null || originTaskId.isBlank() ? null : originTaskId;
         InstanceMeta meta = new InstanceMeta(
-                InstanceMeta.SCHEMA_VERSION, wiId, def.id(), def.name(), wsId, snapshot, vars,
+                InstanceMeta.SCHEMA_VERSION, wiId, def.id(), def.name(), wsId, origin, snapshot, vars,
                 InstanceStatus.CREATED, System.currentTimeMillis(), null, null, null,
                 null, null, null, 0);
         try {
             Files.createDirectories(instanceDir(wsId, wiId));
             Files.createDirectories(runsDir(wsId, wiId));
-            Files.createDirectories(agentsDir(wsId, wiId));
             AtomicFiles.writeText(metaFile(wsId, wiId), Json.write(meta));
         } catch (IOException e) {
             throw new UncheckedIOException("写实例 meta.json 失败: " + wiId, e);
         }
         instanceIndex.put(wiId, meta);
-        appendEvent(wsId, wiId, "wf.created", Json.obj()
+        var payload = Json.obj()
                 .put("instanceId", wiId)
                 .put("definitionId", def.id() == null ? "" : def.id())
                 .put("name", def.name() == null ? "" : def.name())
-                .set("variables", Json.toJson(vars)));
+                .set("variables", Json.toJson(vars));
+        if (origin != null) {
+            payload.put("originTaskId", origin);
+        }
+        appendEvent(wsId, wiId, "wf.created", payload);
         notifyChanged(ChangeKind.INSTANCE, ChangeAction.CREATED, wsId, wiId);
         return meta;
     }
@@ -760,60 +772,6 @@ public final class WorkflowStore {
         return max > 0 && snapshot.size() > max
                 ? snapshot.subList(snapshot.size() - max, snapshot.size())
                 : snapshot;
-    }
-
-    // ════════════════════════════ agents/*.jsonl ════════════════════════════
-
-    /**
-     * 追加命名 agent 会话事件（agents/&lt;name&gt;.jsonl，追加写永不重写）。
-     * <b>串行化由上层保证</b>（引擎同 agent fair 锁，锁粒度=整个 run）；本方法只提供
-     * 纯追加（CREATE+APPEND），不建内存态。
-     */
-    public AgentEventLine appendAgentEvent(String workspaceId, String instanceId, String agentName,
-            String event, String agentId, JsonNode payload) {
-        AgentEventLine line = new AgentEventLine(Long.toString(SnowflakeId.next()),
-                System.currentTimeMillis(), event, agentId, payload);
-        appendAgentEventLine(workspaceId, instanceId, agentName, line);
-        return line;
-    }
-
-    /** 追加已构造好的 agent 事件行（测试/引擎直接落行用）。 */
-    public void appendAgentEventLine(String workspaceId, String instanceId, String agentName, AgentEventLine line) {
-        Path file = agentsDir(workspaceId, instanceId)
-                .resolve(requireSafeSegment(agentName, "agent 名") + ".jsonl");
-        try {
-            Files.createDirectories(file.getParent());
-            Files.writeString(file, Json.write(line) + "\n",
-                    StandardOpenOption.CREATE, StandardOpenOption.APPEND);
-        } catch (IOException e) {
-            throw new UncheckedIOException("追加 agent 会话日志失败: " + agentName, e);
-        }
-    }
-
-    /** 读命名 agent 会话事件（坏行跳过告警）。 */
-    public List<AgentEventLine> readAgentEvents(String workspaceId, String instanceId, String agentName) {
-        Path file = agentsDir(workspaceId, instanceId)
-                .resolve(requireSafeSegment(agentName, "agent 名") + ".jsonl");
-        if (!Files.isRegularFile(file)) {
-            return List.of();
-        }
-        List<AgentEventLine> out = new ArrayList<>();
-        try {
-            for (String raw : Files.readAllLines(file, StandardCharsets.UTF_8)) {
-                String line = raw.trim();
-                if (line.isEmpty()) {
-                    continue;
-                }
-                try {
-                    out.add(Json.MAPPER.readValue(line, AgentEventLine.class));
-                } catch (RuntimeException e) {
-                    log.warn("[workflow] agent jsonl 坏行跳过: {} ({})", file, e.getMessage());
-                }
-            }
-        } catch (IOException e) {
-            log.warn("[workflow] 读 agent 会话日志失败: {}", file, e);
-        }
-        return out;
     }
 
     // ════════════════════════════ 工具 ════════════════════════════

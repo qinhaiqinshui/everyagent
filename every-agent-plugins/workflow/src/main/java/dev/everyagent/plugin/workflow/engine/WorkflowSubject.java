@@ -6,7 +6,7 @@ import java.util.Map;
 import dev.everyagent.plugin.api.execution.ExecContext;
 
 /**
- * 工作流执行主体标记 —— 步骤 5 的 {@code WorkflowRuntime}/NodeExecView 实现本接口。
+ * 工作流执行主体标记 —— {@code WorkflowRuntime} 实现本接口。
  *
  * <p>本插件用它做<b>域隔离</b>：{@code WorkflowToolProvider.appliesTo} 判
  * {@code !isWorkflowSubject(ctx)}，使工作流自己的 agent 不携带 workflow CRUD 五工具
