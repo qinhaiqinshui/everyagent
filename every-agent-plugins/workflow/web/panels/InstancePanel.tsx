@@ -401,7 +401,6 @@ function ensureInstanceStyles(): void {
 .wf-inst-error { color: var(--accent-red, #ff6b6b); font-size: 12px; }
 .wf-inst-body { flex: 1; min-height: 0; display: flex; }
 .wf-inst-canvas-wrap { flex: 1; min-width: 0; position: relative; }
-.wf-inst-canvas-hint { position: absolute; left: 10px; bottom: 8px; font-size: 11px; color: var(--text-faint, #525c6a); pointer-events: none; }
 .wf-inst-side { width: 330px; flex: none; border-left: 1px solid var(--border, #2a303b); background: var(--bg-secondary, #11141b); overflow-y: auto; padding: 12px; }
 .wf-inst-center { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--text-muted, #6f7a8b); flex-direction: column; gap: 12px; }
 .wf-sidecard { border: 1px solid var(--border-light, #1b202a); border-radius: 8px; background: var(--bg-tertiary, #171b24); margin-bottom: 10px; overflow: hidden; }
@@ -440,7 +439,6 @@ function ensureInstanceStyles(): void {
   .wf-inst-spacer { flex: 0 0 0; width: 0; }
   .wf-inst-btn, .wf-inst-toggle { padding: 6px 10px; font-size: 12px; }
   .wf-inst-body { position: relative; }
-  .wf-inst-canvas-hint { left: 8px; right: 8px; }
   .wf-inst-side {
     position: absolute; left: 0; right: 0; bottom: 0; z-index: 20;
     width: auto; max-height: 70%;
@@ -1281,9 +1279,6 @@ export default function InstancePanel({ instanceId, workspaceId }: InstancePanel
                 onSelect={handleSelect}
                 style={{ position: 'absolute', inset: 0 }}
               />
-              <div className="wf-inst-canvas-hint">
-                点击节点/边查看详情 · 绿=完成 蓝=运行 红=失败 黄=等待决策 灰=跳过/未运行 · 副标题=最新输出摘要
-              </div>
             </div>
             <div
               className={`wf-inst-side${isMobile && sheetOpen ? ' wf-inst-side--open' : ''}`}
