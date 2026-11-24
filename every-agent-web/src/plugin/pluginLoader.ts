@@ -308,21 +308,35 @@ function isDisposable(value: unknown): value is Disposable {
  * commands.registerCommand、events.on）自动收集进 disposables——宿主代管的
  * dispose 收集循环。插件自己持有的 Disposable 依然有效：各注册点的 dispose
  * 均为 Map/Set 删除或数组 splice，重复调用幂等无害。
+ *
+ * 包装函数按属性记忆化（同一属性重复访问必须返回同一函数引用）：
+ * ctx.ui 上的组件型成员（RichComposer / TokenRichText 等）本身就是函数，
+ * 会被本代理一并包装；若每次访问都新建闭包，插件在 JSX 中写
+ * `<ui.RichComposer>` 时元素类型每次渲染都变，React 会把整棵子树卸载重挂
+ * ——富输入框（contentEditable）每敲一键、宿主状态一更新就重挂失焦，
+ * 表现为「无法输入内容」。记忆化后身份稳定，重挂不再发生；若某属性的
+ * 底层函数被替换（getter 返回值变化），按新函数重新包装，行为不失真。
  */
 function trackDisposables<T extends object>(registry: T, disposables: Disposable[]): T {
+  const wrappers = new Map<PropertyKey, { original: (...args: unknown[]) => unknown; wrapped: (...args: unknown[]) => unknown }>()
   return new Proxy(registry, {
     get(target, prop) {
       const value = Reflect.get(target, prop)
       if (typeof value !== 'function') return value
       const fn = value as (...args: unknown[]) => unknown
-      return function tracked(...args: unknown[]) {
+      const hit = wrappers.get(prop)
+      if (hit && hit.original === fn) return hit.wrapped
+      const wrapped = function tracked(...args: unknown[]) {
         const ret = fn.apply(target, args)
         if (isDisposable(ret)) disposables.push(ret)
         return ret
       }
+      wrappers.set(prop, { original: fn, wrapped })
+      return wrapped
     },
   })
 }
+export { trackDisposables }
 
 /**
  * 卸载单个已激活插件：先调 `module.deactivate()`（对标 VSCode 的停用钩子），
