@@ -18,7 +18,7 @@ import java.util.Locale;
  * workflow 插件入口。
  *
  * <p>职责（模型/校验/存储层 + hidden 五工具 + 激活扫描 + <b>执行引擎</b>
- * （WorkflowRuntime/调度器/节点执行器）+ <b>RPC 面</b>（workflow.* 14 个方法））。本类 activate 做六件事：
+ * （WorkflowRuntime/调度器/节点执行器）+ <b>RPC 面</b>（workflow.* 15 个方法））。本类 activate 做六件事：
  * <ol>
  *   <li>构造 {@link WorkflowStore} 并执行 activate 扫描（建内存索引 + 非终态实例标
  *       failed("worker 重启中断")）；</li>
@@ -30,7 +30,7 @@ import java.util.Locale;
  *   <li>注册 {@link WorkflowRpc}（14 个 workflow.* 方法，
  *       契约=计划「RPC 参数契约」表）；</li>
  *   <li>注册 {@link WorkflowToolProvider}（定义 CRUD 五件 + workflow_run/实例查询四件 +
- *       cancel 共十个 hidden 工具；技能包由 plugin.json 声明 {@code skills} 目录物化，不走代码注册）。</li>
+ *       cancel + workflow_rerun 共十一个 hidden 工具；技能包由 plugin.json 声明 {@code skills} 目录物化，不走代码注册）。</li>
  *   <li>注册 {@link dev.everyagent.plugin.workflow.slash.WorkflowRunSlashResolver}（kind=
  *       {@code workflow.run} 的提交解析：任务页运行按钮的 token 原串 → 工作流名+参数+
  *       workflow_run 调用引导的可读替换文本）。</li>
@@ -102,7 +102,7 @@ public class WorkflowPlugin implements EveryAgentPlugin {
         // RPC 面：workflow.* 14 个方法（契约=计划「RPC 参数契约」表）
         new WorkflowRpc(store, engine).registerAll(ctx);
 
-        // hidden 十工具（定义 CRUD 五件 + 运行/查询五件；模型经 skill/workflow-tools/skill.md 认知后按名调用）
+        // hidden 十一工具（定义 CRUD 五件 + 运行/查询/重开六件；模型经 skill/workflow-tools/skill.md 认知后按名调用）
         ctx.registerToolProvider(new WorkflowToolProvider(store, engine));
 
         // 「运行工作流」token 提交解析（kind=workflow.run）：任务页运行按钮发 task.run 的

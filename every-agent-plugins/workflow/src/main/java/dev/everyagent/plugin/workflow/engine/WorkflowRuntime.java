@@ -28,7 +28,7 @@ import tools.jackson.databind.node.ObjectNode;
  *
  * <p><b>任务嵌入（§7.20.8）</b>：AI 节点会话/呈现<b>单写 origin 任务域</b>——引擎运行
  * 入口接受任务 ExecContext 绑定（{@link #taskExec()}，任务内运行时非 null），AI 节点
- * 与督导经它的 agentFactory()/emitter()/conversationArchive() 装配与发射；实例目录只记
+ * 经它的 agentFactory()/emitter()/conversationArchive() 装配与发射；实例目录只记
  * 节点级三样（meta/events/runs），不再持 agents/ 职责。
  *
  * <p><b>emitter 单路由</b>（自实现 {@link EventEmitter}）：实例域事件

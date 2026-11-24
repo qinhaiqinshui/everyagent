@@ -12,9 +12,9 @@ import dev.everyagent.plugin.workflow.engine.WorkflowSubject;
 import dev.everyagent.plugin.workflow.store.WorkflowStore;
 
 /**
- * workflow 工具提供者：定义 CRUD 五件 + 运行/查询五件（workflow_run + instance_
- * status/log/events/cancel）一律走 <b>hidden 池</b>（createHiddenTools）——不进请求
- * tool 定义，模型经「工作流编排」skill 文档的工具参考认知后按名调用。
+ * workflow 工具提供者：定义 CRUD 五件 + 运行/查询/重开六件（workflow_run +
+ * workflow_rerun + instance_status/log/events/cancel）一律走 <b>hidden 池</b>（createHiddenTools）
+ * ——不进请求 tool 定义，模型经「工作流编排」skill 文档的工具参考认知后按名调用。
  *
  * <p><b>零 per-run 捕获</b>：本 provider 只持 store/engine（插件级单例）；
  * per-run 的 ToolContext 在 {@link #createHiddenTools} 调用时传入工具 POJO
