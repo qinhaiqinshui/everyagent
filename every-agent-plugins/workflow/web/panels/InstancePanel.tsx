@@ -1049,10 +1049,17 @@ export default function InstancePanel({ instanceId, workspaceId }: InstancePanel
   const selectedNode = selection?.kind === 'node' ? (definition?.nodes ?? []).find(n => n.id === selection.id) ?? null : null
   const selectedEdge = selection?.kind === 'edge' ? (definition?.edges ?? []).find(e => e.id === selection.id) ?? null : null
 
-  // ── 选中入口（画布点选）：移动端联动底部抽屉开合（清选=收起）。
+  // ── 选中入口（画布点选）：空白点按不清选——详情面板保留最近选中，关闭只走
+  // closeDetail；移动端空白 tap 仍收起抽屉（选中保留，再点节点重开）。
   const handleSelect = React.useCallback((sel: CanvasSelection) => {
-    setSelection(sel)
+    if (sel !== null) setSelection(sel)
     setSheetOpen(sel !== null)
+  }, [])
+
+  /** 关闭详情（面板 × 按钮）：唯一清选入口。 */
+  const closeDetail = React.useCallback(() => {
+    setSelection(null)
+    setSheetOpen(false)
   }, [])
 
   const selectedNodeRuns = React.useMemo(
@@ -1287,8 +1294,9 @@ export default function InstancePanel({ instanceId, workspaceId }: InstancePanel
                 style={{ position: 'absolute', inset: 0 }}
               />
             </div>
-            {/* 详情面板按需出现：点选节点/边才挂载（桌面端非选中不占位）；关闭=清选。
-                移动端保持常驻挂载由 transform 控制抽屉滑入滑出（条件卸载会丢过渡动画）。 */}
+            {/* 详情面板按需出现：点选节点/边才挂载（桌面端非选中不占位）；空白点按
+                保留详情（不清选），关闭只走面板 ×；移动端保持常驻挂载由 transform
+                控制抽屉滑入滑出（条件卸载会丢过渡动画）。 */}
             {!isMobile || selectedNode || selectedEdge ? (
               <div
                 className={`wf-inst-side${isMobile && sheetOpen ? ' wf-inst-side--open' : ''}`}
@@ -1298,7 +1306,7 @@ export default function InstancePanel({ instanceId, workspaceId }: InstancePanel
                   type="button"
                   className="wf-inst-side-close"
                   title="关闭详情"
-                  onClick={() => handleSelect(null)}
+                  onClick={closeDetail}
                 >
                   <CloseIcon size={16} />
                 </button>
