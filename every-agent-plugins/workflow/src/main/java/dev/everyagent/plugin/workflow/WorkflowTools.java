@@ -13,6 +13,7 @@ import dev.everyagent.plugin.api.spi.ToolContext;
 import dev.everyagent.plugin.api.tool.PlainTextToolCallResultConverter;
 import dev.everyagent.plugin.workflow.engine.WorkflowEngine;
 import dev.everyagent.plugin.workflow.model.Definition;
+import dev.everyagent.plugin.workflow.model.DefinitionJson;
 import dev.everyagent.plugin.workflow.model.EventLine;
 import dev.everyagent.plugin.workflow.model.InstanceMeta;
 import dev.everyagent.plugin.workflow.model.InstanceStatus;
@@ -72,7 +73,8 @@ public final class WorkflowTools {
     }
 
     @Tool(description = "创建一个可复用的工作流定义(多节点执行 DAG:开始/命令/AI 节点 + 条件边 + 运行变量 + 命名 agent,"
-            + "由用户在工作流画布查看与运行)。入参是完整定义 JSON 文本(结构见「工作流编排」技能文档);"
+            + "由用户在工作流画布查看与运行)。AI 节点自带 agent(命名会话线,可空)/modelConfigId/systemPrompt/input;"
+            + "入参是完整定义 JSON 文本(结构见「工作流编排」技能文档);"
             + "id/createdAt/updatedAt/workspaceId 等系统字段可省略,自动分配。返回 {id};"
             + "校验失败返回 {error, details[逐项原因]}。",
             resultConverter = PlainTextToolCallResultConverter.class)
@@ -81,7 +83,7 @@ public final class WorkflowTools {
         return saveDefinitionJson(null, definition);
     }
 
-    @Tool(description = "按 id 读取完整工作流定义 JSON(含节点/边/变量/agents 全图)。",
+    @Tool(description = "按 id 读取完整工作流定义 JSON(含节点/边/变量全图)。",
             resultConverter = PlainTextToolCallResultConverter.class)
     public String workflow_get(
             @ToolParam(description = "定义 id(wf_ 前缀,来自 workflow_create 返回或 workflow_list)") String id) {
@@ -404,14 +406,14 @@ public final class WorkflowTools {
         }
         Definition draft;
         try {
-            draft = Json.MAPPER.readValue(definitionText, Definition.class);
+            draft = DefinitionJson.parseText(definitionText);
         } catch (RuntimeException e) {
             return err("定义 JSON 解析失败: " + e.getMessage());
         }
         if (idOverride != null) {
             draft = new Definition(draft.schemaVersion(), idOverride, draft.name(), draft.description(),
                     draft.workspaceId(), draft.createdAt(), draft.updatedAt(), draft.variables(),
-                    draft.onError(), draft.supervisor(), draft.agents(), draft.nodes(), draft.edges());
+                    draft.onError(), draft.supervisor(), draft.nodes(), draft.edges());
         }
         // 先跑一遍校验拿逐项错误(供模型自纠),再落盘(store 内会再校验一次,双保险)
         List<String> errors = DefinitionValidator.validate(draft);

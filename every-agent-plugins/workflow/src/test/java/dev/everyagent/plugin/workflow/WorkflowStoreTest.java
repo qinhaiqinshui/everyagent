@@ -66,9 +66,9 @@ class WorkflowStoreTest {
         assertThat(saved.schemaVersion()).isEqualTo(1);
         Path file = workflowsRoot(WS_A).resolve("definitions").resolve(saved.id()).resolve("definition.json");
         assertThat(file).isRegularFile();
-        // 引用即声明的 agent 已合并落盘
+        // 磁盘往返保真：AI 节点自带 agent 名
         Definition disk = Json.MAPPER.readValue(file.toFile(), Definition.class);
-        assertThat(disk.agentsOrEmpty()).extracting(a -> a.name()).containsExactly("writer");
+        assertThat(disk.nodesOrEmpty().get(1).agent()).isEqualTo("writer");
         assertThat(store.getDefinition(WS_A, saved.id())).contains(saved);
         // 挂靠边界：另一工作区查不到
         assertThat(store.getDefinition(WS_B, saved.id())).isEmpty();
@@ -152,7 +152,6 @@ class WorkflowStoreTest {
         assertThat(imported.workspaceId()).isEqualTo(WS_B);
         // 节点/边/agent 名保留
         assertThat(imported.nodesOrEmpty()).extracting(n -> n.id()).containsExactly("n1", "n2", "n3");
-        assertThat(imported.agentsOrEmpty()).extracting(a -> a.name()).containsExactly("writer");
         assertThat(store.getDefinition(WS_B, imported.id())).isPresent();
         // 导入校验失败拒绝
         Definition broken = DefinitionValidatorTest.def(DefinitionValidatorTest.node("n1", "ai"));
@@ -403,7 +402,7 @@ class WorkflowStoreTest {
         Definition updated = store.saveDefinition(WS_A,
                 new Definition(created.schemaVersion(), created.id(), created.name(), "改描述", created.workspaceId(),
                         created.createdAt(), created.updatedAt(), created.variables(), created.onError(),
-                        created.supervisor(), created.agents(), created.nodes(), created.edges()));
+                        created.supervisor(), created.nodes(), created.edges()));
         assertThat(events).containsExactly(
                 "DEFINITION:CREATED:" + WS_A + ":" + created.id(),
                 "DEFINITION:UPDATED:" + WS_A + ":" + created.id());

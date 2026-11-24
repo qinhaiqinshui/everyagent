@@ -37,15 +37,17 @@ workflow 插件
 
 - **持久化层**（`model/` `validate/` `store/`）：定义/实例 JSON 持久化于
   `workspaces/<wsId>/workflows/`（与 tasks/ 平级、工作区即隔离边界；
-  `definitions/<wfId>/definition.json` + `instances/<wiId>/{meta.json,events.jsonl,runs/,agents/}`）；
-  全量校验器；激活扫描（非终态实例标 failed）。
+  `definitions/<wfId>/definition.json` + `instances/<wiId>/{meta.json,events.jsonl,runs/}`）；
+  全量校验器；激活扫描（非终态实例标 failed）；旧结构 agents[] 总表在解析口
+  就地迁移到引用节点（`DefinitionJson`，不落盘，重存自然转新形态）。
 - **执行引擎**（`engine/`）：`WorkflowRuntime`（ExecContext 实现 + WorkflowSubject 标记，
-  per-node 视图 + emitter 双路由：agent 域事件→`agents/<name>.jsonl`、实例域→events.jsonl；
-  agentId=`<name>#<instanceId>`，匿名 AI 节点一次性会话不落盘）
+  per-node 视图 + emitter 双路由：AI 会话事件单写 origin 任务域
+  `tasks/<taskId>/<agentId>.jsonl`、实例域→events.jsonl；
+  agentId=`<name>#<instanceId>`）
   + `WorkflowEngine` 调度器（开始节点先行、边激活语义一次求值、同 agent fair 锁互斥、
   循环上限 maxRuns、实例状态机、错误三策略 fail/supervisor/askUser、取消）+ `NodeRunners`
-  （命令节点走 nativeExec、AI 节点按会话时序 ①-⑥ 走 agentFactoryFor 装配链、
-  supervisor 决策协议 retry/skip/fail/retryWithInput）。
+  （命令节点走 nativeExec、AI 节点按会话时序 ①-⑥ 走 agentFactoryFor 装配链
+  ——systemPrompt 节点自带或沿上游定义节点解析、supervisor 决策协议 retry/skip/fail/retryWithInput）。
 - **RPC 面**（`rpc/`）：`workflow.*` 15 方法——`def.list`/`def.get`/`def.save`/`def.delete`/
   `def.export`/`def.import`、`run`、`instance.list`/`instance.get`/`instance.runLog`/
   `instance.events`/`instance.cancel`/`instance.delete`/`instance.decide`/`instance.dataDir`
@@ -59,8 +61,9 @@ workflow 插件
   不携带，`appliesTo` 排除），模型经 skill 文档按名调用。
 - **前端界面**（`web/`）：自研 SVG 画布（拖拽/连线/条件标签/运行态着色，Pointer
   Events 统一鼠标/触屏——节点拖拽、锚点连线、背景平移触屏可用）+ 定义编辑器
-  （palette/节点属性面板/七种边条件/运行变量/出错策略/Agents 总表，输入模板用宿主
-  RichComposer）+ 侧边栏（**只展示运行实例**，组头 ▶ 运行/管理/刷新+批量删除
+  （palette/节点属性面板/七种边条件/运行变量/出错策略；AI 节点会话线无 agents
+  总表——下拉候选=沿边反向扫描上游 AI 节点已用名 +「新建会话线」，引用节点只读
+  回显定义节点的 system prompt，输入模板用宿主 RichComposer）+ 侧边栏（**只展示运行实例**，组头 ▶ 运行/管理/刷新+批量删除
   ——宿主任务侧边栏同款单组勾选批删；定义不在侧栏展示）+ **定义管理标签页**
   （workflow-manage，每工作区一个：列表增删改查、导入〔文件/弹窗粘贴 JSON 两路〕、
   导出、运行、查看 JSON〔复制三级兜底，非安全上下文可用〕、顶栏批量删除——只删

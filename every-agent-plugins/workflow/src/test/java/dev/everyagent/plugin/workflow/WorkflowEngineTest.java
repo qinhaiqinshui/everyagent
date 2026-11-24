@@ -17,7 +17,6 @@ import org.springframework.ai.chat.messages.Message;
 import dev.everyagent.plugin.api.exception.BadParamsException;
 import dev.everyagent.plugin.api.model.ModelConfig;
 import dev.everyagent.plugin.workflow.engine.WorkflowEngine;
-import dev.everyagent.plugin.workflow.model.AgentDef;
 import dev.everyagent.plugin.workflow.model.ConditionDef;
 import dev.everyagent.plugin.workflow.model.Definition;
 import dev.everyagent.plugin.workflow.model.EventLine;
@@ -76,7 +75,7 @@ class WorkflowEngineTest {
     private static Definition withOnError(Definition d, OnError onError) {
         return new Definition(d.schemaVersion(), d.id(), d.name(), d.description(), d.workspaceId(),
                 d.createdAt(), d.updatedAt(), d.variables(), onError, d.supervisor(),
-                d.agents(), d.nodes(), d.edges());
+                d.nodes(), d.edges());
     }
 
     private InstanceMeta start(Definition d) {
@@ -173,8 +172,7 @@ class WorkflowEngineTest {
         InstanceMeta created = store.createInstance(
                 new Definition(orphan.schemaVersion(), orphan.id(), orphan.name(),
                         orphan.description(), "ws_missing", orphan.createdAt(), orphan.updatedAt(),
-                        orphan.variables(), orphan.onError(), orphan.supervisor(), orphan.agents(),
-                        orphan.nodes(), orphan.edges()), Map.of());
+                        orphan.variables(), orphan.onError(), orphan.supervisor(), orphan.nodes(), orphan.edges()), Map.of());
         assertThatThrownBy(() -> engine.start(created)).isInstanceOf(BadParamsException.class);
     }
 
@@ -185,8 +183,7 @@ class WorkflowEngineTest {
         Definition d = save(
                 DefinitionValidatorTest.node("s", "start"),
                 DefinitionValidatorTest.node("n", "ai").agent("writer"),
-                DefinitionValidatorTest.edge("e1", "s", "n"),
-                new AgentDef("writer", null, null));
+                DefinitionValidatorTest.edge("e1", "s", "n"));
         // 无绑定 → 拒绝（引导经任务运行）
         assertThatThrownBy(() -> engine.start(store.createInstance(d, Map.of())))
                 .isInstanceOf(BadParamsException.class)
@@ -223,8 +220,7 @@ class WorkflowEngineTest {
         Definition d = save(
                 DefinitionValidatorTest.node("s", "start"),
                 DefinitionValidatorTest.node("n", "ai").agent("writer").input("做点事"),
-                DefinitionValidatorTest.edge("e1", "s", "n"),
-                new AgentDef("writer", null, null));
+                DefinitionValidatorTest.edge("e1", "s", "n"));
         InstanceMeta m = start(d);
         awaitTerminal(m.id());
         assertThat(meta(m.id()).status()).isEqualTo(InstanceStatus.DONE);
@@ -272,9 +268,8 @@ class WorkflowEngineTest {
                 "file.ref", "a.png", null, dev.everyagent.contract.json.Json.obj().put("path", "a.png"));
         Definition base = DefinitionValidatorTest.def(
                 DefinitionValidatorTest.node("s", "start"),
-                DefinitionValidatorTest.node("ai", "ai").agent("writer").input("引用 {{ref}} 写作"),
-                DefinitionValidatorTest.edge("e1", "s", "ai"),
-                new AgentDef("writer", "gpt5", "你是作者"));
+                DefinitionValidatorTest.node("ai", "ai").agent("writer").modelConfigId("gpt5").systemPrompt("你是作者").input("引用 {{ref}} 写作"),
+                DefinitionValidatorTest.edge("e1", "s", "ai"));
         Definition withVars = DefinitionValidatorTest.withVariables(base,
                 new VariableDef("ref", null, true, null, null));
         Definition saved = store.saveDefinition("ws_run", withVars);
@@ -341,7 +336,7 @@ class WorkflowEngineTest {
         return store.saveDefinition("ws_run", DefinitionValidatorTest.def(
                 DefinitionValidatorTest.node("s", "start"),
                 DefinitionValidatorTest.node(cmdId, "command").command(cmd).maxRuns(10),
-                DefinitionValidatorTest.node(sinkId, "ai").maxRuns(10),
+                DefinitionValidatorTest.node(sinkId, "ai").agent(sinkId).maxRuns(10),
                 DefinitionValidatorTest.edge("e1", "s", cmdId),
                 DefinitionValidatorTest.edge("e2", cmdId, sinkId, cond)));
     }
@@ -374,9 +369,9 @@ class WorkflowEngineTest {
         Definition fanout = store.saveDefinition("ws_run", DefinitionValidatorTest.def(
                 DefinitionValidatorTest.node("s", "start"),
                 DefinitionValidatorTest.node("c", "command").command("echo hello").maxRuns(10),
-                DefinitionValidatorTest.node("t1", "ai").maxRuns(10),
-                DefinitionValidatorTest.node("t2", "ai").maxRuns(10),
-                DefinitionValidatorTest.node("t3", "ai").maxRuns(10),
+                DefinitionValidatorTest.node("t1", "ai").agent("t1").maxRuns(10),
+                DefinitionValidatorTest.node("t2", "ai").agent("t2").maxRuns(10),
+                DefinitionValidatorTest.node("t3", "ai").agent("t3").maxRuns(10),
                 DefinitionValidatorTest.edge("e1", "s", "c"),
                 DefinitionValidatorTest.edge("e2", "c", "t1", new ConditionDef("onSuccess", null, null, null)),
                 DefinitionValidatorTest.edge("e3", "c", "t2", new ConditionDef("outputContains", null, "hello", null)),
@@ -403,8 +398,7 @@ class WorkflowEngineTest {
                 DefinitionValidatorTest.node("a", "ai").agent("writer").input("任务A").maxRuns(10),
                 DefinitionValidatorTest.node("b", "ai").agent("writer").input("任务B").maxRuns(10),
                 DefinitionValidatorTest.edge("e1", "s", "a"),
-                DefinitionValidatorTest.edge("e2", "s", "b"),
-                new AgentDef("writer", null, null));
+                DefinitionValidatorTest.edge("e2", "s", "b"));
         InstanceMeta m = start(d);
         awaitTerminal(m.id());
         assertThat(meta(m.id()).status()).as("事件=" + eventNames(m.id())).isEqualTo(InstanceStatus.DONE);
@@ -444,8 +438,7 @@ class WorkflowEngineTest {
                 DefinitionValidatorTest.node("n1", "ai").agent("a1").maxRuns(10),
                 DefinitionValidatorTest.node("n2", "ai").agent("a2").maxRuns(10),
                 DefinitionValidatorTest.edge("e1", "s", "n1"),
-                DefinitionValidatorTest.edge("e2", "s", "n2"),
-                new AgentDef("a1", null, null), new AgentDef("a2", null, null));
+                DefinitionValidatorTest.edge("e2", "s", "n2"));
         InstanceMeta m = start(d);
         awaitTerminal(m.id());
         assertThat(meta(m.id()).status()).isEqualTo(InstanceStatus.DONE);
@@ -470,8 +463,8 @@ class WorkflowEngineTest {
     void loopMaxRunsTriggersErrorPolicy() throws Exception {
         Definition d = saveOnError(OnError.FAIL,
                 DefinitionValidatorTest.node("s", "start"),
-                DefinitionValidatorTest.node("a", "ai").maxRuns(2),
-                DefinitionValidatorTest.node("b", "ai").maxRuns(10),
+                DefinitionValidatorTest.node("a", "ai").agent("looperA").maxRuns(2),
+                DefinitionValidatorTest.node("b", "ai").agent("looperB").maxRuns(10),
                 DefinitionValidatorTest.edge("e1", "s", "a"),
                 DefinitionValidatorTest.edge("e2", "a", "b"),
                 DefinitionValidatorTest.edge("e3", "b", "a"));
@@ -494,8 +487,7 @@ class WorkflowEngineTest {
         Definition d = saveOnError(OnError.FAIL,
                 DefinitionValidatorTest.node("s", "start"),
                 DefinitionValidatorTest.node("n", "ai").agent("writer"),
-                DefinitionValidatorTest.edge("e1", "s", "n"),
-                new AgentDef("writer", null, null));
+                DefinitionValidatorTest.edge("e1", "s", "n"));
         InstanceMeta m = start(d);
         awaitTerminal(m.id());
         assertThat(meta(m.id()).status()).isEqualTo(InstanceStatus.FAILED);
@@ -519,10 +511,9 @@ class WorkflowEngineTest {
         Definition d = saveOnError(OnError.ASK_USER,
                 DefinitionValidatorTest.node("s", "start"),
                 DefinitionValidatorTest.node("n", "ai").agent("writer").maxRuns(10),
-                DefinitionValidatorTest.node("t", "ai").maxRuns(10),
+                DefinitionValidatorTest.node("t", "ai").agent("tail").maxRuns(10),
                 DefinitionValidatorTest.edge("e1", "s", "n"),
-                DefinitionValidatorTest.edge("e2", "n", "t"),
-                new AgentDef("writer", null, null));
+                DefinitionValidatorTest.edge("e2", "n", "t"));
         InstanceMeta m = start(d);
         awaitStatus(m.id(), InstanceStatus.WAITING_USER);
 
@@ -557,10 +548,9 @@ class WorkflowEngineTest {
         Definition d = saveOnError(OnError.SUPERVISOR,
                 DefinitionValidatorTest.node("s", "start"),
                 DefinitionValidatorTest.node("n", "ai").agent("writer").maxRuns(10),
-                DefinitionValidatorTest.node("t", "ai").maxRuns(10),
+                DefinitionValidatorTest.node("t", "ai").agent("tail").maxRuns(10),
                 DefinitionValidatorTest.edge("e1", "s", "n"),
-                DefinitionValidatorTest.edge("e2", "n", "t"),
-                new AgentDef("writer", null, null));
+                DefinitionValidatorTest.edge("e2", "n", "t"));
         InstanceMeta m = start(d);
         awaitTerminal(m.id());
         assertThat(meta(m.id()).status()).isEqualTo(InstanceStatus.FAILED);
@@ -588,8 +578,7 @@ class WorkflowEngineTest {
         Definition d = saveOnError(OnError.ASK_USER,
                 DefinitionValidatorTest.node("s", "start"),
                 DefinitionValidatorTest.node("n", "ai").agent("writer").maxRuns(10).input("原始输入"),
-                DefinitionValidatorTest.edge("e1", "s", "n"),
-                new AgentDef("writer", null, null));
+                DefinitionValidatorTest.edge("e1", "s", "n"));
         InstanceMeta m = start(d);
         awaitStatus(m.id(), InstanceStatus.WAITING_USER);
 
@@ -617,8 +606,7 @@ class WorkflowEngineTest {
         Definition d = save(
                 DefinitionValidatorTest.node("s", "start"),
                 DefinitionValidatorTest.node("n", "ai").agent("writer"),
-                DefinitionValidatorTest.edge("e1", "s", "n"),
-                new AgentDef("writer", null, null));
+                DefinitionValidatorTest.edge("e1", "s", "n"));
         InstanceMeta m = start(d);
         latest = m.id();
         await(() -> eventNames(m.id()).contains("node.started"), "node.started");
@@ -641,13 +629,17 @@ class WorkflowEngineTest {
 
     @Test
     void anonymousAiNodeWritesTaskArchiveOnly() throws Exception {
-        Definition d = save(
+        Definition base = DefinitionValidatorTest.def(
                 DefinitionValidatorTest.node("s", "start"),
                 DefinitionValidatorTest.node("anon", "ai").input("匿名一次性"),
                 DefinitionValidatorTest.node("named", "ai").agent("writer").input("命名会话"),
+
                 DefinitionValidatorTest.edge("e1", "s", "anon"),
-                DefinitionValidatorTest.edge("e2", "s", "named"),
-                new AgentDef("writer", null, null));
+
+                DefinitionValidatorTest.edge("e2", "s", "named"));
+        // 旧结构兼容通道：匿名 AI 节点已过不了保存校验，直构绕过（挂注册工作区）
+        Definition d = new Definition(base.schemaVersion(), null, base.name(), base.description(), "ws_run",
+                null, null, base.variables(), OnError.SUPERVISOR, base.supervisor(), base.nodes(), base.edges());
         InstanceMeta m = start(d);
         awaitTerminal(m.id());
         assertThat(meta(m.id()).status()).isEqualTo(InstanceStatus.DONE);
@@ -684,8 +676,7 @@ class WorkflowEngineTest {
         Definition d = save(
                 DefinitionValidatorTest.node("s", "start"),
                 DefinitionValidatorTest.node("n", "ai").agent("writer"),
-                DefinitionValidatorTest.edge("e1", "s", "n"),
-                new AgentDef("writer", null, null));
+                DefinitionValidatorTest.edge("e1", "s", "n"));
         InstanceMeta m = start(d);
         awaitTerminal(m.id());
 
@@ -741,8 +732,7 @@ class WorkflowEngineTest {
                 DefinitionValidatorTest.node("a", "ai").agent("writer").input("第一段"),
                 DefinitionValidatorTest.node("b", "ai").agent("writer").input("第二段"),
                 DefinitionValidatorTest.edge("e1", "s", "a"),
-                DefinitionValidatorTest.edge("e2", "a", "b"),
-                new AgentDef("writer", null, null));
+                DefinitionValidatorTest.edge("e2", "a", "b"));
         InstanceMeta m = start(d);
         awaitTerminal(m.id());
         assertThat(meta(m.id()).status()).isEqualTo(InstanceStatus.DONE);

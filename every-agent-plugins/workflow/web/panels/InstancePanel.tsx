@@ -44,7 +44,6 @@ import {
   rpcErrorMessage,
   subscribeInstanceEvents,
   workflowGateway,
-  type WorkflowAgentDef,
   type WorkflowDefinition,
   type WorkflowEdgeDef,
   type WorkflowEventsPollState,
@@ -577,7 +576,6 @@ function NodeDetail({
   proj,
   nodeRuns,
   edgeLabelById,
-  agentDef,
   detailRunNo,
   onSelectRun,
 }: {
@@ -585,7 +583,6 @@ function NodeDetail({
   proj: NodeProjection | null
   nodeRuns: WorkflowRunRecord[]
   edgeLabelById: Map<string, string>
-  agentDef?: WorkflowAgentDef | null
   detailRunNo: number | null
   onSelectRun: (runNo: number) => void
 }): React.ReactElement {
@@ -704,13 +701,13 @@ function NodeDetail({
         </div>
       ) : null}
 
-      {agent || agentDef ? (
+      {agent || node.agent ? (
         <div className="wf-sidecard">
           <div className="wf-sidecard-head"><span className="wf-sidecard-title">Agent</span></div>
           <div className="wf-sidecard-body">
             <div className="wf-inst-agent">
-              {agent?.name || agentDef?.name || node.agent || '（匿名一次性会话）'}
-              {(agent?.modelConfigId || agentDef?.modelConfigId) ? ` · 模型 ${agent?.modelConfigId || agentDef?.modelConfigId}` : ''}
+              {agent?.name || node.agent || '（匿名一次性会话）'}
+              {agent?.modelConfigId ? ` · 模型 ${agent?.modelConfigId}` : ''}
               {agent && (agent.seedTurns != null || agent.resultTurns != null)
                 ? ` · 会话轮 ${agent.seedTurns ?? '?'} → ${agent.resultTurns ?? '?'}`
                 : ''}
@@ -1286,7 +1283,6 @@ export default function InstancePanel({ instanceId, workspaceId }: InstancePanel
                     proj={projection[selectedNode.id] ?? null}
                     nodeRuns={selectedNodeRuns}
                     edgeLabelById={edgeLabelById}
-                    agentDef={(definition?.agents ?? []).find(a => a.name === selectedNode.agent) ?? null}
                     detailRunNo={detailRunNo}
                     onSelectRun={setDetailRunNo}
                   />

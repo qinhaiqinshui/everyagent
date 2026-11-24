@@ -1,8 +1,17 @@
 package dev.everyagent.plugin.workflow.engine;
 
 import java.nio.file.Path;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.Deque;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.PriorityQueue;
+import java.util.Set;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -22,9 +31,9 @@ import dev.everyagent.plugin.api.model.EmitEvent;
 import dev.everyagent.plugin.api.proto.SnowflakeId;
 import dev.everyagent.plugin.api.spi.ExecResult;
 import dev.everyagent.plugin.api.util.RootCause;
-import dev.everyagent.plugin.workflow.model.AgentDef;
 import dev.everyagent.plugin.workflow.model.ConditionDef;
 import dev.everyagent.plugin.workflow.model.Definition;
+import dev.everyagent.plugin.workflow.model.EdgeDef;
 import dev.everyagent.plugin.workflow.model.NodeDef;
 import dev.everyagent.plugin.workflow.model.RunRecord;
 import dev.everyagent.plugin.workflow.model.VariableDef;
@@ -204,6 +213,126 @@ public final class NodeRunners {
         }
     }
 
+    // ══════════════════════════ 会话线上游解析（与前端编辑器扫描同语义） ══════════════════════════
+
+    /**
+     * 沿边反向收集 {@code nodeId} 的可达祖先（不含自身；防环用 visited）。
+     * 工作流允许环（maxRuns 兜底），反向遍历按 visited 截断即可。
+     */
+    public static Set<String> upstreamNodeIds(Definition def, String nodeId) {
+        Map<String, List<String>> incoming = new HashMap<>();
+        for (EdgeDef e : def.edgesOrEmpty()) {
+            if (e != null && e.from() != null && e.to() != null) {
+                incoming.computeIfAbsent(e.to(), k -> new ArrayList<>()).add(e.from());
+            }
+        }
+        Set<String> seen = new LinkedHashSet<>();
+        Deque<String> stack = new ArrayDeque<>(incoming.getOrDefault(nodeId, List.of()));
+        while (!stack.isEmpty()) {
+            String cur = stack.pop();
+            if (!seen.add(cur)) {
+                continue;
+            }
+            for (String prev : incoming.getOrDefault(cur, List.of())) {
+                stack.push(prev);
+            }
+        }
+        return seen;
+    }
+
+    /**
+     * 节点在定义节点表中的顺序（上游子集的近似拓扑序）：Kahn 归约，同层按
+     * {@code def.nodes} 列表序平局决胜；环内残留节点按列表序附加在尾部
+     * （工作流允许环——环上「定义节点」取列表序首个，语义近似即可）。
+     */
+    private static List<NodeDef> topoOrderWithin(Definition def, Set<String> subset) {
+        Map<String, Integer> index = new HashMap<>();
+        List<NodeDef> subsetNodes = new ArrayList<>();
+        for (NodeDef n : def.nodesOrEmpty()) {
+            if (n != null && n.id() != null && subset.contains(n.id())) {
+                index.put(n.id(), subsetNodes.size());
+                subsetNodes.add(n);
+            }
+        }
+        Map<String, Integer> indegree = new HashMap<>();
+        for (NodeDef n : subsetNodes) {
+            indegree.put(n.id(), 0);
+        }
+        List<EdgeDef> innerEdges = new ArrayList<>();
+        for (EdgeDef e : def.edgesOrEmpty()) {
+            if (e != null && e.from() != null && e.to() != null
+                    && indegree.containsKey(e.from()) && indegree.containsKey(e.to())) {
+                indegree.merge(e.to(), 1, Integer::sum);
+                innerEdges.add(e);
+            }
+        }
+        Comparator<String> byIndex = Comparator.comparingInt(index::get);
+        PriorityQueue<String> ready = new PriorityQueue<>(byIndex);
+        indegree.forEach((id, deg) -> {
+            if (deg == 0) {
+                ready.add(id);
+            }
+        });
+        Map<String, List<String>> outgoing = new HashMap<>();
+        for (EdgeDef e : innerEdges) {
+            outgoing.computeIfAbsent(e.from(), k -> new ArrayList<>()).add(e.to());
+        }
+        Set<String> emitted = new LinkedHashSet<>();
+        List<NodeDef> order = new ArrayList<>();
+        while (!ready.isEmpty()) {
+            String id = ready.poll();
+            if (!emitted.add(id)) {
+                continue;
+            }
+            order.add(subsetNodes.get(index.get(id)));
+            for (String next : outgoing.getOrDefault(id, List.of())) {
+                if (indegree.merge(next, -1, Integer::sum) == 0) {
+                    ready.add(next);
+                }
+            }
+        }
+        for (NodeDef n : subsetNodes) {
+            if (!emitted.contains(n.id())) {
+                order.add(n);
+            }
+        }
+        return order;
+    }
+
+    /**
+     * 上游 AI 节点已用的会话线名 → 定义节点（拓扑序最早的持有者 = 「新建那条会话线」
+     * 的节点）。编辑器下拉候选与运行时 systemPrompt 解析共用本语义；空 agent 名跳过。
+     */
+    public static Map<String, NodeDef> upstreamAgentDefinitions(Definition def, String nodeId) {
+        Set<String> upstream = upstreamNodeIds(def, nodeId);
+        Map<String, NodeDef> byName = new LinkedHashMap<>();
+        if (upstream.isEmpty()) {
+            return byName;
+        }
+        for (NodeDef n : topoOrderWithin(def, upstream)) {
+            if (NodeDef.TYPE_AI.equals(n.type())
+                    && n.agent() != null && !n.agent().isBlank()) {
+                byName.putIfAbsent(n.agent(), n);
+            }
+        }
+        return byName;
+    }
+
+    /**
+     * AI 节点的生效 systemPrompt：节点自带值优先（= 定义节点）；引用节点（自带为空）
+     * 沿上游解析定义节点的值——单一事实源是定义节点，引用节点不存副本、改定义即全线下游生效。
+     */
+    public static String effectiveSystemPrompt(Definition def, NodeDef node) {
+        if (node.systemPrompt() != null && !node.systemPrompt().isBlank()) {
+            return node.systemPrompt();
+        }
+        if (node.agent() == null || node.agent().isBlank()) {
+            return null;
+        }
+        NodeDef defining = upstreamAgentDefinitions(def, node.id()).get(node.agent());
+        return defining == null ? null : defining.systemPrompt();
+    }
+
     // ══════════════════════════ AI 节点 ══════════════════════════
 
     /**
@@ -212,15 +341,16 @@ public final class NodeRunners {
      * ①持 agent fair 锁 → ②经任务 {@code conversationArchive} 载种子（命名 agent；
      * 含交替不变量补齐）→ ③经任务 emitter 发 user.message 指令轮（agentId=
      * {@code <name>#<wi>}，落 {@code tasks/<taskId>/<agentId>.jsonl}，文件自包含）→
-     * ④{@code taskExec.agentFactory().create(agentKey, configId)}.systemPrompt(声明)
-     * .conversation(种子).userInput(渲染后输入).tools(剔除表, REMOVE).creator("workflow").build()
+     * ④{@code taskExec.agentFactory().create(agentKey, configId)}
+     * .systemPrompt(节点自带或上游定义节点解析).conversation(种子).userInput(渲染后输入)
+     * .tools(剔除表, REMOVE).creator("workflow").build()
      * → ⑤run()（事件实时单写任务 EventLog——瞬态 thinking/delta 与持久 user.message/
      * message/tool.result/usage 全走任务事件口，实例目录不落 agent 会话）→
      * ⑥lastText()/conversation()/usage() 收口交引擎；锁在 finally 释放（锁粒度=整个 run）。
      *
-     * <p>匿名 AI 节点（agent 未指定）= 一次性会话：无种子、agentId={@code <nodeId>.<runNo>}
-     * （不复用）；指令轮照发（任务页可见、档案自包含）。无任务绑定的 AI 节点运行拒绝
-     * （{@link #requireTaskBinding}——fail-fast，引导经任务运行）。
+     * <p>匿名 AI 节点（agent 未指定，仅旧定义兼容通道——新校验已强制必填）= 一次性会话：
+     * 无种子、agentId={@code <nodeId>.<runNo>}（不复用）；指令轮照发（任务页可见、档案自包含）。
+     * 无任务绑定的 AI 节点运行拒绝（{@link #requireTaskBinding}——fail-fast，引导经任务运行）。
      */
     public static final class AiNodeRunner {
 
@@ -228,7 +358,8 @@ public final class NodeRunners {
         }
 
         /**
-         * @param agentLock   命名 agent 的 fair 锁（匿名节点传 null）
+         * @param snapshot   实例定义快照（引用节点 systemPrompt 沿上游解析）
+         * @param agentLock  命名 agent 的 fair 锁（匿名节点传 null）
          * @param visibleToAi token 拍平后的输入（AI 实际所见）
          * @param rendered    变量渲染后的原文（opaque token 原串留档）
          */
@@ -242,9 +373,10 @@ public final class NodeRunners {
             try {
                 String agentName = node.agent() == null || node.agent().isBlank()
                         ? null : node.agent();
-                AgentDef agentDef = agentName == null ? null : findAgent(snapshot, agentName);
-                String configId = node.modelConfigId() != null ? node.modelConfigId()
-                        : (agentDef != null ? agentDef.modelConfigId() : null);
+                // 模型是节点自带配置；系统提示节点自带优先、引用节点沿上游解析定义节点值
+                //（agents 总表已删除，旧定义声明值在解析口迁移到节点，见 DefinitionJson）
+                String configId = node.modelConfigId();
+                String systemPrompt = effectiveSystemPrompt(snapshot, node);
                 String agentKey = agentName != null
                         ? agentName + "#" + instanceId
                         : node.id() + "." + runNo;
@@ -264,9 +396,8 @@ public final class NodeRunners {
                         .title(node.name() == null ? node.id() : node.name())
                         .creator("workflow")
                         .tools(ExcludedTools.toRemove(), AgentBuilder.ModifyMode.REMOVE);
-                if (agentDef != null && agentDef.systemPrompt() != null
-                        && !agentDef.systemPrompt().isBlank()) {
-                    builder.systemPrompt(agentDef.systemPrompt());
+                if (systemPrompt != null && !systemPrompt.isBlank()) {
+                    builder.systemPrompt(systemPrompt);
                 }
                 if (!seed.isEmpty()) {
                     builder.conversation(seed);
@@ -334,15 +465,6 @@ public final class NodeRunners {
             log.warn("[workflow] 指令轮落盘失败 agent={} subject={}", agentKey,
                     taskExec.subjectId(), e);
         }
-    }
-
-    private static AgentDef findAgent(Definition snapshot, String name) {
-        for (AgentDef a : snapshot.agentsOrEmpty()) {
-            if (a != null && name.equals(a.name())) {
-                return a;
-            }
-        }
-        return null;
     }
 
     /**

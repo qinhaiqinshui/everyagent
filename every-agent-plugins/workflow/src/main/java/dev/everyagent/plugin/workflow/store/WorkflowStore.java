@@ -30,6 +30,7 @@ import dev.everyagent.plugin.api.proto.SnowflakeId;
 import dev.everyagent.plugin.api.spi.WorkspaceManager;
 import dev.everyagent.plugin.api.util.AtomicFiles;
 import dev.everyagent.plugin.workflow.model.Definition;
+import dev.everyagent.plugin.workflow.model.DefinitionJson;
 import dev.everyagent.plugin.workflow.model.EventLine;
 import dev.everyagent.plugin.workflow.model.InstanceMeta;
 import dev.everyagent.plugin.workflow.model.InstanceStatus;
@@ -277,7 +278,7 @@ public final class WorkflowStore {
                     continue;
                 }
                 try {
-                    Definition def = Json.MAPPER.readValue(file.toFile(), Definition.class);
+                    Definition def = DefinitionJson.parseText(Files.readString(file, StandardCharsets.UTF_8));
                     if (def == null || def.id() == null || def.id().isBlank()) {
                         log.warn("[workflow] 定义缺 id,跳过: {}", file);
                         continue;
@@ -311,7 +312,11 @@ public final class WorkflowStore {
                     continue;
                 }
                 try {
-                    InstanceMeta meta = Json.MAPPER.readValue(file.toFile(), InstanceMeta.class);
+                    // meta.json 内嵌定义快照：与 definition.json 同口做旧结构迁移
+                    //（agents 总表 → 节点自带字段；不落盘，重存 meta 时自然转新形态）
+                    JsonNode tree = Json.parse(Files.readString(file, StandardCharsets.UTF_8));
+                    DefinitionJson.migrateLegacyAgents(tree.path("definitionSnapshot"));
+                    InstanceMeta meta = Json.convert(tree, InstanceMeta.class);
                     if (meta == null || meta.id() == null || meta.id().isBlank()) {
                         log.warn("[workflow] 实例 meta 缺 id,跳过: {}", file);
                         continue;
@@ -387,7 +392,7 @@ public final class WorkflowStore {
 
     /**
      * 保存定义（upsert）：全量校验（失败抛 {@link BadParamsException}，消息含逐项错误）
-     * → normalize（agent 引用合并/缺省补齐）→ id 分配（draft.id 空则新赋 wf id 并查重）
+     * → normalize（onError/schemaVersion/空表归一）→ id 分配（draft.id 空则新赋 wf id 并查重）
      * → 原子重写 definition.json → 更新索引。定义的 workspaceId 以本参数为准（写入方裁定）。
      */
     public Definition saveDefinition(String workspaceId, Definition draft) {
@@ -409,7 +414,7 @@ public final class WorkflowStore {
                 Definition.SCHEMA_VERSION, id, normalized.name(), normalized.description(), workspaceId,
                 existing != null && existing.createdAt() != null ? existing.createdAt() : now, now,
                 normalized.variables(), normalized.onError(), normalized.supervisor(),
-                normalized.agents(), normalized.nodes(), normalized.edges());
+                normalized.nodes(), normalized.edges());
         try {
             Files.createDirectories(defFile(workspaceId, id).getParent());
             AtomicFiles.writeText(defFile(workspaceId, id), Json.write(saved));
@@ -493,7 +498,7 @@ public final class WorkflowStore {
     private static Definition withId(Definition d, String id) {
         return new Definition(d.schemaVersion(), id, d.name(), d.description(), d.workspaceId(),
                 d.createdAt(), d.updatedAt(), d.variables(), d.onError(), d.supervisor(),
-                d.agents(), d.nodes(), d.edges());
+                d.nodes(), d.edges());
     }
 
     // ════════════════════════════ 实例 ════════════════════════════

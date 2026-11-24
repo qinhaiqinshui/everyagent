@@ -67,7 +67,7 @@ class WorkflowNodeTraceTest {
         Definition d = DefinitionValidatorTest.def(parts);
         return store.saveDefinition("ws_run", new Definition(d.schemaVersion(), d.id(), d.name(),
                 d.description(), d.workspaceId(), d.createdAt(), d.updatedAt(), d.variables(),
-                onError, d.supervisor(), d.agents(), d.nodes(), d.edges()));
+                onError, d.supervisor(), d.nodes(), d.edges()));
     }
 
     /** 绑定任务桩启动并等终态（每实例一个 origin 任务，任务 ID 全局递增）。 */
@@ -107,8 +107,7 @@ class WorkflowNodeTraceTest {
             nodes.add(n.id().equals(replacement.id()) ? replacement : n);
         }
         return new Definition(d.schemaVersion(), d.id(), d.name(), d.description(), d.workspaceId(),
-                d.createdAt(), d.updatedAt(), d.variables(), d.onError(), d.supervisor(),
-                d.agents(), nodes, d.edges());
+                d.createdAt(), d.updatedAt(), d.variables(), d.onError(), d.supervisor(), nodes, d.edges());
     }
 
     // ══════════════════════════ 契约断言 ══════════════════════════
@@ -185,7 +184,7 @@ class WorkflowNodeTraceTest {
         // 不留孤儿进程锁 @TempDir）；Unix 用 sleep
         boolean win = System.getProperty("os.name", "").toLowerCase().contains("win");
         NodeDef slow = new NodeDef("cmd", "command", "慢命令", 0.0, 0.0,
-                win ? "for /l %i in (0,0,1) do rem" : "sleep 30", 400L, null, null, null, null);
+                win ? "for /l %i in (0,0,1) do rem" : "sleep 30", 400L, null, null, null, null, null);
         Definition d = withNode(saveOnError(OnError.FAIL,
                 DefinitionValidatorTest.node("s", "start"),
                 DefinitionValidatorTest.node("cmd", "command").command("echo placeholder"),
@@ -218,8 +217,7 @@ class WorkflowNodeTraceTest {
         Definition d = save(
                 DefinitionValidatorTest.node("s", "start"),
                 DefinitionValidatorTest.node("n", "ai").agent("writer").input("做点事"),
-                DefinitionValidatorTest.edge("e1", "s", "n"),
-                new dev.everyagent.plugin.workflow.model.AgentDef("writer", null, null));
+                DefinitionValidatorTest.edge("e1", "s", "n"));
         startBound(d, Map.of());
         assertThat(status()).isEqualTo(InstanceStatus.DONE);
 

@@ -1060,7 +1060,7 @@ public interface AgentFactory {
 
 - **非任务主体的两个获取口**(plugin-api `WorkerServices`):`agentFactoryFor(ExecContext)` 返回绑定到该 ExecContext 的 `AgentFactory`(静态代理,与任务域 `ExecContext.agentFactory()` 同一绑定形态——非任务主体没有任务域槽位可走,经 worker 服务口取绑定工厂);`modelConfigs()` 返回模型配置全表(apiKey 天然不在返回值,同 `config.get` 掩码纪律),供非任务主体解析节点级模型配置。
 - **不变式:任务域 advisor 不上非任务主体**。`AdvisorContext.isTaskSubject()` 是统一域判定(实现 = `agentEntity().execution() instanceof TaskRuntime`,不用 `ctx instanceof`、不依赖按 subjectId 查任务服务);任务域专属 advisor——消费任务域持久化契约(rounds.jsonl、file-changes 分片)或任务级开关副作用(git 自动同步 token)的——其 provider 的 `appliesTo` 必须以它过滤;后续新增 advisor 注册时必须自检「是否任务域专属」,是则同样过滤。
-- **工作流 agent 上下文模型**:命名 agent = 实例内一条持续会话线(跨节点延续),会话档案与呈现**单写 origin 任务域**(§7.20.8);运行即销毁、冷启动(同任务域 D18/D22 哲学)。隔离边界互相独立:工作区(存储隔离,§7.15)/ 实例间 / agent 间 / 与 task 子 agent 体系(独立督导会话已随 fail-fast 退役,§7.20.8)。**同 agent 名节点全局互斥 = 会话线串行的不变式**:同一条会话线被并行节点交错读写即上下文损坏,调度器以互斥保证串行。
+- **工作流 agent 上下文模型**:命名 agent = 实例内一条持续会话线(跨节点延续),会话档案与呈现**单写 origin 任务域**(§7.20.8);运行即销毁、冷启动(同任务域 D18/D22 哲学)。隔离边界互相独立:工作区(存储隔离,§7.15)/ 实例间 / agent 间 / 与 task 子 agent 体系(独立督导会话已随 fail-fast 退役,§7.20.8)。**同 agent 名节点全局互斥 = 会话线串行的不变式**:同一条会话线被并行节点交错读写即上下文损坏,调度器以互斥保证串行。会话线由 AI 节点 `agent` 字段自引用(无集中声明表):模型与 system prompt 配在节点上,提示词的单一事实源 = 拓扑上游首个持有该名的**定义节点**,引用节点不存副本、运行时沿图解析(改定义处即全线下游生效);旧定义的 agents[] 声明在解析口就地迁移到引用节点,不落盘。
 
 #### 7.20.8 工作流层任务嵌入契约
 

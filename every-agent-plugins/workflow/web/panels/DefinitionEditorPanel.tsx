@@ -8,10 +8,16 @@
  *     workerId?: string     定向 worker（config.get / RichComposer 菜单；缺省经注册表解析）
  *   }
  *
- * 布局三栏：左 = palette（添加节点）+ 变量/onError+supervisor/agents 折叠编辑区；
+ * 布局三栏：左 = palette（添加节点）+ 变量/onError+supervisor 折叠编辑区；
  * 中 = WorkflowCanvas(mode=edit)；右 = 属性面板（选中节点 → 类型特定字段；选中边 →
  * 七种出边条件编辑器）——与实例详情面板同款隐藏规则：仅在选中后挂载，空白点按
  * 保留内容，× 关闭清选。顶部工具栏：定义名/描述 + 保存（def.save）+ 校验错误列表。
+ *
+ * AI 节点会话线（无 agents 总表）：agent 名候选 = 沿边反向可达的上游 AI 节点已用名
+ * （扫描逻辑见 {@link upstreamAgentDefinitions}，与后端运行时解析同语义）；
+ * 下拉含「新建会话线」——本节点成为该会话线的定义节点（名 + system prompt 可编辑）；
+ * 引用上游名则回显定义节点的 system prompt（只读，要改去定义节点），本节点可另配
+ * 模型。引用节点不存 systemPrompt 副本，运行时由后端沿图解析（单一事实源）。
  *
  * 移动端（≤768px，useIsMobile）：左右栏退化为滑入抽屉（遮罩 + 关闭按钮，工具栏
  * 「组件/属性」按钮切换）；选中节点/边自动弹右抽屉（palette 添加节点亦然）；
@@ -33,7 +39,6 @@ import {
   localShortId,
   rpcErrorMessage,
   workflowGateway,
-  type WorkflowAgentDef,
   type WorkflowCondition,
   type WorkflowConditionType,
   type WorkflowDefinition,
@@ -44,7 +49,6 @@ import {
 } from '../workflowGateway'
 import { modelConfigOptionLabel, refreshModelConfigs, type WorkflowModelConfig } from '../modelConfigStore'
 import {
-  AgentIcon,
   AiNodeIcon,
   CloseIcon,
   CommandNodeIcon,
@@ -157,6 +161,11 @@ function ensureEditorStyles(): void {
   document.head.appendChild(style)
 }
 
+// ─── 常量（会话线下拉） ────────────────────────────────────────────────────
+
+/** AI 节点会话线下拉的「新建」哨兵值（真实 agent 名不含该前缀）。 */
+const NEW_LINE_VALUE = '__new_agent_line__'
+
 // ─── 纯逻辑（往返自测的最小核：new→mutate→save payload 组装） ─────────────
 
 /** 新建空白定义（一个 start 节点 + 默认 supervisor 策略）。 */
@@ -170,7 +179,6 @@ export function blankDefinition(workspaceId: string): WorkflowDefinition {
     variables: [],
     onError: 'supervisor',
     supervisor: { modelConfigId: null, systemPrompt: '' },
-    agents: [],
     nodes: [{ id: localShortId('wn'), type: 'start', name: '开始', x: 120, y: 280 }],
     edges: [],
   }
@@ -197,6 +205,91 @@ export function nodePos(n: WorkflowNodeDef, index: number): { x: number; y: numb
 /** 组装 def.save 的 payload（schemaVersion 归一 + 新建时空 id）。 */
 export function buildSavePayload(d: WorkflowDefinition): WorkflowDefinition {
   return { ...d, schemaVersion: 1, id: d.id ?? '' }
+}
+
+// ─── 会话线上游扫描（与后端 NodeRunners.upstreamAgentDefinitions 同语义） ───
+
+/**
+ * 沿边反向找 {@link nodeId} 的可达祖先 AI 节点，收集它们已填的会话线名 →
+ * 定义节点（拓扑序最早的持有者 =「新建那条会话线」的节点）。
+ *
+ * 规则与后端运行时解析严格一致（NodeRunners.upstreamAgentDefinitions）：
+ * - 反向遍历按 visited 截断（工作流允许环，maxRuns 兜底）；
+ * - 上游子集内做 Kahn 拓扑排序，同层按 def.nodes 列表序平局；
+ *   环内残留按列表序附加（环上「定义节点」取列表序首个，语义近似）；
+ * - 每个会话线名取拓扑序最早的持有节点。
+ */
+export function upstreamAgentDefinitions(
+  def: WorkflowDefinition,
+  nodeId: string,
+): Map<string, WorkflowNodeDef> {
+  const nodes = (def.nodes ?? []).filter(n => n && n.id)
+  const edges = (def.edges ?? []).filter(e => e && e.from && e.to)
+  const byId = new Map(nodes.map(n => [n.id, n]))
+  const result = new Map<string, WorkflowNodeDef>()
+
+  // ① 反向可达（不含自身）
+  const incoming = new Map<string, string[]>()
+  for (const e of edges) {
+    const list = incoming.get(e.to) ?? []
+    list.push(e.from)
+    incoming.set(e.to, list)
+  }
+  const seen = new Set<string>()
+  const stack = [...(incoming.get(nodeId) ?? [])]
+  while (stack.length > 0) {
+    const cur = stack.pop() as string
+    if (seen.has(cur)) continue
+    seen.add(cur)
+    for (const prev of incoming.get(cur) ?? []) stack.push(prev)
+  }
+  if (seen.size === 0) return result
+
+  // ② 上游子集拓扑序（Kahn + 列表序平局；环残留尾部附加）
+  const index = new Map<string, number>()
+  const subset: WorkflowNodeDef[] = []
+  for (const n of nodes) {
+    if (seen.has(n.id)) {
+      index.set(n.id, subset.length)
+      subset.push(n)
+    }
+  }
+  const indegree = new Map<string, number>(subset.map(n => [n.id, 0]))
+  for (const e of edges) {
+    if (indegree.has(e.from) && indegree.has(e.to)) {
+      indegree.set(e.to, (indegree.get(e.to) ?? 0) + 1)
+    }
+  }
+  const ready = subset.filter(n => (indegree.get(n.id) ?? 0) === 0).map(n => n.id)
+  const order: WorkflowNodeDef[] = []
+  const emitted = new Set<string>()
+  while (ready.length > 0) {
+    const id = ready.shift() as string
+    if (emitted.has(id)) continue
+    emitted.add(id)
+    const node = byId.get(id)
+    if (node) order.push(node)
+    for (const e of edges) {
+      if (e.from !== id || !indegree.has(e.to)) continue
+      const d = (indegree.get(e.to) ?? 0) - 1
+      indegree.set(e.to, d)
+      if (d === 0) {
+        ready.push(e.to)
+        ready.sort((a, b) => (index.get(a) ?? 0) - (index.get(b) ?? 0))
+      }
+    }
+  }
+  for (const n of subset) {
+    if (!emitted.has(n.id)) order.push(n)
+  }
+
+  // ③ 拓扑序最早的持有者 = 定义节点
+  for (const n of order) {
+    if (n.type === 'ai' && n.agent && n.agent.trim() && !result.has(n.agent)) {
+      result.set(n.agent, n)
+    }
+  }
+  return result
 }
 
 // ─── 组件 ─────────────────────────────────────────────────────────────────
@@ -230,7 +323,7 @@ export default function DefinitionEditorPanel({
   const [resolvedWorker, setResolvedWorker] = React.useState(workerId ?? '')
   const [fallbackTokenLabel, setFallbackTokenLabel] = React.useState('')
   const viewportCenterRef = React.useRef<{ x: number; y: number } | null>(null)
-  // ── 移动端抽屉（≤768px）：left=palette/变量/策略/agents，right=属性面板。
+  // ── 移动端抽屉（≤768px）：left=palette/变量/策略，right=属性面板。
   const isMobile = useIsMobile()
   const [mobileDrawer, setMobileDrawer] = React.useState<'none' | 'left' | 'right'>('none')
 
@@ -476,7 +569,7 @@ export default function DefinitionEditorPanel({
             <button
               type="button"
               className={`wf-editor-btn${mobileDrawer === 'left' ? ' wf-editor-btn-primary' : ''}`}
-              title="节点组件与变量/策略/agents（移动端抽屉）"
+              title="节点组件与变量/策略（移动端抽屉）"
               onClick={() => setMobileDrawer(d => (d === 'left' ? 'none' : 'left'))}
             >
               组件
@@ -514,7 +607,7 @@ export default function DefinitionEditorPanel({
           <div className="wf-editor-mask" onClick={() => setMobileDrawer('none')} />
         ) : null}
 
-        {/* ── 左栏：palette + 变量/策略/agents（移动端=左滑抽屉） ── */}
+        {/* ── 左栏：palette + 变量/策略（移动端=左滑抽屉） ── */}
         <div className={`wf-editor-left${isMobile && mobileDrawer === 'left' ? ' wf-editor-drawer--open' : ''}`}>
           {isMobile ? (
             <button type="button" className="wf-editor-drawer-close" title="收起面板" onClick={() => setMobileDrawer('none')}>
@@ -534,7 +627,6 @@ export default function DefinitionEditorPanel({
 
           <VariablesSection def={def} updateDef={updateDef} />
           <PolicySection def={def} onErrorValue={onErrorValue} modelConfigs={modelConfigs} updateDef={updateDef} />
-          <AgentsSection def={def} modelConfigs={modelConfigs} updateDef={updateDef} />
         </div>
 
         {/* ── 中栏：画布 ── */}
@@ -773,77 +865,6 @@ function PolicySection({
   )
 }
 
-// ─── 左栏折叠区：agents 总表 ──────────────────────────────────────────────
-
-function AgentsSection({
-  def,
-  modelConfigs,
-  updateDef,
-}: {
-  def: WorkflowDefinition
-  modelConfigs: WorkflowModelConfig[]
-  updateDef: (updater: (d: WorkflowDefinition) => WorkflowDefinition) => void
-}) {
-  const agents = def.agents ?? []
-  const patch = (i: number, patch: Partial<WorkflowAgentDef>) => {
-    updateDef(d => ({ ...d, agents: (d.agents ?? []).map((a, j) => (j === i ? { ...a, ...patch } : a)) }))
-  }
-  return (
-    <Section icon={<AgentIcon size={14} />} title="Agents 总表" count={agents.length}>
-      {agents.length === 0 ? (
-        <p className="wf-editor-hint">未声明 agent。AI 节点引用的 agent 名在保存时自动合并进本表（引用即声明）。</p>
-      ) : null}
-      {agents.map((a, i) => (
-        <div className="wf-editor-card" key={i}>
-          <div className="wf-editor-row">
-            <input
-              className="wf-editor-input"
-              style={{ flex: 1 }}
-              value={a.name ?? ''}
-              placeholder="agent 名（如 writer）"
-              onChange={e => patch(i, { name: e.target.value })}
-            />
-            <button
-              className="wf-editor-icon-btn"
-              title="删除 agent"
-              onClick={() => updateDef(d => ({ ...d, agents: (d.agents ?? []).filter((_, j) => j !== i) }))}
-            >
-              <DeleteIcon size={13} />
-            </button>
-          </div>
-          <select
-            className="wf-editor-select"
-            value={a.modelConfigId ?? ''}
-            onChange={e => patch(i, { modelConfigId: e.target.value || null })}
-          >
-            <option value="">（系统默认模型）</option>
-            {modelConfigs.map(c => (
-              <option key={c.configId} value={c.configId}>{modelConfigOptionLabel(c)}</option>
-            ))}
-            {a.modelConfigId && !modelConfigs.some(c => c.configId === a.modelConfigId) ? (
-              <option value={a.modelConfigId}>{a.modelConfigId}（缺失）</option>
-            ) : null}
-          </select>
-          <textarea
-            className="wf-editor-textarea"
-            style={{ minHeight: 44 }}
-            value={a.systemPrompt ?? ''}
-            placeholder="system prompt（可选）"
-            onChange={e => patch(i, { systemPrompt: e.target.value || null })}
-          />
-        </div>
-      ))}
-      <button
-        className="wf-editor-btn"
-        onClick={() => updateDef(d => ({ ...d, agents: [...(d.agents ?? []), { name: '', modelConfigId: null, systemPrompt: '' }] }))}
-      >
-        <PlusIcon size={12} /> 添加 agent
-      </button>
-      <p className="wf-editor-hint">保留名 supervisor/meta/events/runs/agents 不可用（保存时校验）。</p>
-    </Section>
-  )
-}
-
 // ─── 右栏：节点属性（类型特定字段） ───────────────────────────────────────
 
 function NodePropertySection({
@@ -870,7 +891,15 @@ function NodePropertySection({
   onDelete: () => void
 }) {
   const ui = getPluginContext().ui
-  const [newAgent, setNewAgent] = React.useState({ name: '', modelConfigId: '', systemPrompt: '' })
+
+  /** 上游会话线扫描（候选下拉 + 引用回显）：与后端运行时解析同语义。 */
+  const upstreamAgents = React.useMemo(
+    () => upstreamAgentDefinitions(def, node.id),
+    [def, node.id],
+  )
+  /** 引用模式：agent 名来自上游定义节点（systemPrompt 只读回显，不存本节点）。 */
+  const referencing = !!node.agent && upstreamAgents.has(node.agent)
+  const definingNode = referencing ? upstreamAgents.get(node.agent ?? '') ?? null : null
 
   /** 条件可见性：仅当节点有出边时提示条件在边上编辑。 */
   const outEdges = (def.edges ?? []).filter(e => e.from === node.id)
@@ -978,29 +1007,79 @@ function NodePropertySection({
             )}
           </div>
           <div className="wf-editor-field">
-            <label>agent（命名会话线；空 = 一次性会话）</label>
+            <label>会话线（agent）——延续上游已有，或在本节点新建</label>
             <select
               className="wf-editor-select"
-              value={node.agent ?? ''}
-              onChange={e => patchNode(node.id, { agent: e.target.value || null })}
+              value={referencing ? node.agent ?? '' : NEW_LINE_VALUE}
+              onChange={e => {
+                if (e.target.value === NEW_LINE_VALUE) {
+                  // 切回新建模式：清名（systemPrompt 留给用户重填；引用值不落本节点）
+                  patchNode(node.id, { agent: '' })
+                } else {
+                  // 引用上游会话线：不存 systemPrompt 副本（定义节点是唯一事实源）
+                  patchNode(node.id, { agent: e.target.value, systemPrompt: null })
+                }
+              }}
             >
-              <option value="">（一次性会话，不指定）</option>
-              {(def.agents ?? []).filter(a => a.name).map(a => (
-                <option key={a.name} value={a.name}>{a.name}</option>
+              <option value={NEW_LINE_VALUE}>＋ 新建会话线…</option>
+              {[...upstreamAgents.entries()].map(([name, defNode]) => (
+                <option key={name} value={name}>
+                  {name} · 由「{defNode.name || defNode.id}」定义
+                </option>
               ))}
-              {node.agent && !(def.agents ?? []).some(a => a.name === node.agent) ? (
-                <option value={node.agent}>{node.agent}（未声明，保存时自动合并）</option>
-              ) : null}
             </select>
+            {upstreamAgents.size === 0 ? (
+              <p className="wf-editor-hint">上游暂无已建立的会话线——在本节点新建一条，下游节点即可延续。</p>
+            ) : null}
           </div>
+          {referencing ? (
+            <>
+              <div className="wf-editor-field">
+                <label>system prompt（来自定义节点「{definingNode?.name || definingNode?.id || node.agent}」，只读）</label>
+                <textarea
+                  className="wf-editor-textarea"
+                  style={{ minHeight: 56, opacity: 0.85 }}
+                  value={definingNode?.systemPrompt ?? ''}
+                  placeholder="（定义节点未填写 system prompt）"
+                  readOnly
+                />
+              </div>
+              <p className="wf-editor-hint">
+                要修改系统提示词，请在画布选中上游定义节点「{definingNode?.name || definingNode?.id || node.agent}」；
+                本节点仅延续会话线，可另配模型。
+              </p>
+            </>
+          ) : (
+            <>
+              <div className="wf-editor-field">
+                <label>会话线名（agent；本节点为该会话线的定义节点）</label>
+                <input
+                  className="wf-editor-input"
+                  value={node.agent ?? ''}
+                  placeholder="如 writer"
+                  onChange={e => patchNode(node.id, { agent: e.target.value })}
+                />
+              </div>
+              <div className="wf-editor-field">
+                <label>system prompt（可编辑；下游引用本会话线的节点只读回显）</label>
+                <textarea
+                  className="wf-editor-textarea"
+                  style={{ minHeight: 56 }}
+                  value={node.systemPrompt ?? ''}
+                  placeholder="system prompt（可选）"
+                  onChange={e => patchNode(node.id, { systemPrompt: e.target.value || null })}
+                />
+              </div>
+            </>
+          )}
           <div className="wf-editor-field">
-            <label>modelConfigId 覆盖（空 = 用 agent 声明的默认）</label>
+            <label>模型配置（本节点生效；空 = 系统默认模型）</label>
             <select
               className="wf-editor-select"
               value={node.modelConfigId ?? ''}
               onChange={e => patchNode(node.id, { modelConfigId: e.target.value || null })}
             >
-              <option value="">（用 agent 声明的默认）</option>
+              <option value="">（系统默认模型）</option>
               {modelConfigs.map(c => (
                 <option key={c.configId} value={c.configId}>{modelConfigOptionLabel(c)}</option>
               ))}
@@ -1019,58 +1098,6 @@ function NodePropertySection({
               value={node.maxRuns ?? 2}
               onChange={e => patchNode(node.id, { maxRuns: e.target.value ? Number(e.target.value) : null })}
             />
-          </div>
-
-          {/* 新建 agent 入口（建完立即选用） */}
-          <div className="wf-editor-divider" />
-          <div className="wf-editor-field">
-            <label>新建 agent（加入 agents 总表并选用）</label>
-            <input
-              className="wf-editor-input"
-              value={newAgent.name}
-              placeholder="agent 名（如 writer）"
-              onChange={e => setNewAgent(s => ({ ...s, name: e.target.value }))}
-            />
-            <select
-              className="wf-editor-select"
-              value={newAgent.modelConfigId}
-              onChange={e => setNewAgent(s => ({ ...s, modelConfigId: e.target.value }))}
-            >
-              <option value="">（系统默认模型）</option>
-              {modelConfigs.map(c => (
-                <option key={c.configId} value={c.configId}>{modelConfigOptionLabel(c)}</option>
-              ))}
-            </select>
-            <textarea
-              className="wf-editor-textarea"
-              style={{ minHeight: 44 }}
-              value={newAgent.systemPrompt}
-              placeholder="system prompt（可选）"
-              onChange={e => setNewAgent(s => ({ ...s, systemPrompt: e.target.value }))}
-            />
-            <button
-              className="wf-editor-btn"
-              disabled={!newAgent.name.trim()}
-              onClick={() => {
-                const name = newAgent.name.trim()
-                if (!name) return
-                if ((def.agents ?? []).some(a => a.name === name)) {
-                  ui.showToast(`agent「${name}」已存在，直接选用`, 'info')
-                } else {
-                  updateDef(d => ({
-                    ...d,
-                    agents: [
-                      ...(d.agents ?? []),
-                      { name, modelConfigId: newAgent.modelConfigId || null, systemPrompt: newAgent.systemPrompt || null },
-                    ],
-                  }))
-                }
-                patchNode(node.id, { agent: name })
-                setNewAgent({ name: '', modelConfigId: '', systemPrompt: '' })
-              }}
-            >
-              <PlusIcon size={12} /> 创建并选用
-            </button>
           </div>
         </>
       ) : null}
@@ -1209,18 +1236,23 @@ function EdgePropertySection({
  * 2. palette 添加命令节点 + AI 节点（落画布中心附近，自动选中）。
  * 3. 拖动节点改位置；从「开始」右侧锚点拖到命令节点建立边；再连到 AI 节点。
  * 4. 选中边 → 条件类型切 onSuccess；选中命令节点 → 填 command/timeoutMs/maxRuns；
- *    选中 AI 节点 → 新建 agent「writer」并选用、填 input 模板、选模型覆盖。
+ *    选中 AI 节点 → 会话线下拉选「＋ 新建会话线…」→ 填名「writer」+ system prompt
+ *    + 模型 + input 模板（本节点成为该会话线的定义节点）。
+ * 4b. 再加一个下游 AI 节点并连线 → 其会话线下拉应出现「writer · 由「…」定义」；
+ *    选中后 system prompt 只读回显定义节点的值，模型可另选；回到定义节点改
+ *    system prompt → 下游引用节点的回显随之变化（不存副本）。
  * 5. 左栏展开「运行变量」加一个 required 变量、「出错策略」确认默认 supervisor +
- *    选督导模型、「Agents 总表」确认 writer 已列入。
+ *    选督导模型。
  * 6. 保存 → toast「工作流已创建：wf_…」，dirty ● 消失，标题处显示定义 id。
  * 7. 关闭标签页 → 重新从侧边栏/定义列表打开同一定义 → 节点位置/连线/条件/命令/
- *    agent/input/变量/onError/supervisor/agents 全部还原（def.get 原样回读）。
- * 8. 反向校验：删掉 command 内容保存 → 出现红色逐项错误列表（后端校验器返回）。
+ *    会话线/input/变量/onError/supervisor 全部还原（def.get 原样回读）。
+ * 8. 反向校验：删掉 command 内容保存 → 出现红色逐项错误列表（后端校验器返回）；
+ *    AI 节点清空会话线名保存 → 「AI 节点必须指定 agent 名」逐项报错。
  *
  * ── 人工验证清单（移动端，视口 ≤768px / 手机或桌面窄窗）──────────────────
  * 9. 窄视口打开编辑器：画布占满全宽；工具栏只剩 定义名/描述/组件/属性/保存（定义
  *    id 标签隐藏），输入占满整行。
- * 10. 「组件」→ 左抽屉滑入（palette/变量/策略/agents 可滚动）；点遮罩或 × 收起。
+ * 10. 「组件」→ 左抽屉滑入（palette/变量/策略 可滚动）；点遮罩或 × 收起。
  * 11. 触屏拖动节点改位置（不触发页面滚动）；从锚点（扩大命中区）拖出连线落到目标
  *     节点；背景单指拖动平移画布。
  * 12. 点按节点/边 → 右「属性」抽屉自动滑入；属性面板「删除节点/边」按钮可用

@@ -46,13 +46,6 @@ export interface WorkflowVariableDef {
   description?: string | null
 }
 
-/** 命名 agent 声明（一个命名 agent = 实例内一条持续会话线）。 */
-export interface WorkflowAgentDef {
-  name: string
-  modelConfigId?: string | null
-  systemPrompt?: string | null
-}
-
 /** 节点定义（x/y 即画布坐标——位置存定义）。 */
 export interface WorkflowNodeDef {
   id: string
@@ -66,12 +59,18 @@ export interface WorkflowNodeDef {
   timeoutMs?: number | null
   /** 循环上限 ∈[1,10]。 */
   maxRuns?: number | null
-  /** ai 节点：命名会话线（null=一次性会话）。 */
+  /** ai 节点：命名会话线（必填；候选=上游 AI 节点已用名，或本节点新建）。 */
   agent?: string | null
-  /** ai 节点：模型配置覆盖（null=用 agent 声明的默认）。 */
+  /** ai 节点：模型配置（本节点生效；空=系统默认模型）。 */
   modelConfigId?: string | null
   /** ai 节点：输入模板（{{var}} 渲染 + opaque token）。 */
   input?: string | null
+  /**
+   * ai 节点：系统提示。仅「定义节点」（该会话线名的首个持有者，通常为本节点新建）
+   * 存值并可编辑；引用上游会话线的节点不存副本（null）——运行时沿图解析定义节点的
+   * 值，保证定义处修改后全线下游生效。
+   */
+  systemPrompt?: string | null
 }
 
 /** 边定义（源节点完成时对出边条件求值一次）。 */
@@ -85,7 +84,9 @@ export interface WorkflowEdgeDef {
 /** 出错策略（默认 supervisor）。 */
 export type WorkflowOnError = 'fail' | 'supervisor' | 'askUser'
 
-/** 工作流定义（definition.json 完整结构；后端 NON_NULL 序列化，字段可缺省）。 */
+/** 工作流定义（definition.json 完整结构；后端 NON_NULL 序列化，字段可缺省）。
+ *  旧结构的 agents[] 总表已删除——后端解析口就地迁移（声明值复制到引用节点），
+ *  前端不会再见到 agents 字段。 */
 export interface WorkflowDefinition {
   schemaVersion?: number | null
   id?: string | null
@@ -97,7 +98,6 @@ export interface WorkflowDefinition {
   variables?: WorkflowVariableDef[] | null
   onError?: WorkflowOnError | null
   supervisor?: { modelConfigId?: string | null; systemPrompt?: string | null } | null
-  agents?: WorkflowAgentDef[] | null
   nodes?: WorkflowNodeDef[] | null
   edges?: WorkflowEdgeDef[] | null
 }

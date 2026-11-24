@@ -17,7 +17,6 @@ import dev.everyagent.plugin.api.exception.AgentCancelledException;
 import dev.everyagent.plugin.api.exception.BadParamsException;
 import dev.everyagent.plugin.api.model.ModelConfig;
 import dev.everyagent.plugin.workflow.engine.WorkflowEngine;
-import dev.everyagent.plugin.workflow.model.AgentDef;
 import dev.everyagent.plugin.workflow.model.Definition;
 import dev.everyagent.plugin.workflow.model.EventLine;
 import dev.everyagent.plugin.workflow.model.InstanceMeta;
@@ -114,8 +113,7 @@ class WorkflowRerunTest {
                 DefinitionValidatorTest.node("c3", "command").command("echo three"),
                 DefinitionValidatorTest.edge("e1", "s", "c1"),
                 DefinitionValidatorTest.edge("e2", "c1", "n"),
-                DefinitionValidatorTest.edge("e3", "n", "c3"),
-                new AgentDef("writer", null, null));
+                DefinitionValidatorTest.edge("e3", "n", "c3"));
         JsonNode r = Json.parse(tools.workflow_run(d.id(), null, null));
         assertThat(r.path("status").asString()).isEqualTo("failed");
         assertThat(r.path("nodeId").asString()).isEqualTo("n");
@@ -216,8 +214,7 @@ class WorkflowRerunTest {
         Definition d = save(
                 DefinitionValidatorTest.node("s", "start"),
                 DefinitionValidatorTest.node("n", "ai").agent("writer").maxRuns(10).input("原始输入"),
-                DefinitionValidatorTest.edge("e1", "s", "n"),
-                new AgentDef("writer", null, null));
+                DefinitionValidatorTest.edge("e1", "s", "n"));
         JsonNode first = Json.parse(tools.workflow_run(d.id(), null, null));
         assertThat(first.path("status").asString()).isEqualTo("failed");
         String id = first.path("instanceId").asString();
@@ -254,8 +251,7 @@ class WorkflowRerunTest {
         Definition d = save(
                 DefinitionValidatorTest.node("s", "start"),
                 DefinitionValidatorTest.node("n", "ai").agent("writer").maxRuns(10),
-                DefinitionValidatorTest.edge("e1", "s", "n"),
-                new AgentDef("writer", null, null));
+                DefinitionValidatorTest.edge("e1", "s", "n"));
         JsonNode first = Json.parse(tools.workflow_run(d.id(), null, null));
         String id = first.path("instanceId").asString();
         assertThat(first.path("status").asString()).isEqualTo("failed");
@@ -295,8 +291,7 @@ class WorkflowRerunTest {
         Definition d = save(
                 DefinitionValidatorTest.node("s", "start"),
                 DefinitionValidatorTest.node("n", "ai").agent("writer").maxRuns(10),
-                DefinitionValidatorTest.edge("e1", "s", "n"),
-                new AgentDef("writer", null, null));
+                DefinitionValidatorTest.edge("e1", "s", "n"));
         InstanceMeta created = store.createInstance(d, null, task.subjectId());
         assertThat(Json.parse(tools.workflow_rerun(created.id(), null, null))
                 .path("error").asString()).contains("仅 failed");
@@ -383,9 +378,7 @@ class WorkflowRerunTest {
                 DefinitionValidatorTest.node("a", "ai").agent("writer").maxRuns(10),
                 DefinitionValidatorTest.node("b", "ai").agent("slow").maxRuns(10),
                 DefinitionValidatorTest.edge("e1", "s", "a"),
-                DefinitionValidatorTest.edge("e2", "s", "b"),
-                new AgentDef("writer", null, null),
-                new AgentDef("slow", null, null));
+                DefinitionValidatorTest.edge("e2", "s", "b"));
         InstanceMeta m = engine.start(store.createInstance(d, null, task.subjectId()), task);
         // b 确实跑起来（装配出 slow agent = 已进入节点运行）
         await(() -> factory.built.stream().anyMatch(a -> a.agentId().startsWith("slow#")), "b 运行中");
@@ -414,8 +407,7 @@ class WorkflowRerunTest {
                 DefinitionValidatorTest.node("c1", "command").command("echo one"),
                 DefinitionValidatorTest.node("n", "ai").agent("writer").maxRuns(10),
                 DefinitionValidatorTest.edge("e1", "s", "c1"),
-                DefinitionValidatorTest.edge("e2", "c1", "n"),
-                new AgentDef("writer", null, null));
+                DefinitionValidatorTest.edge("e2", "c1", "n"));
         JsonNode first = Json.parse(tools.workflow_run(d.id(), null, null));
         String id = first.path("instanceId").asString();
         assertThat(first.path("nodeId").asString()).isEqualTo("n");
@@ -452,8 +444,7 @@ class WorkflowRerunTest {
         Definition d = save(
                 DefinitionValidatorTest.node("s", "start"),
                 DefinitionValidatorTest.node("n", "ai").agent("writer").maxRuns(10),
-                DefinitionValidatorTest.edge("e1", "s", "n"),
-                new AgentDef("writer", null, null));
+                DefinitionValidatorTest.edge("e1", "s", "n"));
         JsonNode first = Json.parse(tools.workflow_run(d.id(), null, null));
         String id = first.path("instanceId").asString();
         assertThat(first.path("status").asString()).isEqualTo("failed");

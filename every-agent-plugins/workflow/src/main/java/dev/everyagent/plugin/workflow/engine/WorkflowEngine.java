@@ -34,7 +34,6 @@ import dev.everyagent.plugin.workflow.engine.NodeRunners.AiNodeRunner;
 import dev.everyagent.plugin.workflow.engine.NodeRunners.CommandNodeRunner;
 import dev.everyagent.plugin.workflow.engine.NodeRunners.Decision;
 import dev.everyagent.plugin.workflow.engine.NodeRunners.NodeResult;
-import dev.everyagent.plugin.workflow.model.AgentDef;
 import dev.everyagent.plugin.workflow.model.Definition;
 import dev.everyagent.plugin.workflow.model.EdgeDef;
 import dev.everyagent.plugin.workflow.model.EventLine;
@@ -450,7 +449,7 @@ public final class WorkflowEngine {
     /**
      * 运行前校验（workflow.run RPC 与 workflow_run 工具的<b>公共方法</b>，两处共用同一
      * 实现）：required 变量校验（缺→BAD_PARAMS 列出缺失名；默认值可满足 required——
-     * 与渲染口径一致）+ 定义引用的模型配置存在性校验（agent 声明与节点覆盖全查，
+     * 与渲染口径一致）+ 定义引用的模型配置存在性校验（AI 节点与督导模型全查，
      * 不存在→BAD_PARAMS 带定位；configId=null=用系统默认模型不在校验范围）。
      */
     public void validateForRun(Definition def, Map<String, String> variables) {
@@ -481,9 +480,9 @@ public final class WorkflowEngine {
     }
 
     /**
-     * 定义引用的模型配置存在性（经 {@code services.modelConfigs()}）：agent 声明与节点
-     * 覆盖全查。configId=null=用系统默认模型，不在校验范围。引用处带定位
-     * （「agent 名/节点名 → configId」逐项列出）。
+     * 定义引用的模型配置存在性（经 {@code services.modelConfigs()}）：AI 节点的
+     * modelConfigId 与督导模型全查。configId=null=用系统默认模型，不在校验范围。
+     * 引用处带定位（「节点名 → configId」逐项列出）。
      */
     private List<String> unknownModelConfigs(Definition def) {
         LinkedHashSet<String> known = new LinkedHashSet<>();
@@ -494,18 +493,17 @@ public final class WorkflowEngine {
         }
         List<String> unknown = new ArrayList<>();
         LinkedHashSet<String> reported = new LinkedHashSet<>();
-        for (AgentDef a : def.agentsOrEmpty()) {
-            if (a != null && a.modelConfigId() != null && !known.contains(a.modelConfigId())
-                    && reported.add(a.modelConfigId())) {
-                unknown.add("agent「" + (a.name() == null ? "" : a.name()) + "」→ " + a.modelConfigId());
-            }
-        }
         for (NodeDef n : def.nodesOrEmpty()) {
             if (n != null && n.modelConfigId() != null && !known.contains(n.modelConfigId())
                     && reported.add(n.modelConfigId())) {
                 unknown.add("节点「" + (n.name() == null || n.name().isBlank() ? n.id() : n.name())
                         + "」→ " + n.modelConfigId());
             }
+        }
+        if (def.supervisor() != null && def.supervisor().modelConfigId() != null
+                && !known.contains(def.supervisor().modelConfigId())
+                && reported.add(def.supervisor().modelConfigId())) {
+            unknown.add("督导 → " + def.supervisor().modelConfigId());
         }
         return unknown;
     }
@@ -1091,13 +1089,14 @@ public final class WorkflowEngine {
         for (NodeDef n : r.snapshot.nodesOrEmpty()) {
             nodes.add(n.id().equals(node.id())
                     ? new NodeDef(n.id(), n.type(), n.name(), n.x(), n.y(), n.command(),
-                            n.timeoutMs(), n.maxRuns(), n.agent(), n.modelConfigId(), newInput)
+                            n.timeoutMs(), n.maxRuns(), n.agent(), n.modelConfigId(), newInput,
+                            n.systemPrompt())
                     : n);
         }
         Definition old = r.snapshot;
         r.snapshot = new Definition(old.schemaVersion(), old.id(), old.name(), old.description(),
                 old.workspaceId(), old.createdAt(), old.updatedAt(), old.variables(), old.onError(),
-                old.supervisor(), old.agents(), nodes, old.edges());
+                old.supervisor(), nodes, old.edges());
     }
 
     // ══════════════════════════ 事件发射 ══════════════════════════
@@ -1250,7 +1249,7 @@ public final class WorkflowEngine {
     }
 
     private static NodeDef unknownNode(String nodeId) {
-        return new NodeDef(nodeId, "unknown", nodeId, null, null, null, null, null, null, null, null);
+        return new NodeDef(nodeId, "unknown", nodeId, null, null, null, null, null, null, null, null, null);
     }
 
     /** 状态 → wire 名（与 InstanceStatus @JsonProperty 序列化值一致）。 */

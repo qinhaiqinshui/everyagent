@@ -9,8 +9,14 @@ import com.fasterxml.jackson.annotation.JsonInclude;
  * 工作流定义（definitions/&lt;wf_id&gt;/definition.json，RPC {@code def.save} 原子重写）。
  *
  * <p>与实例完全解耦：实例持深拷贝快照，定义后续修改/删除不影响运行中与历史实例。
- * 保存时后端规范化：节点引用的 agent 名自动合并进 agents[]（引用即声明，
- * 未显式声明的补默认模型 null，见 {@code DefinitionValidator.normalize}）。
+ * 保存时后端规范化：onError 缺省 supervisor、schemaVersion 归一、null 列表归空表
+ * （见 {@code DefinitionValidator.normalize}）。
+ *
+ * <p><b>历史结构</b>：早期版本带 agents[] 总表（命名 agent 的集中声明：modelConfigId/
+ * systemPrompt）；已删除该功能——会话线由 AI 节点的 {@code agent} 字段自引用，模型与
+ * 系统提示直接配在节点上。旧 JSON 的 agents[] 在解析口经
+ * {@link DefinitionJson#migrateLegacyAgents} 就地迁移（声明值复制到引用节点），不落盘
+ * ——重新保存时自然转新形态。
  *
  * <p>列表排序约定：定义列表按 updatedAt 倒序。
  */
@@ -27,7 +33,6 @@ public record Definition(
         List<VariableDef> variables,
         OnError onError,
         Supervisor supervisor,
-        List<AgentDef> agents,
         List<NodeDef> nodes,
         List<EdgeDef> edges) {
 
@@ -47,11 +52,6 @@ public record Definition(
         return variables == null ? List.of() : variables;
     }
 
-    /** null 安全：命名 agent 声明列表。 */
-    public List<AgentDef> agentsOrEmpty() {
-        return agents == null ? List.of() : agents;
-    }
-
     /** null 安全：节点列表。 */
     public List<NodeDef> nodesOrEmpty() {
         return nodes == null ? List.of() : nodes;
@@ -65,6 +65,6 @@ public record Definition(
     /** 同构换 id（导入重赋 id / 测试构造用；其余字段逐项保留）。 */
     public Definition withId(String newId) {
         return new Definition(schemaVersion, newId, name, description, workspaceId,
-                createdAt, updatedAt, variables, onError, supervisor, agents, nodes, edges);
+                createdAt, updatedAt, variables, onError, supervisor, nodes, edges);
     }
 }

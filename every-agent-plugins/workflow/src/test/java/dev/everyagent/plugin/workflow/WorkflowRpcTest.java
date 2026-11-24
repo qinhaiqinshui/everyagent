@@ -23,7 +23,6 @@ import dev.everyagent.plugin.api.model.ModelConfig;
 import dev.everyagent.plugin.api.rpc.RpcContext;
 import dev.everyagent.plugin.api.rpc.RpcMethod;
 import dev.everyagent.plugin.workflow.engine.WorkflowEngine;
-import dev.everyagent.plugin.workflow.model.AgentDef;
 import dev.everyagent.plugin.workflow.model.Definition;
 import dev.everyagent.plugin.workflow.model.EventLine;
 import dev.everyagent.plugin.workflow.model.InstanceMeta;
@@ -263,8 +262,7 @@ class WorkflowRpcTest {
         Definition d = save("ws_run",
                 DefinitionValidatorTest.node("s", "start"),
                 DefinitionValidatorTest.node("a", "ai").agent("writer"),
-                DefinitionValidatorTest.edge("e1", "s", "a"),
-                new AgentDef("writer", null, null));
+                DefinitionValidatorTest.edge("e1", "s", "a"));
         Call c = call(p().put("workspace", "ws_run").put("id", d.id()));
         rpc.defGet(c);
         JsonNode def = c.result.path("definition");
@@ -304,7 +302,7 @@ class WorkflowRpcTest {
         Thread.sleep(5);
         Definition renamed = new Definition(saved.schemaVersion(), id, "改名后的定义", saved.description(),
                 "w_elsewhere", saved.createdAt(), saved.updatedAt(), saved.variables(), saved.onError(),
-                saved.supervisor(), saved.agents(), saved.nodes(), saved.edges());
+                saved.supervisor(), saved.nodes(), saved.edges());
         Call c2 = call(p().put("workspace", "ws_run").set("definition", Json.toJson(renamed)));
         rpc.defSave(c2);
         assertThat(c2.result.path("id").asString()).isEqualTo(id);
@@ -364,15 +362,14 @@ class WorkflowRpcTest {
     void defExportReturnsRawAndMissingRejected() {
         Definition d = save("ws_run",
                 DefinitionValidatorTest.node("s", "start"),
-                DefinitionValidatorTest.node("a", "ai").agent("writer").input("写点东西"),
-                DefinitionValidatorTest.edge("e1", "s", "a"),
-                new AgentDef("writer", "gpt5", "你是作者"));
+                DefinitionValidatorTest.node("a", "ai").agent("writer").modelConfigId("gpt5").systemPrompt("你是作者").input("写点东西"),
+                DefinitionValidatorTest.edge("e1", "s", "a"));
         Call c = call(p().put("workspace", "ws_run").put("id", d.id()));
         rpc.defExport(c);
         JsonNode exported = c.result.path("definition");
         assertThat(exported.path("id").asString()).isEqualTo(d.id());
         assertThat(exported.path("nodes")).hasSize(2);
-        assertThat(exported.path("agents").get(0).path("modelConfigId").asString()).isEqualTo("gpt5");
+        assertThat(exported.path("nodes").get(1).path("modelConfigId").asString()).isEqualTo("gpt5");
         // 与 def.get 同源（原样往返）
         Call g = call(p().put("workspace", "ws_run").put("id", d.id()));
         rpc.defGet(g);
@@ -385,9 +382,8 @@ class WorkflowRpcTest {
     void defImportReassignsIdAndLandsInTargetWorkspace() throws Exception {
         Definition original = save("ws_run",
                 DefinitionValidatorTest.node("s", "start"),
-                DefinitionValidatorTest.node("a", "ai").agent("writer").input("内容"),
-                DefinitionValidatorTest.edge("e1", "s", "a"),
-                new AgentDef("writer", null, "你是作者"));
+                DefinitionValidatorTest.node("a", "ai").agent("writer").systemPrompt("你是作者").input("内容"),
+                DefinitionValidatorTest.edge("e1", "s", "a"));
         String raw = store.exportDefinition("ws_run", original.id()).orElseThrow();
 
         // 导入同工作区：重赋顶层 id，原定义保留
@@ -398,7 +394,7 @@ class WorkflowRpcTest {
         assertThat(newId).startsWith("wf_").isNotEqualTo(original.id());
         Definition imported = store.getDefinition("ws_run", newId).orElseThrow();
         assertThat(imported.nodesOrEmpty()).hasSize(2);
-        assertThat(imported.agentsOrEmpty().get(0).name()).isEqualTo("writer");
+        assertThat(imported.nodesOrEmpty().get(1).agent()).isEqualTo("writer");
         assertThat(store.findDefinition(original.id())).isPresent();
 
         // 导入另一工作区：落入指定工作区
@@ -454,8 +450,7 @@ class WorkflowRpcTest {
         Definition d = save("ws_run",
                 DefinitionValidatorTest.node("s", "start"),
                 DefinitionValidatorTest.node("a", "ai").agent("writer"),
-                DefinitionValidatorTest.edge("e1", "s", "a"),
-                new AgentDef("writer", null, null));
+                DefinitionValidatorTest.edge("e1", "s", "a"));
         // 含 AI 节点而无任务绑定 → 拒绝并引导经任务运行；已建实例停留在 created（从未启动）
         assertThatThrownBy(() -> rpc.run(call(p().put("workspace", "ws_run")
                 .put("definitionId", d.id()))))
@@ -494,9 +489,8 @@ class WorkflowRpcTest {
     void runValidatesModelConfigsAndParams() {
         Definition bad = save("ws_run",
                 DefinitionValidatorTest.node("s", "start"),
-                DefinitionValidatorTest.node("a", "ai").agent("writer"),
-                DefinitionValidatorTest.edge("e1", "s", "a"),
-                new AgentDef("writer", "gpt4-nope", null));
+                DefinitionValidatorTest.node("a", "ai").agent("writer").modelConfigId("gpt4-nope"),
+                DefinitionValidatorTest.edge("e1", "s", "a"));
         // 模型配置不存在（services.modelConfigs 只有 gpt5）→ BAD_PARAMS 带定位
         assertThatThrownBy(() -> rpc.run(call(p().put("workspace", "ws_run")
                 .put("definitionId", bad.id()))))
@@ -505,10 +499,10 @@ class WorkflowRpcTest {
                 .hasMessageContaining("gpt4-nope");
         // 节点级覆盖同样校验
         Definition badNode = store.saveDefinition("ws_run", new Definition(null, null, "测试定义",
-                null, "ws_run", null, null, null, null, null, null,
+                null, "ws_run", null, null, null, null, null,
                 List.of(DefinitionValidatorTest.node("s", "start").def,
-                        new NodeDef("a", "ai", "a", 0.0, 0.0, null, null, null, null,
-                                "missing-cfg", null)),
+                        new NodeDef("a", "ai", "a", 0.0, 0.0, null, null, null, "b",
+                                "missing-cfg", null, null)),
                 List.of(DefinitionValidatorTest.edge("e1", "s", "a"))));
         assertThatThrownBy(() -> rpc.run(call(p().put("workspace", "ws_run")
                 .put("definitionId", badNode.id()))))
@@ -542,8 +536,7 @@ class WorkflowRpcTest {
         Definition d1 = save("ws_run",
                 DefinitionValidatorTest.node("s", "start"),
                 DefinitionValidatorTest.node("a", "ai").agent("writer"),
-                DefinitionValidatorTest.edge("e1", "s", "a"),
-                new AgentDef("writer", null, null));
+                DefinitionValidatorTest.edge("e1", "s", "a"));
         Definition d2 = save("ws_run", DefinitionValidatorTest.node("s2", "start"));
         String id1 = runToTerminal(d1, Map.of()).id();
         Thread.sleep(5);
@@ -601,8 +594,7 @@ class WorkflowRpcTest {
         Definition d = save("ws_run",
                 DefinitionValidatorTest.node("s", "start"),
                 DefinitionValidatorTest.node("a", "ai").agent("writer"),
-                DefinitionValidatorTest.edge("e1", "s", "a"),
-                new AgentDef("writer", null, null));
+                DefinitionValidatorTest.edge("e1", "s", "a"));
         factory.script("writer", key -> Fakes.Script.echo("ok"));
         InstanceMeta m = runToTerminal(d, Map.of("k", "v"));
         Call c = call(p().put("instanceId", m.id()));
@@ -629,8 +621,7 @@ class WorkflowRpcTest {
                 DefinitionValidatorTest.node("c", "command").command("echo out"),
                 DefinitionValidatorTest.node("a", "ai").agent("writer"),
                 DefinitionValidatorTest.edge("e1", "s", "c"),
-                DefinitionValidatorTest.edge("e2", "c", "a"),
-                new AgentDef("writer", null, null));
+                DefinitionValidatorTest.edge("e2", "c", "a"));
         factory.script("writer", key -> Fakes.Script.echo("ok"));
         InstanceMeta m = runToTerminal(d, Map.of());
 
@@ -712,8 +703,7 @@ class WorkflowRpcTest {
         Definition d = save("ws_run",
                 DefinitionValidatorTest.node("s", "start"),
                 DefinitionValidatorTest.node("a", "ai").agent("writer"),
-                DefinitionValidatorTest.edge("e1", "s", "a"),
-                new AgentDef("writer", null, null));
+                DefinitionValidatorTest.edge("e1", "s", "a"));
         InstanceMeta m = startBound(d);
         // 游标锚点=writer 节点自身的 node.started（此后到节点完成前无新事件）
         awaitNodeStarted(m.id(), "a");
@@ -736,8 +726,7 @@ class WorkflowRpcTest {
         Definition d = save("ws_run",
                 DefinitionValidatorTest.node("s", "start"),
                 DefinitionValidatorTest.node("a", "ai").agent("writer"),
-                DefinitionValidatorTest.edge("e1", "s", "a"),
-                new AgentDef("writer", null, null));
+                DefinitionValidatorTest.edge("e1", "s", "a"));
         InstanceMeta m = startBound(d);
         // 游标锚点=writer 节点自身的 node.started（其后只可能出现 node.output/wf.done/wf.status）
         awaitNodeStarted(m.id(), "a");
@@ -784,8 +773,7 @@ class WorkflowRpcTest {
         Definition d = save("ws_run",
                 DefinitionValidatorTest.node("s", "start"),
                 DefinitionValidatorTest.node("a", "ai").agent("writer"),
-                DefinitionValidatorTest.edge("e1", "s", "a"),
-                new AgentDef("writer", null, null));
+                DefinitionValidatorTest.edge("e1", "s", "a"));
         InstanceMeta m = startBound(d);
 
         Call c = call(p().put("instanceId", m.id()));
@@ -829,8 +817,7 @@ class WorkflowRpcTest {
         Definition d = save("ws_run",
                 DefinitionValidatorTest.node("s", "start"),
                 DefinitionValidatorTest.node("a", "ai").agent("writer"),
-                DefinitionValidatorTest.edge("e1", "s", "a"),
-                new AgentDef("writer", null, null));
+                DefinitionValidatorTest.edge("e1", "s", "a"));
         InstanceMeta m = startBound(d);
         assertThatThrownBy(() -> rpc.instanceDelete(call(p().put("instanceId", m.id()))))
                 .isInstanceOf(BadParamsException.class).hasMessageContaining("拒绝删除");
@@ -852,10 +839,9 @@ class WorkflowRpcTest {
                 : Fakes.Script.echo("重试成功"));
         Definition d = store.saveDefinition("ws_run", new Definition(null, null, "测试定义", null,
                 "ws_run", null, null, null, OnError.ASK_USER, null,
-                List.of(new AgentDef("writer", null, null)),
                 List.of(DefinitionValidatorTest.node("s", "start").def,
                         DefinitionValidatorTest.node("n", "ai").agent("writer").maxRuns(10).def,
-                        DefinitionValidatorTest.node("t", "ai").maxRuns(10).def),
+                        DefinitionValidatorTest.node("t", "ai").agent("tail").maxRuns(10).def),
                 List.of(DefinitionValidatorTest.edge("e1", "s", "n"),
                         DefinitionValidatorTest.edge("e2", "n", "t"))));
         InstanceMeta m = startBound(d);
@@ -881,7 +867,6 @@ class WorkflowRpcTest {
                 : Fakes.Script.echo("ok"));
         Definition d = store.saveDefinition("ws_run", new Definition(null, null, "测试定义", null,
                 "ws_run", null, null, null, OnError.ASK_USER, null,
-                List.of(new AgentDef("writer", null, null)),
                 List.of(DefinitionValidatorTest.node("s", "start").def,
                         DefinitionValidatorTest.node("n", "ai").agent("writer").maxRuns(10).def),
                 List.of(DefinitionValidatorTest.edge("e1", "s", "n"))));
@@ -932,8 +917,7 @@ class WorkflowRpcTest {
         Definition d = save("ws_run",
                 DefinitionValidatorTest.node("s", "start"),
                 DefinitionValidatorTest.node("a", "ai").agent("writer"),
-                DefinitionValidatorTest.edge("e1", "s", "a"),
-                new AgentDef("writer", null, null));
+                DefinitionValidatorTest.edge("e1", "s", "a"));
         InstanceMeta m = store.createInstance(d, Map.of());
         Call c = call(p().put("instanceId", m.id()));
         rpc.instanceDataDir(c);

@@ -8,10 +8,10 @@ import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 import dev.everyagent.contract.json.Json;
-import dev.everyagent.plugin.workflow.model.AgentDef;
 import dev.everyagent.plugin.workflow.model.AgentEventLine;
 import dev.everyagent.plugin.workflow.model.ConditionDef;
 import dev.everyagent.plugin.workflow.model.Definition;
+import dev.everyagent.plugin.workflow.model.DefinitionJson;
 import dev.everyagent.plugin.workflow.model.EdgeDef;
 import dev.everyagent.plugin.workflow.model.EventLine;
 import dev.everyagent.plugin.workflow.model.InstanceMeta;
@@ -148,6 +148,36 @@ class ModelJsonRoundTripTest {
         assertThat(back.id()).isEqualTo("wf_a1b2c");
     }
 
+    @Test
+    void legacyAgentsTableMigratesOntoReferencingNodes() {
+        // 旧结构：agents[] 总表声明 + 节点只带 agent 引用 → 解析口迁移到节点自带字段
+        String legacy = """
+                {"schemaVersion":1,"id":"wf_old","name":"旧定义","workspaceId":"w_x1",
+                 "nodes":[
+                   {"id":"n1","type":"start","name":"开始","x":0,"y":0},
+                   {"id":"n2","type":"ai","name":"初稿","x":100,"y":0,"agent":"writer"},
+                   {"id":"n3","type":"ai","name":"润色","x":200,"y":0,"agent":"polisher",
+                    "modelConfigId":"node-model","systemPrompt":"节点自带优先"}],
+                 "edges":[{"id":"e1","from":"n1","to":"n2"},{"id":"e2","from":"n2","to":"n3"}],
+                 "agents":[
+                   {"name":"writer","modelConfigId":"gpt5","systemPrompt":"你是资深小说作者"},
+                   {"name":"polisher","modelConfigId":"agent-model","systemPrompt":"总表声明"},
+                   {"name":"nobody","systemPrompt":"无节点引用,静默丢弃"}]}
+                """;
+        Definition migrated = DefinitionJson.parseText(legacy);
+        assertThat(Json.write(migrated)).doesNotContain("\"agents\"");
+        NodeDef writer = migrated.nodesOrEmpty().stream().filter(n -> n.id().equals("n2")).findFirst().orElseThrow();
+        assertThat(writer.agent()).isEqualTo("writer");
+        assertThat(writer.modelConfigId()).isEqualTo("gpt5");
+        assertThat(writer.systemPrompt()).isEqualTo("你是资深小说作者");
+        NodeDef polisher = migrated.nodesOrEmpty().stream().filter(n -> n.id().equals("n3")).findFirst().orElseThrow();
+        // 节点自带值优先于总表声明
+        assertThat(polisher.modelConfigId()).isEqualTo("node-model");
+        assertThat(polisher.systemPrompt()).isEqualTo("节点自带优先");
+        // 迁移后可过校验并可保存（新形态无 agents 键）
+        assertThat(dev.everyagent.plugin.workflow.validate.DefinitionValidator.validate(migrated)).isEmpty();
+    }
+
     // ── 构造完整定义（覆盖全部字段类型）──
 
     static Definition fullDefinition() {
@@ -157,14 +187,14 @@ class ModelJsonRoundTripTest {
                 List.of(new VariableDef("novelName", "小说名", true, null, "要生成的小说标题")),
                 OnError.ASK_USER,
                 new Definition.Supervisor("gpt5", "你是工作流督导"),
-                List.of(new AgentDef("writer", "gpt5", "你是资深小说作者")),
                 List.of(
                         new NodeDef("wn_st0", NodeDef.TYPE_START, "开始", 40.0, 200.0,
-                                null, null, null, null, null, null),
+                                null, null, null, null, null, null, null),
                         new NodeDef("wn_b7", NodeDef.TYPE_COMMAND, "初始化目录", 240.0, 200.0,
-                                "mkdir -p out/{{novelName}}", 60000L, 2, null, null, null),
+                                "mkdir -p out/{{novelName}}", 60000L, 2, null, null, null, null),
                         new NodeDef("wn_c3", NodeDef.TYPE_AI, "生成大纲", 440.0, 200.0,
-                                null, null, 2, "writer", null, "请为《{{novelName}}》拟一份章节大纲")),
+                                null, null, 2, "writer", null, "请为《{{novelName}}》拟一份章节大纲",
+                                "你是资深小说作者")),
                 List.of(
                         new EdgeDef("we_01", "wn_st0", "wn_b7", null),
                         new EdgeDef("we_02", "wn_b7", "wn_c3",

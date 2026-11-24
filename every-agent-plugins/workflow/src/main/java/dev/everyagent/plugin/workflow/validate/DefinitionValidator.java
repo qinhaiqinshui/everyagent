@@ -1,15 +1,12 @@
 package dev.everyagent.plugin.workflow.validate;
 
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
 
-import dev.everyagent.plugin.workflow.model.AgentDef;
 import dev.everyagent.plugin.workflow.model.ConditionDef;
 import dev.everyagent.plugin.workflow.model.Definition;
 import dev.everyagent.plugin.workflow.model.EdgeDef;
@@ -27,16 +24,15 @@ import dev.everyagent.plugin.workflow.model.VariableDef;
  *   <li>边引用的节点（from/to）必须存在；</li>
  *   <li>maxRuns ∈ [1,10]（缺省合法，引擎按 1 处理）；timeoutMs &gt; 0；命令节点 command 非空；</li>
  *   <li>command / input 中 {@code {{var}}} 引用的变量必须已声明（渲染范围仅此两字段）；</li>
- *   <li>agent 名安全（文件名安全字符集）且不撞保留名 meta/events/runs/agents/supervisor
- *       ——agents/ 子目录已避免文件冲突，但 supervisor 保留给督导会话线；</li>
+ *   <li>AI 节点引用的 agent 名安全（文件名安全字符集）且不撞保留名
+ *       meta/events/runs/agents/supervisor——supervisor 保留给督导会话线；</li>
  *   <li>循环允许（不校验环——maxRuns 是运行期兜底）；</li>
  *   <li>outputMatches 正则可编译；exitCode/outputContains 等条件带齐各自参数；</li>
  *   <li>变量名唯一且为 [A-Za-z0-9_-]+（渲染替换的键安全）。</li>
  * </ol>
  *
- * <p>{@link #normalize} 在校验通过后调用：节点引用的 agent 名自动合并进 agents[]
- * （引用即声明，未显式声明的补默认模型 null）、onError 缺省 supervisor、
- * schemaVersion 归一、null 列表归空表。<b>不分配 id/时间戳</b>——那是 WorkflowStore 的职责。
+ * <p>{@link #normalize} 在校验通过后调用：onError 缺省 supervisor、schemaVersion 归一、
+ * null 列表归空表。<b>不分配 id/时间戳</b>——那是 WorkflowStore 的职责。
  */
 public final class DefinitionValidator {
 
@@ -68,12 +64,9 @@ public final class DefinitionValidator {
             errors.add("name 不能为空");
         }
         validateVariables(d, errors);
-        Map<String, AgentDef> declaredAgents = validateAgents(d, errors);
         Set<String> nodeIds = validateNodes(d, errors);
         validateEdges(d, nodeIds, errors);
         validateVarRefs(d, errors);
-        // agent 引用即声明：节点引用未声明的名字不是错误（normalize 合并），
-        // 但引用名本身要过安全/保留名检查——已在 validateNodes 内对每个引用名校验。
         return errors;
     }
 
@@ -96,29 +89,6 @@ public final class DefinitionValidator {
                 errors.add("变量名重复: " + v.name());
             }
         }
-    }
-
-    /** 校验已声明的 agents，返回 name → AgentDef（声明顺序保持）。 */
-    private static Map<String, AgentDef> validateAgents(Definition d, List<String> errors) {
-        Map<String, AgentDef> byName = new LinkedHashMap<>();
-        for (AgentDef a : d.agentsOrEmpty()) {
-            if (a == null || a.name() == null || a.name().isBlank()) {
-                errors.add("agents 含空项或 name 为空");
-                continue;
-            }
-            if (!safeAgentName(a.name())) {
-                errors.add("agent 名不安全(仅字母/数字/_-.且不以点开头结尾,≤64): " + a.name());
-                continue;
-            }
-            if (isReserved(a.name())) {
-                errors.add("agent 名撞保留名(不可用 meta/events/runs/agents/supervisor): " + a.name());
-                continue;
-            }
-            if (byName.put(a.name(), a) != null) {
-                errors.add("agent 名重复: " + a.name());
-            }
-        }
-        return byName;
     }
 
     /** 校验节点，返回合法 node id 集合。 */
@@ -157,8 +127,15 @@ public final class DefinitionValidator {
             if (NodeDef.TYPE_COMMAND.equals(n.type()) && (n.command() == null || n.command().isBlank())) {
                 errors.add("command 节点缺少 command: " + where);
             }
+            if (NodeDef.TYPE_AI.equals(n.type())) {
+                // 会话线必选：不再有「一次性会话」——要么在本节点新建（agent 名 + systemPrompt），
+                // 要么选择上游已有的会话线名（编辑器下拉候选）
+                if (n.agent() == null || n.agent().isBlank()) {
+                    errors.add("AI 节点必须指定 agent 名(新建或选择上游已有会话线): " + where);
+                }
+            }
             if (n.agent() != null && !n.agent().isBlank()) {
-                // 引用即声明：不要求已声明，但名字本身要安全且不撞保留名
+                // 会话线名即节点自带引用：不要求别处声明，但名字本身要安全且不撞保留名
                 if (!safeAgentName(n.agent())) {
                     errors.add("节点引用的 agent 名不安全: " + n.agent() + " @" + where);
                 } else if (isReserved(n.agent())) {
@@ -309,24 +286,10 @@ public final class DefinitionValidator {
     }
 
     /**
-     * 保存前规范化（校验通过后调用）：
-     * 节点引用的 agent 名自动合并进 agents[]（引用即声明，未显式声明的补默认模型 null，
-     * 追加在声明列表之后、按首次引用顺序）；onError 缺省 supervisor；
-     * schemaVersion 归一为当前版本；null 列表归空表。不改动 id/时间戳/工作区。
+     * 保存前规范化（校验通过后调用）：onError 缺省 supervisor；schemaVersion 归一为
+     * 当前版本；null 列表归空表。不改动 id/时间戳/工作区。
      */
     public static Definition normalize(Definition d) {
-        List<AgentDef> declared = new ArrayList<>(d.agentsOrEmpty());
-        Set<String> known = new LinkedHashSet<>();
-        for (AgentDef a : declared) {
-            if (a != null && a.name() != null) {
-                known.add(a.name());
-            }
-        }
-        for (NodeDef n : d.nodesOrEmpty()) {
-            if (n != null && n.agent() != null && !n.agent().isBlank() && known.add(n.agent())) {
-                declared.add(new AgentDef(n.agent(), null, null));
-            }
-        }
         OnError onError = d.onError() == null ? OnError.SUPERVISOR : d.onError();
         return new Definition(
                 Definition.SCHEMA_VERSION,
@@ -339,7 +302,6 @@ public final class DefinitionValidator {
                 d.variables() == null ? List.of() : List.copyOf(d.variables()),
                 onError,
                 d.supervisor(),
-                List.copyOf(declared),
                 d.nodes() == null ? List.of() : List.copyOf(d.nodes()),
                 d.edges() == null ? List.of() : List.copyOf(d.edges()));
     }

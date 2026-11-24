@@ -1,6 +1,6 @@
 ---
 name: 工作流编排
-description: 当需要创建、查询、修改、删除或列出可复用的工作流定义（多节点执行图：开始/命令/AI 节点、条件边、运行变量、命名 agent），供用户在画布上查看与运行时，使用本技能。
+description: 当用户任务与工作流相关时使用本技能。
 ---
 
 # 工作流编排
@@ -36,20 +36,26 @@ description: 当需要创建、查询、修改、删除或列出可复用的工�
   "variables": [{"name": "novelName", "label": "小说名", "required": true, "defaultValue": null, "description": "可选"}],
   "onError": "fail | supervisor | askUser",
   "supervisor": {"modelConfigId": "可选", "systemPrompt": "可选(督导 agent)"},
-  "agents": [{"name": "writer", "modelConfigId": "可选", "systemPrompt": "你是资深小说作者"}],
   "nodes": [
     {"id": "n1", "type": "start",   "name": "开始", "x": 40,  "y": 200},
     {"id": "n2", "type": "command", "name": "初始化", "x": 240, "y": 200, "command": "mkdir -p out/{{novelName}}", "timeoutMs": 60000, "maxRuns": 2},
-    {"id": "n3", "type": "ai",      "name": "生成大纲", "x": 440, "y": 200, "agent": "writer", "modelConfigId": null, "input": "请为《{{novelName}}》拟一份章节大纲", "maxRuns": 2}
+    {"id": "n3", "type": "ai",      "name": "生成大纲", "x": 440, "y": 200, "agent": "writer", "modelConfigId": null, "systemPrompt": "你是资深小说作者", "input": "请为《{{novelName}}》拟一份章节大纲", "maxRuns": 2},
+    {"id": "n4", "type": "ai",      "name": "润色", "x": 640, "y": 200, "agent": "writer", "input": "润色上一节点产出"}
   ],
   "edges": [
     {"id": "e1", "from": "n1", "to": "n2"},
-    {"id": "e2", "from": "n2", "to": "n3", "condition": {"type": "onSuccess"}}
+    {"id": "e2", "from": "n2", "to": "n3", "condition": {"type": "onSuccess"}},
+    {"id": "e3", "from": "n3", "to": "n4"}
   ]
 }
 ```
 
-硬约束（校验失败返回逐项 `details`）：start 节点有且仅有一个；边引用的节点必须存在；maxRuns∈[1,10]；`{{var}}` 只能出现在 command/input 且必须已在 variables 声明；agent 名不可用保留名 meta/events/runs/agents/supervisor；outputMatches 的 pattern 必须是可编译正则。节点引用的 agent 名可不出现在 agents[]（保存时自动并入，补默认模型）；循环允许（靠 maxRuns 兜底）。condition.type 取值：always（缺省）/onSuccess/onError/exitCode（带 `value`）/outputContains/outputNotContains（带 `text`）/outputMatches（带 `pattern`）。
+硬约束（校验失败返回逐项 `details`）：start 节点有且仅有一个；边引用的节点必须存在；maxRuns∈[1,10]；`{{var}}` 只能出现在 command/input 且必须已在 variables 声明；AI 节点的 `agent` **必填**（不再支持匿名一次性会话）且不可用保留名 meta/events/runs/agents/supervisor；outputMatches 的 pattern 必须是可编译正则；循环允许（靠 maxRuns 兜底）。condition.type 取值：always（缺省）/onSuccess/onError/exitCode（带 `value`）/outputContains/outputNotContains（带 `text`）/outputMatches（带 `pattern`）。
+
+### 会话线（agent）规则
+- **定义节点**：首次使用某 agent 名的节点在该节点上带 `systemPrompt`（+可选 `modelConfigId`），即这条会话线的定义处。
+- **引用节点**：下游节点复用同名 `agent` 即延续同一会话线（跨节点共享上下文）；`systemPrompt` 不写（写了也不该写——生效值始终来自上游定义节点），`modelConfigId` 可各自另配。
+- 模型取值优先级：节点 `modelConfigId` → 系统默认模型。
 
 ### workflow_create
 ```json
@@ -57,7 +63,7 @@ description: 当需要创建、查询、修改、删除或列出可复用的工�
 ```
 调用示例（最小两节点）：
 ```json
-{"definition": "{\"name\":\"代码评审\",\"nodes\":[{\"id\":\"n1\",\"type\":\"start\",\"name\":\"开始\",\"x\":40,\"y\":200},{\"id\":\"n2\",\"type\":\"ai\",\"name\":\"评审\",\"x\":240,\"y\":200,\"agent\":\"reviewer\",\"input\":\"评审当前工作区改动\"}],\"edges\":[{\"id\":\"e1\",\"from\":\"n1\",\"to\":\"n2\"}],\"agents\":[{\"name\":\"reviewer\",\"systemPrompt\":\"你是严格的首席工程师\"}]}"}
+{"definition": "{\"name\":\"代码评审\",\"nodes\":[{\"id\":\"n1\",\"type\":\"start\",\"name\":\"开始\",\"x\":40,\"y\":200},{\"id\":\"n2\",\"type\":\"ai\",\"name\":\"评审\",\"x\":240,\"y\":200,\"agent\":\"reviewer\",\"systemPrompt\":\"你是严格的首席工程师\",\"input\":\"评审当前工作区改动\"}],\"edges\":[{\"id\":\"e1\",\"from\":\"n1\",\"to\":\"n2\"}]}"}
 ```
 
 ### workflow_get

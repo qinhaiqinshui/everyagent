@@ -20,14 +20,18 @@
 2. palette 添加命令节点 + AI 节点（落画布中心附近，自动选中 → 属性面板出现）。
 3. 拖动节点改位置；从「开始」右侧锚点拖到命令节点建立边；再连到 AI 节点。
 4. 选中边 → 条件类型切 onSuccess；选中命令节点 → 填 command/timeoutMs/maxRuns；
-   选中 AI 节点 → 新建 agent「writer」并选用、填 input 模板、选模型覆盖。
+   选中 AI 节点 → 会话线下拉选「＋ 新建会话线…」→ 填名「writer」+ system prompt +
+   选模型 + input 模板（本节点=该会话线的定义节点）。
    **点画布空白处属性面板不隐藏**（保留最近选中）；面板顶部 × 关闭（清选、面板卸载）。
-5. 左栏展开「运行变量」加一个 required 变量、「出错策略」确认默认 supervisor + 选督导模型、
-   「Agents 总表」确认 writer 已列入。
+5. 左栏展开「运行变量」加一个 required 变量、「出错策略」确认默认 supervisor + 选督导模型。
 6. 保存 → toast「工作流已创建：wf_…」，dirty ● 消失，标题处显示定义 id。
 7. 关闭标签页 → 重新从管理页打开同一定义 → 节点位置/连线/条件/命令/
-   agent/input/变量/onError/supervisor/agents 全部还原（def.get 原样回读）。
-8. 反向校验：删掉 command 内容保存 → 出现红色逐项错误列表（后端校验器返回）。
+   会话线/input/变量/onError/supervisor 全部还原（def.get 原样回读）。
+8. 反向校验：删掉 command 内容保存 → 出现红色逐项错误列表（后端校验器返回）；
+   AI 节点清空会话线名保存 → 「AI 节点必须指定 agent 名」逐项报错。
+8b. 会话线引用：再加一个下游 AI 节点连线 → 其下拉出现「writer · 由「…」定义」；
+   选中后 system prompt 只读回显定义节点值、模型可另选；回定义节点改 system prompt
+   → 引用节点回显同步变化（不存副本）。
 
 ## 2. 侧边栏（只展示运行实例，推送驱动）
 
@@ -175,7 +179,7 @@
    拖动中 grabbing），按住拖动任意位置（含节点/锚点上）平移画布且不触发选中/节点
    拖拽/连线；松开 Ctrl 或窗口失焦后光标恢复、交互回归；无 Ctrl 时原行为不变。
 2. **编辑器抽屉**：工具栏出现「组件/属性」按钮（桌面隐藏）；左抽屉=palette+变量/
-   策略/agents，右抽屉=选中项属性面板（仅在选中节点/边后挂载）；点按节点/边或
+   策略，右抽屉=选中项属性面板（仅在选中节点/边后挂载）；点按节点/边或
    palette 添加节点 → 右抽屉自动滑入；点遮罩或 × 收起（× 同时清选卸载面板）；
    属性面板内「删除节点/边」按钮可用（触屏无 Delete 键）。
 3. **实例页底部抽屉**：tap 节点/边 → 详情从底部滑出（× 收起，收起后再 tap 重开）；
@@ -188,22 +192,24 @@
 ## 6. 引擎行为（后端观察点）
 
 1. **同 agent 名节点全局互斥**：构造「两并行分支同用 agent A」的定义，实例运行时
-   两节点串行（先到先跑），`agents/A.jsonl` 会话线无交错；事件时间线可见先后。
+   两节点串行（先到先跑），任务档案 `tasks/<taskId>/A#<wiId>.jsonl` 会话线无交错；
+   事件时间线可见先后。
 2. **循环上限**：造一个 A→B→A 的环，跑到 maxRuns 上限后实例 failed，错误信息指明
    节点超限。
 3. **命令节点超时**：`timeout: 3` + `ping -n 30 127.0.0.1`（Windows）→ 节点失败，
    exit/错误如实进 runs 记录。
-4. **supervisor 督导**：命令节点故意失败 + onError=supervisor → 时间线出现督导介入链
-   （retry/skip/fail/retryWithInput 之一 + reason），supervisor 会话线
-   `agents/supervisor.jsonl` 连续介入累积上下文；介入达 3 次上限后 fail。
+4. **supervisor 督导**：命令节点故意失败 + onError=supervisor → 督导=任务主 agent
+   本体介入（时间线出现介入链 retry/skip/fail/retryWithInput 之一 + reason，
+   任务对话连续累积上下文）；介入达 3 次上限后 fail。
 5. **askUser**：onError=askUser 的失败 → 实例 waiting-decision、§4.6 决策横幅可用；
    决策后节点按选择推进（换输入重试=新输入生效）。
 6. **取消语义**：运行中取消 → 运行中节点停止、无收口卡片、实例已取消；磁盘 meta.json
    状态一致。
 7. **重启中断**：实例运行中重启 worker → 激活扫描把非终态实例标 failed
    （「worker 重启中断」），侧栏/实例页状态一致。
-8. **匿名 AI 节点**：agent 未指定的 AI 节点跑完 → `agents/` 下**不**新增文件；
-   命名 agent 节点 → `agents/<name>.jsonl` 增量追加。
+8. **AI 会话线落任务域**：命名 agent 节点 → `tasks/<taskId>/<name>#<wiId>.jsonl`
+   增量追加（实例目录无 agents/）；systemPrompt 沿上游定义节点解析生效——定义节点
+   改提示词后，下游引用节点重跑即用新值（引用节点不存副本）。
 9. **同工作区隔离**：同一 worker 上两个工作区各建同名定义/实例互不可见
    （`workflow.def.list`/`instance.list` 按 workspace 过滤）。
 
@@ -219,5 +225,6 @@
 ## 8. worker 重启后的磁盘观察
 
 - `<homeDir>/workspaces/<wsId>/workflows/definitions/<wfId>/definition.json` 与
-  `instances/<wiId>/{meta.json,events.jsonl,runs/,agents/}` 结构与文档一致；
-  events.jsonl 只追加、agents/*.jsonl 行内 agentId=`<name>#<instanceId>`。
+  `instances/<wiId>/{meta.json,events.jsonl,runs/}` 结构与文档一致；
+  events.jsonl 只追加、runs/ 每次节点运行一文件；AI 会话档案在任务域
+  `tasks/<taskId>/<name>#<wiId>.jsonl`（实例目录不持 agents/）。

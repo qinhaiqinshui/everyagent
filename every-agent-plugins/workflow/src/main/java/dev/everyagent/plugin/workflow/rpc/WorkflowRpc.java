@@ -13,6 +13,7 @@ import dev.everyagent.plugin.api.rpc.RpcContext;
 import dev.everyagent.plugin.api.rpc.RpcMethod;
 import dev.everyagent.plugin.workflow.engine.WorkflowEngine;
 import dev.everyagent.plugin.workflow.model.Definition;
+import dev.everyagent.plugin.workflow.model.DefinitionJson;
 import dev.everyagent.plugin.workflow.model.EventLine;
 import dev.everyagent.plugin.workflow.model.InstanceMeta;
 import dev.everyagent.plugin.workflow.model.InstanceStatus;
@@ -337,7 +338,7 @@ public final class WorkflowRpc {
             throw new BadParamsException("definition 必须是 JSON 对象");
         }
         try {
-            return Json.convert(node, Definition.class);
+            return DefinitionJson.parse(node);
         } catch (RuntimeException e) {
             throw new BadParamsException("definition 解析失败: " + e.getMessage());
         }

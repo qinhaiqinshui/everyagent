@@ -20,7 +20,6 @@ import dev.everyagent.plugin.api.spi.SandboxBackend;
 import dev.everyagent.plugin.api.spi.ToolContext;
 import dev.everyagent.plugin.api.spi.WorkspaceManager;
 import dev.everyagent.plugin.workflow.engine.WorkflowEngine;
-import dev.everyagent.plugin.workflow.model.AgentDef;
 import dev.everyagent.plugin.workflow.model.Definition;
 import dev.everyagent.plugin.workflow.model.InstanceMeta;
 import dev.everyagent.plugin.workflow.model.InstanceStatus;
@@ -75,8 +74,7 @@ class WorkflowRunToolTest {
 
     private static Definition withOnError(Definition d, OnError onError) {
         return new Definition(d.schemaVersion(), d.id(), d.name(), d.description(), d.workspaceId(),
-                d.createdAt(), d.updatedAt(), d.variables(), onError, d.supervisor(),
-                d.agents(), d.nodes(), d.edges());
+                d.createdAt(), d.updatedAt(), d.variables(), onError, d.supervisor(), d.nodes(), d.edges());
     }
 
     private void await(BooleanSupplier cond, String what) throws InterruptedException {
@@ -133,10 +131,9 @@ class WorkflowRunToolTest {
         Definition d = save(
                 DefinitionValidatorTest.node("s", "start"),
                 DefinitionValidatorTest.node("n", "ai").agent("writer").maxRuns(10),
-                DefinitionValidatorTest.node("t", "ai").maxRuns(10),
+                DefinitionValidatorTest.node("t", "ai").agent("tail").maxRuns(10),
                 DefinitionValidatorTest.edge("e1", "s", "n"),
-                DefinitionValidatorTest.edge("e2", "n", "t"),
-                new AgentDef("writer", null, null));
+                DefinitionValidatorTest.edge("e2", "n", "t"));
 
         String raw = tools.workflow_run(d.id(), null, null);
         JsonNode r = Json.parse(raw);
@@ -181,9 +178,8 @@ class WorkflowRunToolTest {
 
         Definition unknownModel = save(
                 DefinitionValidatorTest.node("s", "start"),
-                DefinitionValidatorTest.node("n", "ai").agent("writer"),
-                DefinitionValidatorTest.edge("e1", "s", "n"),
-                new AgentDef("writer", "gpt4-nope", null));
+                DefinitionValidatorTest.node("n", "ai").agent("writer").modelConfigId("gpt4-nope"),
+                DefinitionValidatorTest.edge("e1", "s", "n"));
         BadParamsException rpcSide2 = catchBadParams(
                 () -> engine.validateForRun(unknownModel, Map.of()));
         String toolErr2 = Json.parse(tools.workflow_run(unknownModel.id(), null, null))
@@ -214,8 +210,7 @@ class WorkflowRunToolTest {
                 DefinitionValidatorTest.def(
                         DefinitionValidatorTest.node("s", "start"),
                         DefinitionValidatorTest.node("n", "ai").agent("writer").maxRuns(10),
-                        DefinitionValidatorTest.edge("e1", "s", "n"),
-                        new AgentDef("writer", null, null)), OnError.ASK_USER));
+                        DefinitionValidatorTest.edge("e1", "s", "n")), OnError.ASK_USER));
 
         String raw = tools.workflow_run(d.id(), null, null);
         JsonNode r = Json.parse(raw);
@@ -239,8 +234,7 @@ class WorkflowRunToolTest {
         Definition d = save(
                 DefinitionValidatorTest.node("s", "start"),
                 DefinitionValidatorTest.node("n", "ai").agent("writer"),
-                DefinitionValidatorTest.edge("e1", "s", "n"),
-                new AgentDef("writer", null, null));
+                DefinitionValidatorTest.edge("e1", "s", "n"));
 
         AtomicReference<Throwable> thrown = new AtomicReference<>();
         AtomicReference<String> result = new AtomicReference<>();
@@ -276,8 +270,7 @@ class WorkflowRunToolTest {
         Definition d = save(
                 DefinitionValidatorTest.node("s", "start"),
                 DefinitionValidatorTest.node("n", "ai").agent("writer"),
-                DefinitionValidatorTest.edge("e1", "s", "n"),
-                new AgentDef("writer", null, null));
+                DefinitionValidatorTest.edge("e1", "s", "n"));
 
         AtomicReference<Throwable> thrown = new AtomicReference<>();
         Thread runner = Thread.ofVirtual().start(() -> {
@@ -379,8 +372,7 @@ class WorkflowRunToolTest {
         Definition d = save(
                 DefinitionValidatorTest.node("s", "start"),
                 DefinitionValidatorTest.node("n", "ai").agent("writer"),
-                DefinitionValidatorTest.edge("e1", "s", "n"),
-                new AgentDef("writer", null, null));
+                DefinitionValidatorTest.edge("e1", "s", "n"));
 
         AtomicReference<String> result = new AtomicReference<>();
         Thread runner = Thread.ofVirtual().start(() ->

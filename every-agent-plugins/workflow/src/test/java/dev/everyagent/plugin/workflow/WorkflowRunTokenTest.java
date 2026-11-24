@@ -133,9 +133,9 @@ class WorkflowRunTokenTest {
     /** 最小合法定义（仅 start 节点，经 store 校验落盘）。 */
     private static Definition minimalDef(String name) {
         return new Definition(Definition.SCHEMA_VERSION, null, name, null, WS, null, null,
-                null, null, null, null,
+                null, null, null,
                 List.of(new NodeDef("n1", NodeDef.TYPE_START, "开始", 0.0, 0.0,
-                        null, null, null, null, null, null)),
+                null, null, null, null, null, null, null)),
                 List.of());
     }
 }
