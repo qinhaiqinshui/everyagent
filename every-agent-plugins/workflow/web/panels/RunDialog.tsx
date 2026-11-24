@@ -32,6 +32,7 @@
  */
 import React from 'react'
 import type { PluginDialogProps } from '@everyagent/plugin-api'
+import { ensureDialogStyles } from '../Dialog'
 import { getPluginContext, resolveWorkspaceRef } from '../pluginRuntime'
 import { RunIcon, VariableIcon, WorkflowIcon } from '../icons'
 import {
@@ -49,7 +50,7 @@ function ensureRunDialogStyles(): void {
   const style = document.createElement('style')
   style.id = RUN_DIALOG_STYLE_ID
   style.textContent = `
-.wf-run-body { display: flex; flex-direction: column; gap: 12px; min-width: min(460px, 86vw); max-height: 62vh; overflow-y: auto; font-size: 13px; color: var(--text-primary, #eef1f5); }
+.wf-run-body { display: flex; flex-direction: column; gap: 12px; min-width: min(440px, 86vw); max-height: 62vh; overflow-y: auto; font-size: 13px; color: var(--text-primary, #eef1f5); }
 .wf-run-meta { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border: 1px solid var(--border-light, #1b202a); border-radius: 8px; background: var(--bg-tertiary, #171b24); }
 .wf-run-meta-line { display: flex; gap: 8px; font-size: 12px; color: var(--text-muted, #6f7a8b); }
 .wf-run-meta-line b { color: var(--text-secondary, #aab3c2); font-weight: 600; }
@@ -61,21 +62,14 @@ function ensureRunDialogStyles(): void {
 .wf-run-input { width: 100%; box-sizing: border-box; background: var(--bg-primary, #0b0d12); border: 1px solid var(--border, #2a303b); border-radius: 6px; color: var(--text-primary, #eef1f5); padding: 5px 9px; font-size: 13px; font-family: inherit; }
 .wf-run-input:focus { outline: none; border-color: var(--accent-blue, #61a5ff); }
 .wf-run-hint { font-size: 11px; color: var(--text-faint, #525c6a); margin: 0; line-height: 1.5; }
-.wf-run-error { background: var(--accent-red-dim, rgba(255,107,107,0.14)); border: 1px solid var(--accent-red, #ff6b6b); border-radius: 8px; padding: 8px 10px; color: var(--accent-red, #ff6b6b); font-size: 12.5px; white-space: pre-wrap; }
-.wf-run-footer { display: flex; justify-content: flex-end; gap: 8px; }
-.wf-run-picker { display: flex; flex-direction: column; gap: 12px; min-width: min(460px, 86vw); font-size: 13px; color: var(--text-primary, #eef1f5); }
-.wf-run-btn { display: inline-flex; align-items: center; gap: 5px; padding: 5px 14px; border: 1px solid var(--border-strong, #3b4658); border-radius: 6px; background: transparent; color: var(--text-secondary, #aab3c2); cursor: pointer; font-size: 12.5px; }
-.wf-run-btn:hover { color: var(--text-primary, #eef1f5); border-color: var(--accent-blue, #61a5ff); }
-.wf-run-btn-primary { background: var(--accent-green, #41d19c); border-color: var(--accent-green, #41d19c); color: #0b0d12; font-weight: 600; }
-.wf-run-btn-primary:disabled { opacity: 0.55; cursor: not-allowed; }
+.wf-run-picker { display: flex; flex-direction: column; gap: 12px; min-width: min(440px, 86vw); font-size: 13px; color: var(--text-primary, #eef1f5); }
 .wf-run-missing { font-size: 11.5px; color: var(--accent-amber, #f7bd54); margin: 0; }
-/* ── 移动端（≤768px）：输入 16px 防 iOS 聚焦自动放大；按钮触控目标加大 ── */
+/* 错误框 / 页脚 / 按钮统一走 ../Dialog 的 wf-dlg-*（不再自持副本）。 */
+/* ── 移动端（≤768px）：输入 16px 防 iOS 聚焦自动放大（按钮触控目标由 wf-dlg-* 移动端规则统一加大） ── */
 @media (max-width: 768px) {
   .wf-run-input { font-size: 16px; }
   .wf-run-body { min-width: min(440px, 92vw); gap: 10px; }
   .wf-run-picker { min-width: min(440px, 92vw); gap: 10px; }
-  .wf-run-btn { padding: 8px 16px; font-size: 13px; }
-  .wf-run-footer { gap: 10px; }
 }
 `
   document.head.appendChild(style)
@@ -221,7 +215,10 @@ export interface RunDialogContentProps extends PluginDialogProps<RunDialogResult
 }
 
 export function RunDialogContent({ close, workspace, definitionId }: RunDialogContentProps) {
-  React.useEffect(ensureRunDialogStyles, [])
+  React.useEffect(() => {
+    ensureRunDialogStyles()
+    ensureDialogStyles()
+  }, [])
 
   const [decls, setDecls] = React.useState<WorkflowVariableDef[] | null>(null)
   const [defName, setDefName] = React.useState('')
@@ -298,10 +295,10 @@ export function RunDialogContent({ close, workspace, definitionId }: RunDialogCo
 
   if (loadError) {
     return (
-      <div className="wf-run-body">
-        <div className="wf-run-error">读取定义失败：{loadError}</div>
-        <div className="wf-run-footer">
-          <button type="button" className="wf-run-btn" onClick={() => close(null)}>
+      <div className="wf-run-body wf-dlg">
+        <div className="wf-dlg-error">读取定义失败：{loadError}</div>
+        <div className="wf-dlg-footer">
+          <button type="button" className="wf-dlg-btn" onClick={() => close(null)}>
             关闭
           </button>
         </div>
@@ -311,7 +308,7 @@ export function RunDialogContent({ close, workspace, definitionId }: RunDialogCo
 
   return (
     <form
-      className="wf-run-body"
+      className="wf-run-body wf-dlg"
       onSubmit={e => {
         e.preventDefault()
         void submit()
@@ -359,13 +356,13 @@ export function RunDialogContent({ close, workspace, definitionId }: RunDialogCo
       {missing.length > 0 ? (
         <p className="wf-run-missing">缺少必填变量：{missing.join('、')}</p>
       ) : null}
-      {runError ? <div className="wf-run-error">{runError}</div> : null}
+      {runError ? <div className="wf-dlg-error">{runError}</div> : null}
 
-      <div className="wf-run-footer">
-        <button type="button" className="wf-run-btn" disabled={running} onClick={() => close(null)}>
+      <div className="wf-dlg-footer">
+        <button type="button" className="wf-dlg-btn" disabled={running} onClick={() => close(null)}>
           取消
         </button>
-        <button type="submit" className="wf-run-btn wf-run-btn-primary" disabled={running || decls === null}>
+        <button type="submit" className="wf-dlg-btn wf-dlg-btn--primary" disabled={running || decls === null}>
           <RunIcon size={12} /> {running ? '启动中…' : '开始运行'}
         </button>
       </div>
@@ -426,7 +423,10 @@ export function WorkspaceRunDialogContent({
   defs,
   lastRunDefinitionId,
 }: WorkspaceRunDialogProps) {
-  React.useEffect(ensureRunDialogStyles, [])
+  React.useEffect(() => {
+    ensureRunDialogStyles()
+    ensureDialogStyles()
+  }, [])
 
   const [definitionId, setDefinitionId] = React.useState(() => {
     if (lastRunDefinitionId && defs.some(d => d.id === lastRunDefinitionId)) return lastRunDefinitionId
@@ -444,10 +444,10 @@ export function WorkspaceRunDialogContent({
 
   if (!selected) {
     return (
-      <div className="wf-run-picker">
+      <div className="wf-run-picker wf-dlg">
         <div className="wf-run-empty">该工作区暂无工作流定义——先点 ＋ 新建，或从 ⋯ 菜单导入。</div>
-        <div className="wf-run-footer">
-          <button type="button" className="wf-run-btn" onClick={() => close(null)}>
+        <div className="wf-dlg-footer">
+          <button type="button" className="wf-dlg-btn" onClick={() => close(null)}>
             关闭
           </button>
         </div>
@@ -456,7 +456,7 @@ export function WorkspaceRunDialogContent({
   }
 
   return (
-    <div className="wf-run-picker">
+    <div className="wf-run-picker wf-dlg">
       <div className="wf-run-field">
         <label>
           <WorkflowIcon size={12} />

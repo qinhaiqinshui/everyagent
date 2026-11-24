@@ -33,8 +33,8 @@
  * 刷新模型（侧边栏同款纪律，推送驱动）：定义的每次落盘变更经 worker 级插件通知
  * 频道扇出 plugin.workflow.changed{kind}（架构 §5.2），宿主桥接为领域事件
  * plugin-worker-event，本页订阅 kind=definition 重拉（150ms 合并突发）；注册表
- * 变化重拉；60s 低频兜底轮询。busy 标记防重入；confirm 走 ctx.ui.showDialog
- * （缺席降级 window.confirm）；toast 走 ctx.ui.showToast。
+ * 变化重拉；60s 低频兜底轮询。busy 标记防重入；confirm / 查看 JSON / 粘贴导入
+ * 弹窗走统一弹窗组件（../Dialog）；toast 走 ctx.ui.showToast。
  *
  * 复用侧栏（SidebarPanel）导出的纯逻辑：formatTimestamp / formatRelativeTime /
  * exportFileName / downloadDefinitionJson / parseImportedDefinition。
@@ -43,11 +43,11 @@
  * （名称+⋯ 一行、meta 整行）；⋯ 菜单常显（Menu.tsx 的移动端放行样式）。
  */
 import React from 'react'
-import { Button, Checkbox } from 'antd'
+import { Checkbox } from 'antd'
 import { getPluginContext } from '../pluginRuntime'
 import { WORKFLOW_EDITOR_TAB_TYPE } from '../tabKeys'
 import { MenuList, RowActions } from '../Menu'
-import { copyText } from '../clipboard'
+import { confirmDialog, DialogBody, DialogButton, DialogError, DialogFooter, showTextViewDialog } from '../Dialog'
 import { openRunDialog } from './RunDialog'
 import {
   formatRelativeTime,
@@ -55,7 +55,6 @@ import {
   downloadDefinitionJson,
   exportFileName,
   parseImportedDefinition,
-  showManualCopyDialog,
 } from './SidebarPanel'
 import {
   WorkflowValidationError,
@@ -131,14 +130,7 @@ function ensureManageStyles(): void {
 .wf-manage-empty { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 48px 12px; color: var(--text-muted, #6f7a8b); font-size: 13px; text-align: center; }
 .wf-manage-empty-actions { display: inline-flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
 .wf-manage-loading { padding: 32px 12px; color: var(--text-muted, #6f7a8b); font-size: 13px; text-align: center; }
-.wf-manage-json { display: flex; flex-direction: column; gap: 10px; min-width: min(720px, 88vw); font-size: 13px; }
-.wf-manage-json pre { margin: 0; max-height: 60vh; overflow: auto; background: var(--bg-tertiary, #171b24); border: 1px solid var(--border-light, #1b202a); border-radius: 8px; padding: 10px 12px; font-size: 12px; line-height: 1.6; font-family: var(--font-mono, monospace); color: var(--text-primary, #eef1f5); white-space: pre; }
-.wf-manage-json-footer { display: flex; justify-content: flex-end; gap: 8px; }
-/* 粘贴导入弹窗（textarea 等宽 + 错误回显可多行）。 */
-.wf-manage-paste { display: flex; flex-direction: column; gap: 10px; min-width: min(640px, 88vw); font-size: 13px; }
-.wf-manage-paste-area { width: 100%; box-sizing: border-box; min-height: 38vh; max-height: 55vh; resize: vertical; background: var(--bg-primary, #0b0d12); border: 1px solid var(--border, #2a303b); border-radius: 8px; color: var(--text-primary, #eef1f5); padding: 8px 10px; font-size: 12.5px; line-height: 1.6; font-family: var(--font-mono, monospace); }
-.wf-manage-paste-area:focus { outline: none; border-color: var(--accent-blue, #61a5ff); }
-.wf-manage-paste-error { background: var(--accent-red-dim, rgba(255,107,107,0.14)); border: 1px solid var(--accent-red, #ff6b6b); border-radius: 8px; padding: 8px 10px; color: var(--accent-red, #ff6b6b); font-size: 12.5px; line-height: 1.6; white-space: pre-wrap; word-break: break-all; max-height: 20vh; overflow-y: auto; }
+/* 查看 JSON / 粘贴导入弹窗：已收敛到统一弹窗组件（../Dialog 的 wf-dlg-*）。 */
 /* ── 移动端（≤768px）：动作组全宽换行、按钮触控目标加大；行内堆叠已由 grid-template-areas 覆盖 ── */
 @media (max-width: 768px) {
   .wf-manage-bar { padding: 8px 10px; gap: 8px; }
@@ -149,40 +141,12 @@ function ensureManageStyles(): void {
   .wf-manage-body { padding: 8px 10px 16px; }
   .wf-manage-row { padding: 10px; }
   .wf-manage-meta-id { max-width: 30ch; }
-  .wf-manage-json pre { max-height: 48vh; font-size: 11px; }
-  /* 粘贴弹窗：输入 16px 防 iOS 聚焦自动放大；宽度收窄不溢出。 */
-  .wf-manage-paste { min-width: min(560px, 92vw); }
-  .wf-manage-paste-area { font-size: 16px; min-height: 34vh; }
 }
 `
   document.head.appendChild(style)
 }
 
-// ─── 确认对话框（宿主模态壳；缺席时降级 window.confirm——侧栏同款范式） ───────
-
-function confirmDialog(title: string, description: string, okText = '确认'): Promise<boolean> {
-  const ctx = getPluginContext()
-  if (typeof ctx.ui.showDialog !== 'function') {
-    return Promise.resolve(window.confirm(`${title}\n\n${description}`))
-  }
-  return ctx
-    .ui.showDialog<boolean>({
-      title,
-      description,
-      Content: ({ close }) => (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12, minWidth: 'min(320px, 80vw)', fontSize: 13 }}>
-          <p style={{ margin: 0, color: 'var(--text-secondary, #aab3c2)', lineHeight: 1.7 }}>{description}</p>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-            <Button onClick={() => close(false)}>取消</Button>
-            <Button type="primary" danger onClick={() => close(true)}>
-              {okText}
-            </Button>
-          </div>
-        </div>
-      ),
-    })
-    .then(r => r === true)
-}
+// ─── 确认弹窗：统一弹窗组件（../Dialog），本面板不再自持实现 ──────────────────
 
 // ─── 粘贴导入对话框（「导入 → 粘贴 JSON」；textarea 粘贴 → 校验 → 导入） ─────
 
@@ -190,7 +154,7 @@ function confirmDialog(title: string, description: string, okText = '确认'): P
  * 弹窗粘贴导入：textarea 承接用户粘贴的 .workflow.json 内容 → runImport（前端
  * 形态预检 + def.import，核心逻辑在 ManagePanel.importText）→ 成功关窗、失败在
  * 弹窗内回显错误（用户可直接改文本重试，不必关窗重来）。空文本/进行中有本地
- * 拦截；导入中按钮 loading 防重复提交。
+ * 拦截；导入中按钮 loading 防重复提交。主体构建在统一弹窗件（../Dialog）上。
  */
 function PasteImportDialog({
   close,
@@ -223,9 +187,9 @@ function PasteImportDialog({
   }
 
   return (
-    <div className="wf-manage-paste">
+    <DialogBody>
       <textarea
-        className="wf-manage-paste-area"
+        className="wf-dlg-textarea wf-dlg-textarea--tall"
         value={text}
         spellCheck={false}
         placeholder={'粘贴工作流定义 JSON（.workflow.json 文件的完整内容）'}
@@ -238,16 +202,16 @@ function PasteImportDialog({
           }
         }}
       />
-      {error ? <div className="wf-manage-paste-error">{error}</div> : null}
-      <div className="wf-manage-json-footer">
-        <Button disabled={busy} onClick={close}>
+      {error ? <DialogError>{error}</DialogError> : null}
+      <DialogFooter>
+        <DialogButton disabled={busy} onClick={close}>
           取消
-        </Button>
-        <Button type="primary" loading={busy} onClick={() => void submit()}>
-          导入
-        </Button>
-      </div>
-    </div>
+        </DialogButton>
+        <DialogButton variant="primary" disabled={busy} onClick={() => void submit()}>
+          {busy ? '导入中…' : '导入'}
+        </DialogButton>
+      </DialogFooter>
+    </DialogBody>
   )
 }
 
@@ -408,35 +372,13 @@ export default function ManagePanel({ workspaceId }: ManagePanelProps) {
         return
       }
       const text = JSON.stringify(full, null, 2)
-      await ctx.ui.showDialog<null>({
+      // 统一只读文本弹窗（../Dialog）：等宽滚动视图 + 复制（失败落手动复制降落伞）。
+      await showTextViewDialog({
         title: `定义 JSON：${def.name || def.id}`,
         description: `${def.id} · 只读视图，可复制后另存为 .workflow.json`,
-        Content: ({ close }) => (
-          <div className="wf-manage-json">
-            <pre>{text}</pre>
-            <div className="wf-manage-json-footer">
-              <Button
-                onClick={() => {
-                  // copyText：异步 API → execCommand 同步兜底（点击手势内调用，
-                  // 手势仍在，execCommand 大概率成功）；双双失败弹手动复制降落伞
-                  // （侧栏同款），非安全上下文（局域网 http）也能复制。
-                  void copyText(text).then(ok => {
-                    if (ok) {
-                      toast('已复制到剪贴板', 'success')
-                    } else {
-                      showManualCopyDialog('复制定义 JSON', text)
-                    }
-                  })
-                }}
-              >
-                复制
-              </Button>
-              <Button type="primary" onClick={() => close(null)}>
-                关闭
-              </Button>
-            </div>
-          </div>
-        ),
+        text,
+        copyTitle: '复制定义 JSON',
+        toast,
       })
     })
   }

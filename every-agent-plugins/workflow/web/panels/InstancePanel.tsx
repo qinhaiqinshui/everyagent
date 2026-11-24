@@ -36,6 +36,7 @@ import WorkflowCanvas, {
   type CanvasSelection,
 } from '../canvas/WorkflowCanvas'
 import { statusVisual, type RenderStatus } from '../canvas/renderStates'
+import { confirmDialog } from '../Dialog'
 import { getPluginContext } from '../pluginRuntime'
 import {
   conditionLabel,
@@ -468,37 +469,6 @@ function ensureInstanceStyles(): void {
 }
 `
   document.head.appendChild(style)
-}
-
-// ─── 确认对话框（宿主模态壳；缺席降级 window.confirm——侧栏同款范式） ───────
-
-function confirmDialog(title: string, description: string, okText = '确认'): Promise<boolean> {
-  const ctx = getPluginContext()
-  if (typeof ctx.ui.showDialog !== 'function') {
-    return Promise.resolve(window.confirm(`${title}\n\n${description}`))
-  }
-  return ctx.ui
-    .showDialog<boolean>({
-      title,
-      description,
-      Content: ({ close }) => (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12, minWidth: 'min(320px, 80vw)', fontSize: 13 }}>
-          <p style={{ margin: 0, color: 'var(--text-secondary, #aab3c2)', lineHeight: 1.7 }}>{description}</p>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-            <button type="button" className="wf-inst-btn" onClick={() => close(false)}>取消</button>
-            <button
-              type="button"
-              className="wf-inst-btn"
-              style={{ background: 'var(--accent-red, #ff6b6b)', borderColor: 'var(--accent-red, #ff6b6b)', color: '#0b0d12', fontWeight: 600 }}
-              onClick={() => close(true)}
-            >
-              {okText}
-            </button>
-          </div>
-        </div>
-      ),
-    })
-    .then(r => r === true)
 }
 
 // ─── 决策横幅 ──────────────────────────────────────────────────────────────

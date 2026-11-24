@@ -32,8 +32,8 @@
  * `plugin-worker-event`，本面板订阅后按 kind 重拉对应列表（150ms 合并突发；kind=definition
  * 仍重拉 defs——组头 ▶ 运行窗的定义选项依赖它，只是不再渲染定义行）；面板再展示
  * / 注册表变化时重拉；另留 60s 低频兜底轮询（重连窗口内丢帧的唯一补救——插件无重连信号）。
- * 手动刷新收进组头 ⋯。busy 标记防重入；confirm 走 ctx.ui.showDialog（缺席降级
- * window.confirm）；toast 走 ctx.ui.showToast。
+ * 手动刷新收进组头 ⋯。busy 标记防重入；confirm / 手动复制降落伞走统一弹窗组件
+ * （../Dialog，宿主模态壳 + wf-dlg-* 主体）；toast 走 ctx.ui.showToast。
  *
  * 纯逻辑可测核（无插件 web 测试基建，导出保持可测、供 ManagePanel 复用，人工清单见文件尾注释）：
  * formatTimestamp / formatRelativeTime / instanceVariablesText / exportFileName /
@@ -56,6 +56,7 @@ import {
 import SidebarScrollArea from '../SidebarScrollArea'
 import { HeaderMenu, RowActions } from '../Menu'
 import { openWorkspaceRunDialog } from './RunDialog'
+import { confirmDialog, showManualCopyDialog } from '../Dialog'
 import { copyText, copyTextSync } from '../clipboard'
 import {
   ChevronDownIcon,
@@ -240,97 +241,7 @@ function workspaceEntryLabel(entry: PluginWorkspaceEntry): string {
   return base || entry.id || root
 }
 
-// ─── 确认对话框（宿主模态壳；缺席时降级 window.confirm） ────────────────────
-
-function confirmDialog(title: string, description: string, okText = '确认'): Promise<boolean> {
-  const ctx = getPluginContext()
-  if (typeof ctx.ui.showDialog !== 'function') {
-    return Promise.resolve(window.confirm(`${title}\n\n${description}`))
-  }
-  return ctx.ui
-    .showDialog<boolean>({
-      title,
-      description,
-      Content: ({ close }) => (
-        <div style={confirmBodyStyle}>
-          <p style={{ margin: 0, color: 'var(--text-secondary)', lineHeight: 1.7 }}>{description}</p>
-          <div style={confirmFooterStyle}>
-            <Button onClick={() => close(false)}>取消</Button>
-            <Button type="primary" danger onClick={() => close(true)}>
-              {okText}
-            </Button>
-          </div>
-        </div>
-      ),
-    })
-    .then(r => r === true)
-}
-
-// ─── 手动复制降落伞（「复制工作流路径」剪贴板写入失败时） ───────────────────
-
-/**
- * 路径已拿到但写不进剪贴板时的「降落伞」模态：把文本摆进**已全选**的只读文本域，
- * 用户直接 Ctrl+C（⌘C）即可，不再只看到一句「复制失败」（宿主 ManualCopyDialog 的
- * 插件版——插件不得引宿主模块，经 ctx.ui.showDialog 挂宿主模态壳）。
- *
- * 「重试复制」按钮本身是一次**新的点击手势**，其同步 copyTextSync 几乎必然成功
- * （这正是非安全上下文下 execCommand 需要的手势）。
- *
- * 导出供 ManagePanel「查看 JSON → 复制」复用（复制任何长文本的同一降落伞）。
- */
-export function showManualCopyDialog(title: string, text: string): void {
-  const ctx = getPluginContext()
-  if (typeof ctx.ui.showDialog !== 'function') {
-    // 宿主模态缺席：window.prompt 自带全选文本域，可直接 Ctrl+C / ⌘C。
-    window.prompt(title, text)
-    return
-  }
-  void ctx.ui.showDialog({
-    title,
-    description:
-      '浏览器拒绝了剪贴板访问：下方文本已全选，可直接按 Ctrl+C（⌘C）复制，或点「重试复制」。',
-    Content: ({ close }) => {
-      const textareaRef = React.useRef<HTMLTextAreaElement | null>(null)
-      const [copied, setCopied] = React.useState(false)
-      // 打开即全选：用户无需拖选，直接按键复制。
-      React.useEffect(() => {
-        const node = textareaRef.current
-        if (!node) return
-        node.focus()
-        node.select()
-      }, [])
-      return (
-        <div style={manualCopyBodyStyle}>
-          <textarea
-            ref={textareaRef}
-            readOnly
-            value={text}
-            spellCheck={false}
-            onFocus={event => event.currentTarget.select()}
-            style={manualCopyTextareaStyle}
-          />
-          <div style={confirmFooterStyle}>
-            <Button onClick={() => close(null)}>关闭</Button>
-            <Button
-              type="primary"
-              onClick={() => {
-                // 本次点击手势内同步写；同步路径失败（极少数环境禁用 execCommand）
-                // 再退回异步 API 并落 copied 态。
-                if (copyTextSync(text)) {
-                  setCopied(true)
-                  return
-                }
-                void copyText(text).then(setCopied)
-              }}
-            >
-              {copied ? '已复制' : '重试复制'}
-            </Button>
-          </div>
-        </div>
-      )
-    },
-  })
-}
+// ─── 确认弹窗 / 手动复制降落伞：统一弹窗组件（../Dialog），本面板不再自持实现 ──
 
 // ─── 行卡片（与任务侧边栏任务卡同构） ─────────────────────────────────────
 
@@ -1313,43 +1224,6 @@ const errorStyle: React.CSSProperties = {
   color: 'var(--accent-red)',
   padding: '8px 4px',
   lineHeight: 1.5,
-}
-
-const confirmBodyStyle: React.CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 12,
-  minWidth: 'min(320px, 80vw)',
-  fontSize: 13,
-}
-
-const confirmFooterStyle: React.CSSProperties = {
-  display: 'flex',
-  justifyContent: 'flex-end',
-  gap: 8,
-}
-
-/** 手动复制降落伞主体（同宽约束；文本域 + 操作行）。 */
-const manualCopyBodyStyle: React.CSSProperties = {
-  ...confirmBodyStyle,
-  minWidth: 'min(420px, 80vw)',
-}
-
-/** 降落伞文本域：等宽只读、打开即全选、wordBreak 容长路径。 */
-const manualCopyTextareaStyle: React.CSSProperties = {
-  width: '100%',
-  minHeight: 72,
-  resize: 'vertical',
-  padding: '10px 12px',
-  borderRadius: 'var(--radius-md, 8px)',
-  border: '1px solid var(--border)',
-  background: 'var(--bg-primary)',
-  color: 'var(--text-primary)',
-  fontFamily: 'var(--font-mono, monospace)',
-  fontSize: 'var(--text-sm, 13px)',
-  lineHeight: 1.5,
-  outline: 'none',
-  wordBreak: 'break-all',
 }
 
 /*
