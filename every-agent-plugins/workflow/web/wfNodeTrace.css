@@ -1,0 +1,121 @@
+/* wf.node trace 卡片（工作流非 AI 节点过程呈现）+ 折叠行图标状态着色。
+   色值全走宿主 CSS token（明暗主题自动适配）；与 ai-review 的 authReview.css 同构。 */
+
+.wf-node-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 4px;
+  font-size: var(--text-sm, 13px);
+  line-height: 1.5;
+}
+
+.wf-node-card__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* 状态徽标：运行中蓝 / 完成绿 / 失败红（dim 底 + 主色字，与 auth.review 徽标同构）。 */
+.wf-node-card__badge {
+  flex: 0 0 auto;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: var(--text-xs, 12px);
+  font-weight: 700;
+}
+
+.wf-node-card__badge--running {
+  background: var(--accent-blue-dim);
+  color: var(--accent-blue);
+}
+
+.wf-node-card__badge--done {
+  background: var(--accent-green-dim);
+  color: var(--accent-green);
+}
+
+.wf-node-card__badge--failed {
+  background: var(--accent-red-dim);
+  color: var(--accent-red);
+}
+
+.wf-node-card__type {
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+}
+
+.wf-node-card__duration,
+.wf-node-card__exit {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: var(--text-xs, 12px);
+}
+
+/* 元信息行（工作流/实例/节点/运行序/激活边）——弱化单行，过长由换行收口。 */
+.wf-node-card__meta {
+  color: var(--text-faint, var(--text-muted));
+  font-size: var(--text-xs, 12px);
+  word-break: break-all;
+}
+
+.wf-node-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.wf-node-card__block {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.wf-node-card__block--error {
+  gap: 2px;
+}
+
+.wf-node-card__label {
+  flex: 0 0 auto;
+  color: var(--text-faint, var(--text-muted));
+  font-size: var(--text-xs, 12px);
+}
+
+/* 输入/输出/错误全量文本：等宽 + 保留换行；超长内部滚动（全量数据不截断，由滚动收口）。 */
+.wf-node-card__pre {
+  margin: 0;
+  min-width: 0;
+  max-height: 320px;
+  overflow: auto;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--accent-blue-soft, rgba(97, 165, 255, 0.08));
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs, 12px);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.wf-node-card__pre--error {
+  background: var(--accent-red-dim);
+  color: var(--accent-red);
+}
+
+/* 折叠行图标状态着色（index.ts 的 getIcon 经 className 通道挂类）：
+   running 蓝 / done 绿 / failed 红；未挂类时继承宿主 trace 图标色。 */
+.wf-node-glyph--running {
+  color: var(--accent-blue);
+}
+
+.wf-node-glyph--done {
+  color: var(--accent-green);
+}
+
+.wf-node-glyph--failed {
+  color: var(--accent-red);
+}

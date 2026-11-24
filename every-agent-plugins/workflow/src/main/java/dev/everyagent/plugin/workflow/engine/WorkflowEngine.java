@@ -23,6 +23,8 @@ import dev.everyagent.plugin.api.WorkerServices;
 import dev.everyagent.plugin.api.exception.BadParamsException;
 import dev.everyagent.plugin.api.exception.NotFoundException;
 import dev.everyagent.plugin.api.execution.ExecContext;
+import dev.everyagent.plugin.api.model.EmitEvent;
+import dev.everyagent.plugin.api.proto.SnowflakeId;
 import dev.everyagent.plugin.api.slash.SlashTokenEncoder;
 import dev.everyagent.plugin.api.util.RootCause;
 import dev.everyagent.plugin.workflow.engine.NodeRunners.AiNodeRunner;
@@ -74,6 +76,14 @@ public final class WorkflowEngine {
 
     /** 终态收口时等待节点线程退出的单线程上限。 */
     private static final long JOIN_TIMEOUT_MS = 10_000;
+
+    /** wf.node trace 的 wire kind（非 AI 节点过程呈现，经任务 emitter 落任务 EventLog，§7.20.8）。 */
+    public static final String WF_NODE_TRACE_KIND = "wf.node";
+
+    /** wf.node trace 的三态 status（payload.status 槽位；前端按 data.error/exitCode 推导同值）。 */
+    private static final String TRACE_RUNNING = "running";
+    private static final String TRACE_DONE = "done";
+    private static final String TRACE_FAILED = "failed";
 
     private final WorkflowStore store;
     private final WorkerServices services;
@@ -293,6 +303,8 @@ public final class WorkflowEngine {
                 new ConcurrentHashMap<>();
         /** nodeId → supervisor 已介入次数（上限 3）。 */
         final ConcurrentHashMap<String, Integer> supervisorAttempts = new ConcurrentHashMap<>();
+        /** nodeId:runNo → wf.node trace 固定 EmitEvent.id（started 生成、done/failed 同 id 重发 → 任务域 upsert 原地更新一行）。 */
+        final ConcurrentHashMap<String, Long> traceIds = new ConcurrentHashMap<>();
         final AtomicInteger runCounter;
         final AtomicReference<InstanceStatus> status;
         volatile InstanceMeta meta;
@@ -381,6 +393,12 @@ public final class WorkflowEngine {
                         return;
                     }
                     emitNodeError(r, nodeId, nodeName, refusedRunNo, message, null);
+                    // 拒绝调度即失败留痕（虚拟 runNo=runCount+1，与本节点实跑同号时同 id 原地
+                    // 翻转为 failed，异号时新 id 插行——id 契约统一按 nodeId:runNo）
+                    if (node != null) {
+                        emitNodeTrace(r, node, refusedRunNo, TRACE_FAILED, null, null, message,
+                                List.of(), 0L, null);
+                    }
                     handleNodeError(r, node, refusedRunNo, message);
                 } finally {
                     // 条件移除：自环重调度的新线程可能已抢先注册同 key
@@ -429,6 +447,7 @@ public final class WorkflowEngine {
             }
             in = renderInput(r, node);
             emitNodeStarted(r, node, runNo, in);
+            emitNodeTrace(r, node, runNo, TRACE_RUNNING, in, null, null, List.of(), 0L, null);
             NodeResult result;
             switch (node.type() == null ? "" : node.type()) {
                 case NodeDef.TYPE_START ->
@@ -477,6 +496,8 @@ public final class WorkflowEngine {
             r.runRecords.put(runNo, rec);
             store.saveRunRecord(r.wsId, r.instanceId, rec);
             emitNodeOutput(r, node, runNo, result, activated);
+            emitNodeTrace(r, node, runNo, TRACE_DONE, in, outputTextOf(result), null, activated,
+                    System.currentTimeMillis() - startedAt, result.exitCode());
             activateTargetsLocked(r, activated);
             // 自查重调：本节点运行期间新到的激活（环/多前驱）
             tryScheduleLocked(r, node.id());
@@ -550,6 +571,8 @@ public final class WorkflowEngine {
         }
         store.saveRunRecord(r.wsId, r.instanceId, rec);
         emitNodeError(r, node.id(), display(node), runNo, message, null);
+        emitNodeTrace(r, node, runNo, TRACE_FAILED, in, null, message, List.of(),
+                Math.max(0, System.currentTimeMillis() - startedAt), null);
         handleNodeError(r, node, runNo, message);
     }
 
@@ -926,6 +949,103 @@ public final class WorkflowEngine {
             payload.put("exitCode", exitCode);
         }
         store.appendEvent(r.wsId, r.instanceId, "node.error", payload);
+    }
+
+    // ══════════════════════════ wf.node 任务 trace ══════════════════════════
+
+    /**
+     * wf.node trace 发射（非 AI 节点过程呈现，经<b>任务 emitter</b> 落任务 EventLog，
+     * §7.20.8 契约）：persist + REPLACE，每次节点运行<b>固定 EmitEvent.id</b>
+     * （{@link InstanceRun#traceIds}：started 生成、done/failed 同 id 重发 → 前端
+     * upsertTraceBySeq 原地更新一行）；data 携带 input/output/error <b>全量</b>
+     * （截断留给前端展示层）。agentId 留 null（任务层兜底 mainAgentId——trace 归主线，
+     * 与工具结果同视图）。
+     *
+     * <p>发射失败仅告警不阻断节点执行（与 {@code NodeRunners.emitInstruction} 同纪律）；
+     * 无任务绑定（taskExec/emitter 缺失）跳过——非 AI 节点允许无绑定运行，此时无
+     * trace 是预期。仅命令节点发射：start 无过程；AI 节点不发（其过程=子 agent 会话
+     * 条目，任务页已完整可见）。
+     */
+    private void emitNodeTrace(InstanceRun r, NodeDef node, int runNo, String status,
+            RenderedInput in, String outputText, String error, List<String> activatedEdges,
+            long durationMs, Integer exitCode) {
+        if (node == null || !NodeDef.TYPE_COMMAND.equals(node.type())) {
+            return;
+        }
+        ExecContext taskExec = r.runtime.taskExec();
+        if (taskExec == null || taskExec.emitter() == null) {
+            return;
+        }
+        var data = Json.obj()
+                .put("instanceId", r.instanceId)
+                .put("definitionName",
+                        r.meta.definitionName() == null ? "" : r.meta.definitionName())
+                .put("nodeId", node.id())
+                .put("nodeName", display(node))
+                .put("nodeType", node.type() == null ? "" : node.type())
+                .put("runNo", runNo)
+                .put("input", in == null || in.rendered() == null ? "" : in.rendered())
+                .put("output", outputText == null ? "" : outputText)
+                .put("error", error == null ? "" : error)
+                .put("durationMs", durationMs);
+        if (exitCode != null) {
+            data.put("exitCode", exitCode);
+        }
+        data.set("activatedEdges", Json.toJson(activatedEdges == null ? List.of() : activatedEdges));
+        // content 承载输出/错误文本（done/failed）；running 留空（折叠行由 summary 表达）
+        String content = TRACE_DONE.equals(status) ? (outputText == null ? "" : outputText)
+                : TRACE_FAILED.equals(status) ? (error == null ? "" : error) : null;
+        long id = r.traceIds.computeIfAbsent(node.id() + ":" + runNo, k -> SnowflakeId.next());
+        try {
+            taskExec.emitter().emit(EmitEvent.of(id, WF_NODE_TRACE_KIND, null,
+                    display(node), traceSummary(node.type(), status, durationMs),
+                    content, status, data, EmitEvent.Mode.REPLACE));
+        } catch (RuntimeException e) {
+            log.warn("[workflow] wf.node trace 发射失败(自吞) instance={} node={} runNo={}",
+                    r.instanceId, node.id(), runNo, e);
+        }
+    }
+
+    /** 节点结果 → trace 全量输出文本（命令=stdout+stderr；AI=text——现仅命令节点走到）。 */
+    private static String outputTextOf(NodeResult result) {
+        if (result == null || result.output() == null) {
+            return "";
+        }
+        RunRecord.RunOutput o = result.output();
+        if (o.text() != null) {
+            return o.text();
+        }
+        return (o.stdout() == null ? "" : o.stdout()) + (o.stderr() == null ? "" : o.stderr());
+    }
+
+    /** trace summary：{@code <节点类型> · <状态> · <耗时>}（运行中/零耗时省略耗时段）。 */
+    private static String traceSummary(String nodeType, String status, long durationMs) {
+        String type = switch (nodeType == null ? "" : nodeType) {
+            case NodeDef.TYPE_COMMAND -> "命令";
+            case NodeDef.TYPE_AI -> "AI";
+            case NodeDef.TYPE_START -> "开始";
+            default -> nodeType == null ? "节点" : nodeType;
+        };
+        String label = switch (status) {
+            case TRACE_RUNNING -> "运行中";
+            case TRACE_DONE -> "完成";
+            case TRACE_FAILED -> "失败";
+            default -> status;
+        };
+        return durationMs > 0
+                ? type + " · " + label + " · " + formatDuration(durationMs)
+                : type + " · " + label;
+    }
+
+    /** 毫秒人性化：&lt;1s 原样 ms；&lt;60s 一位小数秒；更长 分秒。 */
+    private static String formatDuration(long ms) {
+        if (ms < 1000) {
+            return ms + "ms";
+        }
+        if (ms < 60_000) {
+            return String.format(java.util.Locale.ROOT, "%.1fs", ms / 1000.0);
+        }
+        return ms / 60_000 + "分" + (ms % 60_000) / 1000 + "秒";
     }
 
     // ══════════════════════════ 工具 ══════════════════════════

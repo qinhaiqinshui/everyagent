@@ -9,7 +9,9 @@
  *   定义不在侧栏展示，定义的增删改查/导入/导出全部在管理标签页）；
  * - workflow-editor 工作区标签类型（定义编辑器：画布 + 属性面板 + 变量/出错策略）；
  * - workflow-instance 工作区标签类型（实例运行页 + 运行日志页）；
- * - workflow-manage 工作区标签类型（工作区级定义管理页：列表 + 行操作）。
+ * - workflow-manage 工作区标签类型（工作区级定义管理页：列表 + 行操作）；
+ * - wf.node trace 类型（任务流中非 AI 节点过程卡片：折叠行摘要 + 展开态全量
+ *   input/output/error，WfNodeTraceView + wfNodeTrace.css）。
  *
  * 硬约束（docs/plugin-guide/web/overview-and-loading.md）：
  * - 类型一律 import type ... from '@everyagent/plugin-api'（纯类型包）；
@@ -30,12 +32,38 @@
  *   打开方式：ctx.ui.openTab('workflow-manage', { workspaceId }, '管理工作流')
  */
 
-import type { Disposable, PluginContext, PluginModule, UiSidebarItemDefinition } from '@everyagent/plugin-api'
+import type { Disposable, PluginContext, PluginModule, PluginTraceRecord, TraceTypeDefinition, UiSidebarItemDefinition } from '@everyagent/plugin-api'
 import React from 'react'
-import { WorkflowIcon } from './icons'
+import { AiNodeIcon, CommandNodeIcon, StartNodeIcon, WorkflowIcon } from './icons'
 import { setPluginContext } from './pluginRuntime'
 import { workflowEditorTabType, workflowInstanceTabType, workflowManageTabType } from './tabTypes'
 import SidebarPanel from './panels/SidebarPanel'
+import WfNodeTraceView, {
+  WF_NODE_TRACE_KIND,
+  readMetaString,
+  summarizeWfNode,
+  wfNodeStatus,
+} from './WfNodeTraceView'
+
+/** wf.node trace 类型定义（非 AI 节点过程卡片，数据形状/状态推导见 WfNodeTraceView 文件头）。
+ *  注：入口 .ts 不写 JSX（esbuild 对 .ts 不启用 JSX loader）——图标与渲染走 React.createElement。 */
+const wfNodeTraceDef: TraceTypeDefinition = {
+  kind: WF_NODE_TRACE_KIND,
+  // 图标按节点类型分发 + 状态着色（色走 wfNodeTrace.css 的 wf-node-glyph--*，宿主 token）；
+  // 13px = 工具行折叠行图标尺寸（与 trace 图标同列同尺寸）。未知类型回退命令图标。
+  getIcon: (trace) => {
+    const meta = trace.metadata ?? {}
+    const glyphClass = `wf-node-glyph wf-node-glyph--${wfNodeStatus(meta)}`
+    const nodeType = readMetaString(meta.nodeType)
+    const Glyph = nodeType === 'ai' ? AiNodeIcon : nodeType === 'start' ? StartNodeIcon : CommandNodeIcon
+    return React.createElement(Glyph, { size: 13, className: glyphClass })
+  },
+  // title=节点名（收起态保留：节点名 + summary 两段式），故不 hideTitle。
+  canExpand: (trace) => Boolean(trace.metadata && Object.keys(trace.metadata).length > 0),
+  getSummary: (trace) => summarizeWfNode(trace as PluginTraceRecord),
+  renderContent: (trace) =>
+    React.createElement(WfNodeTraceView, { trace: trace as PluginTraceRecord }),
+}
 
 /** 本插件持有的可释放资源；deactivate() 时统一清理（宿主当前不自动卸载，留好出口）。 */
 const disposables: Disposable[] = []
@@ -59,6 +87,9 @@ const workflowPlugin: PluginModule = {
     disposables.push(ctx.ui.registerWorkspaceTabType(workflowEditorTabType))
     disposables.push(ctx.ui.registerWorkspaceTabType(workflowInstanceTabType))
     disposables.push(ctx.ui.registerWorkspaceTabType(workflowManageTabType))
+
+    // wf.node trace 卡片（非 AI 节点过程呈现：任务流折叠行 + 展开态全量 input/output/error）。
+    disposables.push(ctx.ui.registerTraceType(wfNodeTraceDef))
   },
 
   // 宿主当前不调用 deactivate，但保留标准出口（热卸载接入时能摘除全部注册项）。
