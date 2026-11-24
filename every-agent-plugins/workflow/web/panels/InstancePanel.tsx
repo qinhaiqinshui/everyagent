@@ -1294,10 +1294,10 @@ export default function InstancePanel({ instanceId, workspaceId }: InstancePanel
                 style={{ position: 'absolute', inset: 0 }}
               />
             </div>
-            {/* 详情面板按需出现：点选节点/边才挂载（桌面端非选中不占位）；空白点按
-                保留详情（不清选），关闭只走面板 ×；移动端保持常驻挂载由 transform
-                控制抽屉滑入滑出（条件卸载会丢过渡动画）。 */}
-            {!isMobile || selectedNode || selectedEdge ? (
+            {/* 详情面板按需出现：仅在选中节点/边后挂载（无选中不占位、画布占满，
+                关闭即卸载）；空白点按不清选（桌面面板保留、移动端抽屉收起但内容保留，
+                抽屉显隐由 transform 控制）。 */}
+            {selectedNode || selectedEdge ? (
               <div
                 className={`wf-inst-side${isMobile && sheetOpen ? ' wf-inst-side--open' : ''}`}
                 style={isMobile && !sheetOpen ? { pointerEvents: 'none' } : undefined}
