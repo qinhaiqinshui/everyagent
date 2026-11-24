@@ -6,10 +6,15 @@
  * - 选中态（节点/边高亮）、背景点按取消选中；
  * - mode='edit'：节点拖拽（pointerdown→capture→pointermove 改 x/y）、从右锚点拖出
  *   连线到目标节点（pointerup 命中测试）、Delete 删除由宿主面板处理（本组件只回调
- *   选中）；触屏可用——拖拽目标挂 touch-action:none 阻断浏览器滚动抢占手势，
- *   背景仍可单指平移画布（滚动容器原生滚动）；
+ *   选中）；触屏可用——拖拽目标挂 touch-action:none 阻断浏览器滚动抢占手势；
  * - mode='readonly'：禁一切编辑交互（实例视图复用基座，步骤 10；tap 选中可用）；
  * - 桌面 Ctrl+拖拽平移画布（按住 Ctrl 光标变手型；节点/连线/选中等交互让位）；
+ * - 触屏平移：空白背景单指=滚动容器原生滚动；任意位置（含节点上）双指拖动=平移
+ *   画布（多指跟踪在滚动容器层，节点拖拽/连线让位，驱动指抬起接力到剩余触点）；
+ * - 节点选中是 tap 语义：pointerdown 不选，pointerup 位移 ≤ TAP_SLOP 才回调
+ *   onSelect——触屏按下即弹属性抽屉会吞掉随后的平移/拖动手势；
+ * - 画布尺寸随内容自适应：svg 宽高 = 固定下限与节点包围盒+留白的较大者，节点
+ *   拖/落在任何位置都可滚到（修复「节点拖出固定画布后不可见」）；
  * - 运行态着色/动画：node.status → renderStates 色彩（TaskStatusDot 色彩语言）。
  *
  * 坐标系：svg 与定义坐标 1:1（无缩放），外层 div 滚动平移；client → svg 坐标经
@@ -27,9 +32,14 @@ import { nodeStrokeColor, statusVisual, NEUTRAL_STATUS_VISUAL, type RenderStatus
 
 export const NODE_W = 180
 export const NODE_H = 64
+/** 画布最小尺寸（历史固定值，内容不足时兜底）。 */
 const CANVAS_W = 3200
 const CANVAS_H = 2400
+/** 内容自适应留白：节点包围盒右侧/底部的拖放余量。 */
+const CANVAS_PAD = 160
 const EDGE_GAP = 60
+/** tap 判定阈值（px）：pointerup 与 down 的 client 位移不超过它才算点按选中。 */
+const TAP_SLOP = 8
 
 // ─── 视图模型（props） ────────────────────────────────────────────────────
 
@@ -82,7 +92,7 @@ function ensureCanvasStyles(): void {
   const style = document.createElement('style')
   style.id = CANVAS_STYLE_ID
   style.textContent = `
-.wf-canvas-scroll { overflow: auto; width: 100%; height: 100%; background: var(--bg-primary, #0b0d12); }
+.wf-canvas-scroll { overflow: auto; width: 100%; height: 100%; background: var(--bg-primary, #0b0d12); touch-action: pan-x pan-y; }
 .wf-canvas-surface { background-image: radial-gradient(circle, var(--border-light, #1b202a) 1px, transparent 1px); background-size: 24px 24px; }
 .wf-node-hit { cursor: grab; }
 .wf-node-hit:active { cursor: grabbing; }
@@ -92,7 +102,9 @@ function ensureCanvasStyles(): void {
 .wf-canvas-pan * { cursor: grab !important; }
 .wf-canvas-panning, .wf-canvas-panning * { cursor: grabbing !important; }
 .wf-canvas-panning { user-select: none; -webkit-user-select: none; }
-/* 触屏：编辑态节点/锚点为拖拽手势目标，阻断浏览器滚动抢占；背景保持单指平移画布。 */
+/* 触屏：编辑态节点/锚点为拖拽手势目标，阻断浏览器滚动抢占（祖先容器的
+   pan-x pan-y 与本元素的 none 取更严者，单指原生滚动不受影响）；
+   双指手势不被浏览器 pinch-zoom 接管，交给容器层做画布平移。 */
 .wf-node-hit, .wf-anchor-out { touch-action: none; -webkit-user-select: none; user-select: none; }
 @keyframes wf-status-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 .wf-status-running { animation: wf-status-pulse 1.1s ease-in-out infinite; }
@@ -120,11 +132,17 @@ export default function WorkflowCanvas({
   const svgRef = React.useRef<SVGSVGElement | null>(null)
   const scrollRef = React.useRef<HTMLDivElement | null>(null)
   /** 拖拽态（pointer capture 期间由 svg 的 move/up/cancel 处理器消费，不进 state 防重渲染抖动）。 */
-  const dragRef = React.useRef<{ id: string; dx: number; dy: number; pointerId: number } | null>(null)
+  const dragRef = React.useRef<{ id: string; dx: number; dy: number; pointerId: number; startX: number; startY: number } | null>(null)
+  /** tap 候选（节点按下 → up 时位移 ≤ TAP_SLOP 才选中；readonly 无拖拽也走此判定）。 */
+  const tapRef = React.useRef<{ id: string; pointerId: number; startX: number; startY: number } | null>(null)
   /** 连线态源节点（pendingEdge state 只为渲染预览线）。 */
   const connectRef = React.useRef<{ from: string; pointerId: number } | null>(null)
   const [pendingEdge, setPendingEdge] = React.useState<{ from: string; x: number; y: number } | null>(null)
   const [hoverAnchor, setHoverAnchor] = React.useState<string | null>(null)
+  /** 活动触点（非鼠标）：双指平移检测；坐标随手更新供接力平移取基准。 */
+  const touchPointsRef = React.useRef<Map<number, { x: number; y: number }>>(new Map())
+  /** 多指平移态：第二指落下启动，驱动指针位移取反滚动容器；驱动指抬起接力到剩余触点。 */
+  const multiPanRef = React.useRef<{ pointerId: number; startX: number; startY: number; scrollLeft: number; scrollTop: number } | null>(null)
 
   // ── Ctrl+拖拽平移画布（桌面）：按住 Ctrl 光标变手型，拖动滚动容器。 ──
   const [ctrlHeld, setCtrlHeld] = React.useState(false)
@@ -151,6 +169,17 @@ export default function WorkflowCanvas({
     for (const n of nodes) m.set(n.id, n)
     return m
   }, [nodes])
+
+  // 画布尺寸随内容自适应：节点包围盒 + 留白与固定下限取大者。节点可拖/落在
+  // 任意位置（onNodeMove 只钳负向下限），画布随之扩展——滚动容器总能滚到每个节点。
+  const contentW = React.useMemo(
+    () => nodes.reduce((m, n) => Math.max(m, n.x + NODE_W), CANVAS_W) + CANVAS_PAD,
+    [nodes],
+  )
+  const contentH = React.useMemo(
+    () => nodes.reduce((m, n) => Math.max(m, n.y + NODE_H), CANVAS_H) + CANVAS_PAD,
+    [nodes],
+  )
 
   /** client 坐标 → svg 定义坐标（1:1 无缩放，线性平移）。 */
   const toSvgPoint = React.useCallback((clientX: number, clientY: number): { x: number; y: number } => {
@@ -184,20 +213,29 @@ export default function WorkflowCanvas({
     }
   })
 
-  /** 节点主体按下：选中 + （edit）启动拖拽（Ctrl 按下=平移画布意图，跳过）。 */
+  /** 节点主体按下：记录 tap 候选 + （edit）启动拖拽（Ctrl 或多指平移中=平移画布意图，跳过）。
+   *  选中延迟到 pointerup（位移 ≤ TAP_SLOP）——触屏按下即选中会立刻弹属性抽屉，
+   *  吞掉用户随后的拖动/平移手势（移动端编辑器核心体感问题）。 */
   const handleNodePointerDown = (event: React.PointerEvent, node: CanvasNodeView) => {
-    if (event.button !== 0 || event.ctrlKey) return
-    onSelect({ kind: 'node', id: node.id })
+    if (event.button !== 0 || event.ctrlKey || multiPanRef.current) return
+    tapRef.current = { id: node.id, pointerId: event.pointerId, startX: event.clientX, startY: event.clientY }
     if (!editable || !onNodeMove) return
     event.preventDefault()
     if (!capturePointer(event)) return
     const p = toSvgPoint(event.clientX, event.clientY)
-    dragRef.current = { id: node.id, dx: p.x - node.x, dy: p.y - node.y, pointerId: event.pointerId }
+    dragRef.current = {
+      id: node.id,
+      dx: p.x - node.x,
+      dy: p.y - node.y,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+    }
   }
 
-  /** 右锚点按下：启动连线（预览线跟随指针，pointerup 命中目标节点即回调；Ctrl=平移跳过）。 */
+  /** 右锚点按下：启动连线（预览线跟随指针，pointerup 命中目标节点即回调；Ctrl/多指平移跳过）。 */
   const handleAnchorPointerDown = (event: React.PointerEvent, node: CanvasNodeView) => {
-    if (!editable || !onCreateEdge || event.button !== 0 || event.ctrlKey) return
+    if (!editable || !onCreateEdge || event.button !== 0 || event.ctrlKey || multiPanRef.current) return
     event.preventDefault()
     event.stopPropagation()
     if (!capturePointer(event)) return
@@ -220,11 +258,18 @@ export default function WorkflowCanvas({
     }
   }
 
-  /** 拖拽/连线收口（连线做目标命中测试；去重/自环由命中排除）。 */
+  /** 拖拽/连线收口（连线做目标命中测试；去重/自环由命中排除；tap 候选位移达标才选中）。 */
   const handleSvgPointerUp = (event: React.PointerEvent) => {
     const d = dragRef.current
     if (d && d.pointerId === event.pointerId) {
       dragRef.current = null
+    }
+    const t = tapRef.current
+    if (t && t.pointerId === event.pointerId) {
+      tapRef.current = null
+      if (Math.hypot(event.clientX - t.startX, event.clientY - t.startY) <= TAP_SLOP) {
+        onSelect({ kind: 'node', id: t.id })
+      }
     }
     const c = connectRef.current
     if (c && c.pointerId === event.pointerId) {
@@ -250,6 +295,8 @@ export default function WorkflowCanvas({
   const handleSvgPointerCancel = (event: React.PointerEvent) => {
     const d = dragRef.current
     if (d && d.pointerId === event.pointerId) dragRef.current = null
+    const t = tapRef.current
+    if (t && t.pointerId === event.pointerId) tapRef.current = null
     const c = connectRef.current
     if (c && c.pointerId === event.pointerId) {
       connectRef.current = null
@@ -258,6 +305,50 @@ export default function WorkflowCanvas({
   }
 
   // ── 平移处理器（滚动容器上，capture 到容器自身） ──
+
+  // ── 多指平移（触屏）：第二指落下即启动——节点拖拽/连线/tap 让位，任意落点
+  //    （含节点上）双指拖动都是平移画布；驱动指针抬起则接力到剩余触点继续平移。 ──
+
+  /** 启动/重置多指平移：以指定指针当前坐标 + 当前滚动位为基准。 */
+  const startMultiPan = (pointerId: number): void => {
+    const el = scrollRef.current
+    const pt = touchPointsRef.current.get(pointerId)
+    if (!el || !pt) return
+    dragRef.current = null
+    connectRef.current = null
+    tapRef.current = null
+    setPendingEdge(null)
+    multiPanRef.current = {
+      pointerId,
+      startX: pt.x,
+      startY: pt.y,
+      scrollLeft: el.scrollLeft,
+      scrollTop: el.scrollTop,
+    }
+    setPanning(true)
+  }
+
+  /** 触点抬起：驱动指针则接力到剩余触点（仍有触点 → 换基准续平移；否则收口）。 */
+  const releaseTouchPoint = (pointerId: number): void => {
+    touchPointsRef.current.delete(pointerId)
+    const mp = multiPanRef.current
+    if (!mp || mp.pointerId !== pointerId) return
+    const el = scrollRef.current
+    const next = touchPointsRef.current.entries().next()
+    if (el && !next.done) {
+      const [pid, pt] = next.value
+      multiPanRef.current = {
+        pointerId: pid,
+        startX: pt.x,
+        startY: pt.y,
+        scrollLeft: el.scrollLeft,
+        scrollTop: el.scrollTop,
+      }
+    } else {
+      multiPanRef.current = null
+      setPanning(false)
+    }
+  }
 
   /** Ctrl+按下：捕获指针到滚动容器，记录起点滚动位（同时抑制背景取消选中）。 */
   const handlePanPointerDown = (event: React.PointerEvent) => {
@@ -324,6 +415,13 @@ export default function WorkflowCanvas({
       style={style}
       ref={scrollRef}
       onPointerDown={(e) => {
+        // 触点跟踪（非鼠标）：第二指落下 → 多指平移接管（先于背景点按取消选中，
+        // 平移意图不该动选中态）。
+        if (e.pointerType !== 'mouse') {
+          touchPointsRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
+          if (touchPointsRef.current.size >= 2) startMultiPan(e.pointerId)
+          else if (multiPanRef.current) startMultiPan(e.pointerId) // 平移中误触补充指：刷新基准防跳变
+        }
         // Ctrl 按下：平移意图（handlePanPointerDown 接管），不触发背景取消选中
         if (e.ctrlKey) return
         // 背景空白处点按：取消选中（滚动条拖动/背景平移不触发——target 是 svg 空白才算）
@@ -332,15 +430,34 @@ export default function WorkflowCanvas({
         }
       }}
       onPointerDownCapture={handlePanPointerDown}
-      onPointerMove={handlePanPointerMove}
-      onPointerUp={handlePanPointerEnd}
-      onPointerCancel={handlePanPointerEnd}
+      onPointerMove={(e) => {
+        // 触点坐标随手更新（接力平移取基准用）
+        if (touchPointsRef.current.has(e.pointerId)) {
+          touchPointsRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
+        }
+        // 多指平移驱动：驱动指针位移取反滚动（拖右看左，与 Ctrl 平移一致）
+        const mp = multiPanRef.current
+        if (mp && mp.pointerId === e.pointerId && scrollRef.current) {
+          scrollRef.current.scrollLeft = mp.scrollLeft - (e.clientX - mp.startX)
+          scrollRef.current.scrollTop = mp.scrollTop - (e.clientY - mp.startY)
+          return
+        }
+        handlePanPointerMove(e)
+      }}
+      onPointerUp={(e) => {
+        if (e.pointerType !== 'mouse') releaseTouchPoint(e.pointerId)
+        handlePanPointerEnd(e)
+      }}
+      onPointerCancel={(e) => {
+        if (e.pointerType !== 'mouse') releaseTouchPoint(e.pointerId)
+        handlePanPointerEnd(e)
+      }}
     >
       <svg
         ref={svgRef}
         className="wf-canvas-surface"
-        width={CANVAS_W}
-        height={CANVAS_H}
+        width={contentW}
+        height={contentH}
         style={{ display: 'block' }}
         onPointerMove={handleSvgPointerMove}
         onPointerUp={handleSvgPointerUp}
