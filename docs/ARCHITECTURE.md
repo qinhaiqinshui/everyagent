@@ -582,9 +582,7 @@ wsl-bwrap 后端的 seccomp 内核级提权拦截已随 bwrap 后端删除而移
 - 回放只含持久事件(瞬态从未落盘):`message` 事件自带整轮 thinking + toolCalls,由它直接组装完成态。
 - **出网投影 + 分页游标**(4 出网口之一):应答经 `EgressProjector` 投影后下发(§5.3);字符串字段 **`nextSeq`** = **未过滤口径**的推进游标(批尾原始 seq,避免「过滤后空批 = 取完」的误判);`hasMore` 保持 raw 语义,`firstSeq`/`lastSeq` 同为 raw 口径且**一律字符串携带**——雪花大数以 JSON 数值下发会在 JS 侧丢精度,不得再作游标或比较键。
 
-**工作流实例事件 = 同一混合模型的广播形态**(频道 `u.<K>.worker.<id>.wf.<instanceId>.stream`,§5.2):实时增量由 workflow 插件在 events.jsonl **成功落盘后**经 `EventSink.fanout` 扇出(帧 event=实例事件名,payload 与 `workflow.instance.events` 应答条目同形);历史/断线补齐走该 RPC 拉取,前端先订阅后回放、按 seq(单实例内严格递增)去重合流。与任务流的两点刻意差异:① **无 subscriber 通知、无背压机**——实例事件是低频元数据(每节点运行数条),广播扇出(hub 只投已订阅连接)即达,不值得 DataPusher 的定向推送器与 credit 窗口;② **无出网投影**——实例持久事件无瞬态/过滤语义,落盘即出网(唯一瞬态例外 `node.delta`,见下段)。订阅恢复(重连/可见性/worker 集变化)由前端宿主统一重发并通知插件重拉校准;漏帧以磁盘事实源 + 拉取补齐(推送是无背压广播,不做跳号检测)。
-
-**AI 节点流式瞬态事件 `node.delta`**(同一实例流频道,帧外层同形 `{seq,ts,event,payload}`):AI 节点运行期间,agent 域增量事件(delta=正文/thinking=思考)以 `node.delta` 名瞬态扇出到该实例流频道,内层 payload `{nodeId, agentId, kind:'thinking'|'text', content:增量文本}`——nodeId 关联当前运行的节点,kind 映射 thinking→`thinking`、delta→`text`,用途是前端实时流式渲染节点输出。契约差异:① **瞬态不落盘**——events.jsonl、实例重放(`instance.events` 补拉)与实例内存尾部队列均不含,补拉天然缺此事件即为正确;② **seq 雪花占号不写盘**——磁盘回放有洞合法(同任务流瞬态纪律,§7.15 规则 2);③ 节点输出的权威记录仍是落盘的 `node.output`,`node.delta` 只是运行期渲染通道,漏帧不做跳号检测、不触发补拉。
+**工作流实例事件 = 同一混合模型的广播形态**(频道 `u.<K>.worker.<id>.wf.<instanceId>.stream`,§5.2):实时增量由 workflow 插件在 events.jsonl **成功落盘后**经 `EventSink.fanout` 扇出(帧 event=实例事件名,payload 与 `workflow.instance.events` 应答条目同形);历史/断线补齐走该 RPC 拉取,前端先订阅后回放、按 seq(单实例内严格递增)去重合流。与任务流的两点刻意差异:① **无 subscriber 通知、无背压机**——实例事件是低频元数据(每节点运行数条),广播扇出(hub 只投已订阅连接)即达,不值得 DataPusher 的定向推送器与 credit 窗口;② **无出网投影**——插件事件无瞬态/过滤语义,落盘即出网。订阅恢复(重连/可见性/worker 集变化)由前端宿主统一重发并通知插件重拉校准;漏帧以磁盘事实源 + 拉取补齐(推送是无背压广播,不做跳号检测)。
 
 ### 7.14 子 Agent(进程内,模型工具)
 

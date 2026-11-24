@@ -203,8 +203,7 @@ public final class NodeRunners {
      * ①持 agent fair 锁 → ②conversationArchive 载种子（含交替不变量补齐）→
      * ③发 user.message 指令轮（agentId={@code <name>#<wi>}，落盘，文件自包含）→
      * ④agentFactoryFor(view).create(agentKey, configId).systemPrompt(声明).conversation(种子)
-     * .userInput(渲染后输入).tools(剔除表, REMOVE).build() → ⑤run()（事件实时落盘；
-     * delta/thinking 增量经 node 绑定视图以 node.delta 瞬态扇出实例流频道，架构 §7.13）→
+     * .userInput(渲染后输入).tools(剔除表, REMOVE).build() → ⑤run()（事件实时落盘）→
      * ⑥lastText()/conversation()/usage() 收口交引擎；锁在 finally 释放（锁粒度=整个 run）。
      *
      * <p>匿名 AI 节点（agent 未指定）= 一次性会话：无种子、不发指令轮、不落 agents/、
@@ -232,9 +231,7 @@ public final class NodeRunners {
                 AgentDef agentDef = agentName == null ? null : findAgent(snapshot, agentName);
                 String configId = node.modelConfigId() != null ? node.modelConfigId()
                         : (agentDef != null ? agentDef.modelConfigId() : null);
-                // node 绑定视图：emitter() 为包装口（delta/thinking → node.delta 瞬态扇出
-                // 实例流频道，agent.run 期间由此关联当前节点，架构 §7.13）
-                NodeExecView view = runtime.view(configId, node.id());
+                NodeExecView view = runtime.view(configId);
                 String agentKey = agentName != null
                         ? agentName + "#" + instanceId
                         : node.id() + "." + runNo;

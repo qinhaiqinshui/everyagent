@@ -20,7 +20,6 @@ import org.junit.jupiter.api.io.TempDir;
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.plugin.api.WorkerServices;
 import dev.everyagent.plugin.api.event.Events;
-import dev.everyagent.plugin.api.event.StreamEmitter;
 import dev.everyagent.plugin.api.model.EmitEvent;
 import dev.everyagent.plugin.api.model.ModelConfig;
 import dev.everyagent.plugin.api.spi.ExecResult;
@@ -29,7 +28,6 @@ import dev.everyagent.plugin.api.spi.WorkspaceManager;
 import dev.everyagent.plugin.api.spi.WorkspaceSandbox;
 import dev.everyagent.plugin.workflow.model.EventLine;
 import dev.everyagent.plugin.workflow.store.WorkflowStore;
-import tools.jackson.databind.JsonNode;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -92,18 +90,8 @@ class WorkflowRuntimeEmitTest {
         }
     }
 
-    /** 最小 WorkerServices 桩（emitter 双路由不触其余服务；stream 可注入，node.delta 扇出用）。 */
+    /** 最小 WorkerServices 桩（emitter 双路由不触其余服务）。 */
     private static final class Svc implements WorkerServices {
-        private final StreamEmitter stream;
-
-        Svc() {
-            this(null);
-        }
-
-        Svc(StreamEmitter stream) {
-            this.stream = stream;
-        }
-
         @Override
         public dev.everyagent.plugin.api.spi.SandboxBackend sandbox() {
             throw new UnsupportedOperationException();
@@ -146,10 +134,7 @@ class WorkflowRuntimeEmitTest {
 
         @Override
         public dev.everyagent.plugin.api.event.StreamEmitter stream() {
-            if (stream == null) {
-                throw new UnsupportedOperationException();
-            }
-            return stream;
+            throw new UnsupportedOperationException();
         }
 
         @Override
@@ -299,96 +284,6 @@ class WorkflowRuntimeEmitTest {
         runtime.status(dev.everyagent.plugin.workflow.model.InstanceStatus.FAILED);
         runtime.emitter().emit(EmitEvent.of(1L, "node.output", null, null, null, "x", null, null,
                 EmitEvent.Mode.REPLACE));
-    }
-
-    /**
-     * node.delta 瞬态契约（架构 §7.13）：node 绑定视图（view(configId, nodeId)）装配的
-     * emitter 把 agent 域 delta/thinking 增量以 node.delta 扇出实例流频道（帧外层
-     * {seq,ts,event,payload}，内层 {nodeId,agentId,kind,content}，kind 映射 thinking→
-     * thinking、delta→text）；瞬态不落盘——events.jsonl 与内存尾部队列均不含；
-     * 其余事件经包装视图照旧走双路由；未经包装直发的 delta 维持丢弃。
-     */
-    @Test
-    void nodeDeltaFansOutViaNodeBoundViewWithoutPersisting() throws Exception {
-        List<String[]> frames = new java.util.concurrent.CopyOnWriteArrayList<>(); // {event, seq, frame}
-        List<String> channels = new java.util.concurrent.CopyOnWriteArrayList<>();
-        StreamEmitter recorder = new StreamEmitter() {
-            @Override
-            public void fanout(java.util.function.Function<String, String> channelNamer, String event,
-                    Long seq, JsonNode payload, JsonNode ext) {
-                channels.add(channelNamer.apply("OWNER_KEY"));
-                frames.add(new String[]{event, String.valueOf(seq), payload.toString()});
-            }
-
-            @Override
-            public String workerId() {
-                return "w1";
-            }
-        };
-        WorkflowStore store = new WorkflowStore(new Ws(home));
-        store.refreshWorkspaceRegistry();
-        var def = new dev.everyagent.plugin.workflow.model.Definition(
-                dev.everyagent.plugin.workflow.model.Definition.SCHEMA_VERSION,
-                "wf_delta", "delta", null, "ws_emit", 0L, 0L, null, null, null, null,
-                List.of(new dev.everyagent.plugin.workflow.model.NodeDef("n7", "start", "s", null, null,
-                        null, null, null, null, null, null)),
-                List.of());
-        var saved = store.saveDefinition("ws_emit", def);
-        var meta = store.createInstance(saved, Map.of());
-        Path instanceDir = home.resolve("workspaces").resolve("ws_emit").resolve("workflows")
-                .resolve("instances").resolve(meta.id());
-        WorkflowRuntime runtime = new WorkflowRuntime(store, new Svc(recorder), "ws_emit", meta.id(),
-                instanceDir, home.toString());
-        runtime.status(dev.everyagent.plugin.workflow.model.InstanceStatus.RUNNING);
-        String agentKey = "writer#wi_" + meta.id().substring(3);
-
-        var view = runtime.view(null, "n7");
-        long d1 = dev.everyagent.plugin.api.proto.SnowflakeId.next();
-        view.emitter().emit(EmitEvent.transientOf(d1, Events.DELTA, agentKey,
-                null, null, "正文片段", null, null, EmitEvent.Mode.APPEND));
-        long t1 = dev.everyagent.plugin.api.proto.SnowflakeId.next();
-        view.emitter().emit(EmitEvent.transientOf(t1, Events.THINKING, agentKey,
-                null, null, "思考片段", null, null, EmitEvent.Mode.APPEND));
-        // 其余事件经包装视图照旧双路由：实例域落 events.jsonl、agent 域归户 jsonl
-        view.emitter().emit(EmitEvent.of(dev.everyagent.plugin.api.proto.SnowflakeId.next(),
-                "node.output", null, null, null, "out", null, null, EmitEvent.Mode.REPLACE));
-        view.emitter().emit(EmitEvent.of(dev.everyagent.plugin.api.proto.SnowflakeId.next(),
-                Events.MESSAGE, agentKey, null, null, "m", null, null, EmitEvent.Mode.REPLACE));
-        // 未经 node 视图包装直发 delta：不扇出、不落盘（现状不变）
-        runtime.emitter().emit(EmitEvent.transientOf(
-                dev.everyagent.plugin.api.proto.SnowflakeId.next(),
-                Events.DELTA, agentKey, null, null, "raw", null, null, EmitEvent.Mode.APPEND));
-
-        // 扇出恰 2 帧 node.delta，频道带 worker 段与实例段（与实例事件同通道）
-        assertThat(frames).hasSize(2);
-        assertThat(channels).containsOnly("u.OWNER_KEY.worker.w1.wf." + meta.id() + ".stream");
-        assertThat(frames.get(0)[0]).isEqualTo("node.delta");
-        assertThat(frames.get(0)[1]).isEqualTo(String.valueOf(d1));
-        JsonNode f0 = Json.parse(frames.get(0)[2]);
-        assertThat(f0.path("event").asString()).isEqualTo("node.delta");
-        assertThat(f0.path("seq").asString()).isEqualTo(Long.toString(d1));
-        assertThat(f0.path("ts").asLong()).isPositive();
-        assertThat(f0.path("payload").path("nodeId").asString()).isEqualTo("n7");
-        assertThat(f0.path("payload").path("agentId").asString()).isEqualTo(agentKey);
-        assertThat(f0.path("payload").path("kind").asString()).isEqualTo("text");
-        assertThat(f0.path("payload").path("content").asString()).isEqualTo("正文片段");
-        JsonNode f1 = Json.parse(frames.get(1)[2]);
-        assertThat(f1.path("seq").asString()).isEqualTo(Long.toString(t1));
-        assertThat(f1.path("payload").path("kind").asString()).isEqualTo("thinking");
-        assertThat(f1.path("payload").path("content").asString()).isEqualTo("思考片段");
-
-        // 瞬态不落盘：磁盘与内存尾部均无 node.delta（补拉天然不含即为正确）
-        List<EventLine> evs = store.readEvents("ws_emit", meta.id(), 0, 0);
-        assertThat(evs).extracting(EventLine::event).containsExactly("wf.created", "node.output");
-        assertThat(store.tailEvents("ws_emit", meta.id(), 0))
-                .extracting(EventLine::event).containsExactly("wf.created", "node.output");
-        for (String raw : Files.readAllLines(instanceDir.resolve("events.jsonl"))) {
-            assertThat(raw).doesNotContain("node.delta");
-        }
-        // agent 域照旧：writer.jsonl 恰 1 行 message（delta 不进 per-agent 会话线）
-        var agentLines = store.readAgentEvents("ws_emit", meta.id(), "writer");
-        assertThat(agentLines).hasSize(1);
-        assertThat(agentLines.get(0).event()).isEqualTo("message");
     }
 
     /** 步骤 4 契约钉子：三通道标记 + 拒绝式交互桩 + 档案口失败返回空表。 */
