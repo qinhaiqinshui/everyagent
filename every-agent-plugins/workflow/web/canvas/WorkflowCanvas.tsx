@@ -9,6 +9,7 @@
  *   选中）；触屏可用——拖拽目标挂 touch-action:none 阻断浏览器滚动抢占手势，
  *   背景仍可单指平移画布（滚动容器原生滚动）；
  * - mode='readonly'：禁一切编辑交互（实例视图复用基座，步骤 10；tap 选中可用）；
+ * - 桌面 Ctrl+拖拽平移画布（按住 Ctrl 光标变手型；节点/连线/选中等交互让位）；
  * - 运行态着色/动画：node.status → renderStates 色彩（TaskStatusDot 色彩语言）。
  *
  * 坐标系：svg 与定义坐标 1:1（无缩放），外层 div 滚动平移；client → svg 坐标经
@@ -86,6 +87,11 @@ function ensureCanvasStyles(): void {
 .wf-node-hit { cursor: grab; }
 .wf-node-hit:active { cursor: grabbing; }
 .wf-anchor-out { cursor: crosshair; }
+/* Ctrl+拖拽平移画布：按住 Ctrl 光标变手型（盖过节点/锚点自身 cursor），拖动中变 grabbing。 */
+.wf-canvas-pan { cursor: grab; }
+.wf-canvas-pan * { cursor: grab !important; }
+.wf-canvas-panning, .wf-canvas-panning * { cursor: grabbing !important; }
+.wf-canvas-panning { user-select: none; -webkit-user-select: none; }
 /* 触屏：编辑态节点/锚点为拖拽手势目标，阻断浏览器滚动抢占；背景保持单指平移画布。 */
 .wf-node-hit, .wf-anchor-out { touch-action: none; -webkit-user-select: none; user-select: none; }
 @keyframes wf-status-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
@@ -119,6 +125,25 @@ export default function WorkflowCanvas({
   const connectRef = React.useRef<{ from: string; pointerId: number } | null>(null)
   const [pendingEdge, setPendingEdge] = React.useState<{ from: string; x: number; y: number } | null>(null)
   const [hoverAnchor, setHoverAnchor] = React.useState<string | null>(null)
+
+  // ── Ctrl+拖拽平移画布（桌面）：按住 Ctrl 光标变手型，拖动滚动容器。 ──
+  const [ctrlHeld, setCtrlHeld] = React.useState(false)
+  const [panning, setPanning] = React.useState(false)
+  /** 平移态（capture 到滚动容器；startX/Y 为按下 client 坐标 + 当时滚动位）。 */
+  const panRef = React.useRef<{ pointerId: number; startX: number; startY: number; scrollLeft: number; scrollTop: number } | null>(null)
+  React.useEffect(() => {
+    const down = (e: KeyboardEvent) => { if (e.key === 'Control') setCtrlHeld(true) }
+    const up = (e: KeyboardEvent) => { if (e.key === 'Control') setCtrlHeld(false) }
+    const blur = () => setCtrlHeld(false) // 窗口失焦（Alt+Tab 等）：防 Ctrl 态卡住
+    window.addEventListener('keydown', down)
+    window.addEventListener('keyup', up)
+    window.addEventListener('blur', blur)
+    return () => {
+      window.removeEventListener('keydown', down)
+      window.removeEventListener('keyup', up)
+      window.removeEventListener('blur', blur)
+    }
+  }, [])
 
   const editable = mode === 'edit'
   const nodeById = React.useMemo(() => {
@@ -159,9 +184,9 @@ export default function WorkflowCanvas({
     }
   })
 
-  /** 节点主体按下：选中 + （edit）启动拖拽。 */
+  /** 节点主体按下：选中 + （edit）启动拖拽（Ctrl 按下=平移画布意图，跳过）。 */
   const handleNodePointerDown = (event: React.PointerEvent, node: CanvasNodeView) => {
-    if (event.button !== 0) return
+    if (event.button !== 0 || event.ctrlKey) return
     onSelect({ kind: 'node', id: node.id })
     if (!editable || !onNodeMove) return
     event.preventDefault()
@@ -170,9 +195,9 @@ export default function WorkflowCanvas({
     dragRef.current = { id: node.id, dx: p.x - node.x, dy: p.y - node.y, pointerId: event.pointerId }
   }
 
-  /** 右锚点按下：启动连线（预览线跟随指针，pointerup 命中目标节点即回调）。 */
+  /** 右锚点按下：启动连线（预览线跟随指针，pointerup 命中目标节点即回调；Ctrl=平移跳过）。 */
   const handleAnchorPointerDown = (event: React.PointerEvent, node: CanvasNodeView) => {
-    if (!editable || !onCreateEdge || event.button !== 0) return
+    if (!editable || !onCreateEdge || event.button !== 0 || event.ctrlKey) return
     event.preventDefault()
     event.stopPropagation()
     if (!capturePointer(event)) return
@@ -232,6 +257,45 @@ export default function WorkflowCanvas({
     }
   }
 
+  // ── 平移处理器（滚动容器上，capture 到容器自身） ──
+
+  /** Ctrl+按下：捕获指针到滚动容器，记录起点滚动位（同时抑制背景取消选中）。 */
+  const handlePanPointerDown = (event: React.PointerEvent) => {
+    if (!event.ctrlKey || event.button !== 0) return
+    const el = scrollRef.current
+    if (!el) return
+    event.preventDefault()
+    try {
+      el.setPointerCapture(event.pointerId)
+    } catch {
+      return // 指针已释放等：放弃，交互自然终止
+    }
+    panRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      scrollLeft: el.scrollLeft,
+      scrollTop: el.scrollTop,
+    }
+    setPanning(true)
+  }
+
+  /** 平移移动：滚动量 = 指针位移取反（拖右看左，与常规画布一致）。 */
+  const handlePanPointerMove = (event: React.PointerEvent) => {
+    const p = panRef.current
+    const el = scrollRef.current
+    if (!p || !el || p.pointerId !== event.pointerId) return
+    el.scrollLeft = p.scrollLeft - (event.clientX - p.startX)
+    el.scrollTop = p.scrollTop - (event.clientY - p.startY)
+  }
+
+  /** 平移收口（含指针中断）：释放态即可，capture 随指针 up 自动解除。 */
+  const handlePanPointerEnd = (event: React.PointerEvent) => {
+    if (panRef.current?.pointerId !== event.pointerId) return
+    panRef.current = null
+    setPanning(false)
+  }
+
   // ── 边几何 ──
   const anchorOut = (n: CanvasNodeView) => ({ x: n.x + NODE_W, y: n.y + NODE_H / 2 })
   const anchorIn = (n: CanvasNodeView) => ({ x: n.x, y: n.y + NODE_H / 2 })
@@ -256,15 +320,21 @@ export default function WorkflowCanvas({
 
   return (
     <div
-      className={`wf-canvas-scroll${className ? ` ${className}` : ''}`}
+      className={`wf-canvas-scroll${ctrlHeld ? ' wf-canvas-pan' : ''}${panning ? ' wf-canvas-panning' : ''}${className ? ` ${className}` : ''}`}
       style={style}
       ref={scrollRef}
       onPointerDown={(e) => {
+        // Ctrl 按下：平移意图（handlePanPointerDown 接管），不触发背景取消选中
+        if (e.ctrlKey) return
         // 背景空白处点按：取消选中（滚动条拖动/背景平移不触发——target 是 svg 空白才算）
         if (e.target === svgRef.current || (e.target as Element).classList?.contains('wf-canvas-surface')) {
           onSelect(null)
         }
       }}
+      onPointerDownCapture={handlePanPointerDown}
+      onPointerMove={handlePanPointerMove}
+      onPointerUp={handlePanPointerEnd}
+      onPointerCancel={handlePanPointerEnd}
     >
       <svg
         ref={svgRef}
