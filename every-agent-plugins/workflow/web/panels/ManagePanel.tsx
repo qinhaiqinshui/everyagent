@@ -11,7 +11,8 @@
  * - 顶栏（wf-manage-bar）：标题「管理工作流」+ 工作区名（root basename）/id 副标题
  *   + 动作组（＋ 新建 / 删除 / 导入 .workflow.json / 刷新）；
  * - 列表（wf-manage-list，滚动）：每行=名称+描述 | meta（等宽 id · 节点数 · 更新
- *   时间）| ⋯ 行菜单（运行 / 查看 JSON / 导出 JSON / 删除）；行点击=打开编辑器；
+ *   时间）| 行尾操作区（**常显「▶ 运行」直点按钮** + hover 浮现的 ⋯ 行菜单
+ *   〔编辑 / 查看 JSON / 导出 JSON / 删除〕）；行点击=打开编辑器；
  * - 空态：引导文案 + 新建/导入直达按钮。
  *
  * 批量删除定义（侧栏实例批删同款交互）：顶栏「删除」（新建右边）进入 → 动作组换
@@ -108,7 +109,14 @@ function ensureManageStyles(): void {
 .wf-manage-meta { grid-area: meta; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 11.5px; color: var(--text-muted, #6f7a8b); min-width: 0; }
 .wf-manage-meta-id { font-family: var(--font-mono, monospace); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40ch; }
 .wf-manage-meta-sep { color: var(--text-faint, #525c6a); }
-.wf-manage-more { grid-area: more; display: inline-flex; flex-shrink: 0; }
+.wf-manage-more { grid-area: more; display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; }
+/* 行尾「▶ 运行」直点按钮：绿色描边轻量变体（常显——运行是列表最高频动作，不藏菜单）。 */
+.wf-manage-run { color: var(--accent-green, #41d19c); border-color: rgba(65, 209, 156, 0.45); }
+.wf-manage-run:hover { color: var(--accent-green, #41d19c); border-color: var(--accent-green, #41d19c); background: rgba(65, 209, 156, 0.08); }
+/* 行尾 ⋯ 菜单桌面端 hover 揭示（本页行是 .wf-manage-row 而非宿主 .ui-row，
+   宿主全局 .ui-row:hover 规则够不着，这里补齐同款行为；移动端由 Menu.tsx 的
+   wf-row-actions-visible 常显放行兜底）。 */
+.wf-manage-row:hover .ui-row-actions { opacity: 1; visibility: visible; }
 .wf-manage-empty { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 48px 12px; color: var(--text-muted, #6f7a8b); font-size: 13px; text-align: center; }
 .wf-manage-empty-actions { display: inline-flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
 .wf-manage-loading { padding: 32px 12px; color: var(--text-muted, #6f7a8b); font-size: 13px; text-align: center; }
@@ -120,6 +128,8 @@ function ensureManageStyles(): void {
   .wf-manage-bar { padding: 8px 10px; gap: 8px; }
   .wf-manage-actions { margin-left: 0; width: 100%; }
   .wf-manage-btn { flex: 1; justify-content: center; min-height: 36px; font-size: 13px; }
+  /* 行尾运行按钮不吃顶栏的 flex:1 全宽规则：恢复自然宽，仅保证触控目标（≥30px）。 */
+  .wf-manage-more .wf-manage-btn { flex: none; min-height: 30px; padding: 4px 10px; }
   .wf-manage-body { padding: 8px 10px 16px; }
   .wf-manage-row { padding: 10px; }
   .wf-manage-meta-id { max-width: 30ch; }
@@ -290,7 +300,7 @@ export default function ManagePanel({ workspaceId }: ManagePanelProps) {
     ctx.ui.openTab(WORKFLOW_EDITOR_TAB_TYPE, { workspaceId, definitionId: def.id }, def.name || def.id)
   }
 
-  /** 运行：定义级运行窗（变量表单 → workflow.run → 自动打开实例页）。 */
+  /** 运行：定义级运行窗（变量表单 → workflow.run → 自动打开实例页）；行尾直点按钮入口。 */
   const onRunDef = (def: WorkflowDefSummary) => {
     void openRunDialog(workspaceId, def.id, def.name)
   }
@@ -624,14 +634,21 @@ export default function ManagePanel({ workspaceId }: ManagePanelProps) {
               </div>
               {!batchMode ? (
                 <span className="wf-manage-more">
+                  {/* 行尾「▶ 运行」直点按钮：常显、直达运行窗（stopPropagation 防触发行点击开编辑器）。 */}
+                  <button
+                    type="button"
+                    className="wf-manage-btn wf-manage-run"
+                    disabled={busyKey === `def:${def.id}`}
+                    title={`运行「${def.name || def.id}」（填写运行变量后创建任务执行）`}
+                    onClick={e => {
+                      e.stopPropagation()
+                      onRunDef(def)
+                    }}
+                  >
+                    <RunIcon size={13} /> 运行
+                  </button>
                   <RowActions
                     items={[
-                      {
-                        key: 'run',
-                        label: '运行',
-                        icon: <RunIcon size={13} />,
-                        onSelect: () => onRunDef(def),
-                      },
                       {
                         key: 'edit',
                         label: '编辑',
@@ -693,10 +710,12 @@ export default function ManagePanel({ workspaceId }: ManagePanelProps) {
  *    无定义或动作进行中时「删除」禁用；导入残缺或非法 JSON → 顶部红色逐项回显；
  *    导入成功 toast「已导入为 wf_…」并刷新列表。
  * 3. 行卡片：名称+描述 / 等宽 id · 节点数 · 更新时间；hover 边框高亮；行点击
- *    打开编辑器（definitionId 正确）；⋯ 菜单=运行 / 编辑 / 查看 JSON / 导出 JSON /
- *    删除（红色，需确认；删除后行消失）。
- * 4. 运行：⋯「运行」打开变量表单运行窗 → 成功后自动打开实例运行页（侧栏实例
- *    列表同步出现新实例）。
+ *    打开编辑器（definitionId 正确）；行尾=常显「▶ 运行」绿色直点按钮 + hover
+ *    浮现的 ⋯ 菜单（编辑 / 查看 JSON / 导出 JSON / 删除——红色，需确认；删除后
+ *    行消失）。
+ * 4. 运行：行尾「▶ 运行」→ 打开变量表单运行窗 → 成功后自动打开实例运行页（侧栏
+ *    实例列表同步出现新实例）；点运行按钮不触发行点击（不打开编辑器）；该定义
+ *    查看 JSON 进行中时运行按钮同步禁用。
  * 5. 查看 JSON：对话框展示完整 definition JSON（可滚动/复制按钮）；导出 JSON
  *    下载 `<名称>.workflow.json`。
  * 5b. **批量删除**（新建右边的「删除」进入）：动作组换「☐ 全选 / 删除 / 取消」
@@ -710,7 +729,7 @@ export default function ManagePanel({ workspaceId }: ManagePanelProps) {
  * 6. **推送**：编辑器保存 / AI 调 workflow_create / 另一端导入 → 本页 ~150ms 内
  *    自动更新，无需手动刷新。
  * 7. **移动端（≤768px / 窄窗）**：顶栏动作组换行全宽、按钮等分放大（批删模式
- *    下全选+删除+取消同样换行放大）；行内名称+⋯ 首行、meta 次行堆叠；批删模式
- *    勾选框占行首列；⋯ 菜单常显（Menu.tsx 的移动端放行样式）；JSON 对话框 pre
- *    可横向滚动。
+ *    下全选+删除+取消同样换行放大）；行内名称+⋯ 首行、meta 次行堆叠；行尾
+ *    「▶ 运行」自然宽常显（不吃全宽规则）、⋯ 菜单常显（Menu.tsx 的移动端放行
+ *    样式）；批删模式勾选框占行首列；JSON 对话框 pre 可横向滚动。
  */
