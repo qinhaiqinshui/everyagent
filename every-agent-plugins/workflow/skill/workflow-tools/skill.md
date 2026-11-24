@@ -5,7 +5,7 @@ description: 当用户任务与工作流相关时使用本技能。
 
 # 工作流编排
 
-工作流 = 可复用的多步骤执行图：开始节点先行，命令节点跑 shell，AI 节点由命名 agent（持续会话线）执行；边条件决定路由（支持循环，maxRuns 兜限）；运行变量在 command/input 里以 `{{varName}}` 注入。
+工作流 = 可复用的多步骤执行图：开始节点先行，命令节点经系统 shell 执行（Windows=`cmd.exe /c`、Unix=`/bin/sh -c`，详见「命令节点执行环境」），AI 节点由命名 agent（持续会话线）执行；边条件决定路由（支持循环，maxRuns 兜限）；运行变量在 command/input 里以 `{{varName}}` 注入。
 本技能的十一工具**未随请求下发工具定义**，按本文档的名称与参数直接调用即可（调用失败请核对参数拼写与 JSON 格式）。
 
 ## 适用条件
@@ -51,6 +51,15 @@ description: 当用户任务与工作流相关时使用本技能。
 ```
 
 硬约束（校验失败返回逐项 `details`）：start 节点有且仅有一个；边引用的节点必须存在；maxRuns∈[1,10]；`{{var}}` 只能出现在 command/input 且必须已在 variables 声明；AI 节点的 `agent` **必填**（不再支持匿名一次性会话）且不可用保留名 meta/events/runs/agents/supervisor；outputMatches 的 pattern 必须是可编译正则；循环允许（靠 maxRuns 兜底）。condition.type 取值：always（缺省）/onSuccess/onError/exitCode（带 `value`）/outputContains/outputNotContains（带 `text`）/outputMatches（带 `pattern`）。
+
+### 命令节点执行环境
+命令节点由 worker 的 nativeExec 直接 spawn 系统 shell 进程执行（与 git/term 同一通道，不经 PermissionGate、不走本会话的命令工具）：
+- **Windows：`cmd.exe /c <command>`** —— 按 cmd 语法写（`dir`、`set`、`&&`、`^` 续行转义等）。
+- **Linux/macOS：`/bin/sh -c <command>`** —— POSIX sh 语法；`sh` **不是 bash**，`[[ ]]`、数组、`<<<` 等 bash 专有语法不可用。
+- 要跨平台复用的定义，command 需写两侧都兼容的写法（或按平台拆成不同节点、用边条件路由）。
+- cwd 固定为该工作流归属的工作区根；缺省超时 120 秒，节点 `timeoutMs`（毫秒）可覆盖，超时/中止视为节点失败。
+- stdout 与 stderr 全量留档到实例 runs；出边条件求值用的 output = stdout+stderr 拼接，exitCode = 进程退出码。
+- `{{var}}` 替换发生在命令交给 shell **之前**，变量值原样替换、不做 shell 转义——值里含空格/引号等特殊字符时需在 command 里自行加引号。
 
 ### 会话线（agent）规则
 - **定义节点**：首次使用某 agent 名的节点在该节点上带 `systemPrompt`（+可选 `modelConfigId`），即这条会话线的定义处。
