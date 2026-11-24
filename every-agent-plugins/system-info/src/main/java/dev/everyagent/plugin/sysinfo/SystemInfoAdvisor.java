@@ -29,6 +29,10 @@ import org.springframework.core.Ordered;
  * {@code /c/a/foo} 挂载,故均按 Linux 视角注入。工作区位置缺失(旧格式冷启动
  * {@code workspaceRoot == null})时省略该行,不伪造路径。
  *
+ * <p>shell 工具提示按后端分支:DIRECT(无沙箱)后端命令直接跑宿主、工作区内读写
+ * 直接放行,文案<b>不出现「沙箱」字样</b>(谎报隔离层会误导模型);其余后端(真有
+ * 隔离层)保留「会在沙箱中执行 / 不会被沙箱拦截」原文案。
+ *
  * <p>插入方式与 {@code SkillAdvisor} 一致:以额外 {@link SystemMessage} 插入到首部
  * 连续 SystemMessage 区之后(不落会话末位——末位必须是 user/ToolResponse 消息,
  * 追加系统消息会破坏模型侧消息序语义),完全复用 Spring AI 的 prompt / advisor 原语。
@@ -48,11 +52,14 @@ public class SystemInfoAdvisor implements BaseAdvisor {
     private final String sandboxId;
     /** 是否 wsl-ubuntu 后端。 */
     private final boolean wslBackend;
+    /** 是否 DIRECT（无沙箱）后端：命令直接跑宿主，注入文案不得出现「沙箱」。 */
+    private final boolean directBackend;
 
     public SystemInfoAdvisor(String workspaceRoot, String sandboxId) {
         this.workspaceRoot = workspaceRoot;
         this.sandboxId = sandboxId != null ? sandboxId : "direct";
         this.wslBackend = "wsl-ubuntu".equals(this.sandboxId);
+        this.directBackend = "direct".equals(this.sandboxId);
         this.hostOs = System.getProperty("os.name", "unknown");
         this.execOs = "wsl-ubuntu".equals(this.sandboxId) ? "Linux" : this.hostOs;
     }
@@ -80,9 +87,16 @@ public class SystemInfoAdvisor implements BaseAdvisor {
             String shellHint = wslBackend ? "bash" : "powershell";
             sb.append("# 工作区\n");
             sb.append("- 当前工作区位置： ").append(shownWorkspace).append('\n')
-            .append("文件操作相关命令默认目录为当前工作区目录\n")
-                    .append(shellHint).append("工具会在沙箱中执行，如果你要创建临时文件，务必在当前工作区的.everyagent目录下进行。\n")
-                    .append("在工作区下读取和修改文件不会被沙箱拦截。");
+            .append("文件操作相关命令默认目录为当前工作区目录\n");
+            if (directBackend) {
+                // DIRECT 无沙箱：命令直接跑宿主，文案不提「沙箱」（谎报会误导模型
+                // 预期存在隔离层）；工作区内读写经 PermissionGate 直接放行。
+                sb.append(shellHint)
+                        .append("工具直接在宿主机上执行命令，工作区内读写直接放行；如需创建临时文件，请创建在当前工作区的.everyagent目录下。");
+            } else {
+                sb.append(shellHint).append("工具会在沙箱中执行，如果你要创建临时文件，务必在当前工作区的.everyagent目录下进行。\n")
+                        .append("在工作区下读取和修改文件不会被沙箱拦截。");
+            }
         }
         sb.append("\n- 当前操作系统：").append(execOs);
         if (wslBackend) {

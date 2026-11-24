@@ -86,7 +86,44 @@ class SystemInfoAdvisorTest {
         assertTrue(hasLinuxOs, "wsl 后端时应注入 Linux 操作系统信息");
     }
 
+    @Test
+    void directBackendToolHintOmitsSandboxWording() {
+        // DIRECT(无沙箱)后端:命令直接跑宿主,文案不得出现「沙箱」(谎报隔离层),
+        // 应表达「直接放行」;null 归一为 direct,同口径。
+        for (String id : new String[] {"direct", null}) {
+            ChatClientRequest out = new SystemInfoAdvisor("/c/myproject", id)
+                    .before(requestWith("你是助手", "你好"), mock(AdvisorChain.class));
+
+            String text = joinedSystemText(out);
+            assertTrue(!text.contains("沙箱"),
+                    "DIRECT 后端(id=" + id + ")注入文案不应出现「沙箱」: " + text);
+            assertTrue(text.contains("直接在宿主机上执行命令"),
+                    "DIRECT 后端应声明命令直接在宿主机执行: " + text);
+            assertTrue(text.contains("直接放行"),
+                    "DIRECT 后端应声明工作区内读写直接放行: " + text);
+        }
+    }
+
+    @Test
+    void sandboxBackendKeepsSandboxWording() {
+        // 真有隔离层的后端(如 windows-mic):保留「沙箱」原文案,不被 DIRECT 分支误删。
+        ChatClientRequest out = new SystemInfoAdvisor("/c/myproject", "windows-mic")
+                .before(requestWith("你是助手", "你好"), mock(AdvisorChain.class));
+
+        String text = joinedSystemText(out);
+        assertTrue(text.contains("工具会在沙箱中执行"),
+                "沙箱后端应保留「会在沙箱中执行」提示: " + text);
+    }
+
     // ---- 辅助 ----
+
+    private static String joinedSystemText(ChatClientRequest request) {
+        StringBuilder sb = new StringBuilder();
+        request.prompt().getInstructions().stream()
+                .filter(m -> m instanceof SystemMessage)
+                .forEach(m -> sb.append(((SystemMessage) m).getText()).append('\n'));
+        return sb.toString();
+    }
 
     private static ChatClientRequest requestWith(String systemText, String userText) {
         List<Message> instructions = new ArrayList<>();
