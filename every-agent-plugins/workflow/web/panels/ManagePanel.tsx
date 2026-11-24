@@ -9,10 +9,16 @@
  *
  * 布局：
  * - 顶栏（wf-manage-bar）：标题「管理工作流」+ 工作区名（root basename）/id 副标题
- *   + 动作组（＋ 新建 / 导入 .workflow.json / 刷新）；
+ *   + 动作组（＋ 新建 / 删除 / 导入 .workflow.json / 刷新）；
  * - 列表（wf-manage-list，滚动）：每行=名称+描述 | meta（等宽 id · 节点数 · 更新
  *   时间）| ⋯ 行菜单（运行 / 查看 JSON / 导出 JSON / 删除）；行点击=打开编辑器；
  * - 空态：引导文案 + 新建/导入直达按钮。
+ *
+ * 批量删除定义（侧栏实例批删同款交互）：顶栏「删除」（新建右边）进入 → 动作组换
+ * 「全选 / 删除(n) / 取消」（新建/导入/刷新让位）、行首出勾选框、行点击改切勾选
+ * （⋯ 行菜单隐藏）→ 确认弹窗 → **串行**逐个 def.delete——只删 definitions/ 目录，
+ * 已运行与历史实例持定义快照、一律不受影响；列表刷新后勾选自动清理（定义被他端
+ * 删除时），定义清空时自动退出批删模式。
  *
  * 刷新模型（侧边栏同款纪律，推送驱动）：定义的每次落盘变更经 worker 级插件通知
  * 频道扇出 plugin.workflow.changed{kind}（架构 §5.2），宿主桥接为领域事件
@@ -27,7 +33,7 @@
  * （名称+⋯ 一行、meta 整行）；⋯ 菜单常显（Menu.tsx 的移动端放行样式）。
  */
 import React from 'react'
-import { Button } from 'antd'
+import { Button, Checkbox } from 'antd'
 import { getPluginContext } from '../pluginRuntime'
 import { WORKFLOW_EDITOR_TAB_TYPE } from '../tabKeys'
 import { RowActions } from '../Menu'
@@ -86,11 +92,16 @@ function ensureManageStyles(): void {
 .wf-manage-btn:disabled { opacity: 0.55; cursor: not-allowed; }
 .wf-manage-btn--primary { background: var(--accent-green, #41d19c); border-color: var(--accent-green, #41d19c); color: #0b0d12; font-weight: 600; }
 .wf-manage-btn--primary:hover { color: #0b0d12; border-color: var(--accent-green, #41d19c); filter: brightness(1.05); }
+.wf-manage-btn--danger { color: var(--accent-red, #ff6b6b); border-color: rgba(255, 107, 107, 0.55); }
+.wf-manage-btn--danger:hover { color: var(--accent-red, #ff6b6b); border-color: var(--accent-red, #ff6b6b); filter: brightness(1.08); }
+.wf-manage-batch-label { display: inline-flex; align-items: center; gap: 5px; padding: 0 4px; font-size: 12.5px; color: var(--text-secondary, #aab3c2); cursor: pointer; white-space: nowrap; }
 .wf-manage-body { flex: 1; min-height: 0; overflow-y: auto; padding: 12px 14px 20px; display: flex; flex-direction: column; gap: 6px; }
 .wf-manage-error { background: var(--accent-red-dim, rgba(255,107,107,0.14)); border: 1px solid var(--accent-red, #ff6b6b); border-radius: 8px; padding: 8px 10px; color: var(--accent-red, #ff6b6b); font-size: 12.5px; line-height: 1.6; }
 .wf-manage-error ul { margin: 2px 0 0; padding-inline-start: 16px; }
 .wf-manage-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "name more" "meta meta"; gap: 3px 12px; align-items: center; padding: 9px 12px; border: 1px solid var(--border-light, #1b202a); border-radius: 8px; background: var(--bg-secondary, #11141b); cursor: pointer; }
 .wf-manage-row:hover { border-color: var(--accent-blue, #61a5ff); }
+.wf-manage-row--select { grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "check name more" "check meta meta"; }
+.wf-manage-check { grid-area: check; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; min-height: 22px; }
 .wf-manage-name { grid-area: name; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .wf-manage-name-title { font-size: 13px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wf-manage-name-desc { font-size: 12px; color: var(--text-muted, #6f7a8b); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -175,9 +186,15 @@ export default function ManagePanel({ workspaceId }: ManagePanelProps) {
   const [defsError, setDefsError] = React.useState<string | null>(null)
   /** 导入校验错误（逐项回显；null=无）。 */
   const [importError, setImportError] = React.useState<string[] | null>(null)
-  /** 动作级 busy 标记（'import' / `def:<id>`）。 */
+  /** 动作级 busy 标记（'import' / 'batch-delete' / `def:<id>`）。 */
   const [busyKey, setBusyKey] = React.useState<string | null>(null)
   const fileInputRef = React.useRef<HTMLInputElement | null>(null)
+  /** 批量删除模式（顶栏「删除」进入；侧栏实例批删同款交互）。 */
+  const [batchMode, setBatchMode] = React.useState(false)
+  /** 批删模式选中的定义 id（列表刷新后按现存定义清理，防勾选悬空）。 */
+  const [selectedIds, setSelectedIds] = React.useState<string[]>([])
+  /** 批量删除执行中（勾选/退出/再删全部禁用）。 */
+  const [batchDeleting, setBatchDeleting] = React.useState(false)
 
   const toast = React.useCallback(
     (message: string, type?: 'success' | 'error' | 'info' | 'warning') => {
@@ -353,6 +370,92 @@ export default function ManagePanel({ workspaceId }: ManagePanelProps) {
     })
   }
 
+  // ── 批量删除定义（侧栏实例批删同款状态机：勾选 + 确认 + 串行删除） ──
+
+  /** 进入批删模式：清空勾选，行首出选择框、行点击改切勾选。 */
+  const onEnterBatchMode = () => {
+    setSelectedIds([])
+    setBatchMode(true)
+  }
+
+  /** 退出批删模式（取消）。 */
+  const onExitBatchMode = () => {
+    setSelectedIds([])
+    setBatchMode(false)
+  }
+
+  /** 批删模式下勾选/取消勾选单个定义。 */
+  const onToggleDefSelect = (id: string) => {
+    if (batchDeleting) return
+    setSelectedIds(current =>
+      current.includes(id) ? current.filter(x => x !== id) : [...current, id],
+    )
+  }
+
+  // 列表刷新（推送/轮询）后：选中的定义已被他端删除时移出勾选集合，防勾选悬空。
+  React.useEffect(() => {
+    if (!batchMode) return
+    setSelectedIds(current => current.filter(id => (defs ?? []).some(d => d.id === id)))
+  }, [batchMode, defs])
+
+  // 定义清空（全部被删/他端清场）时自动退出批删模式——无可选目标，留着徒增困惑。
+  React.useEffect(() => {
+    if (batchMode && defs !== null && defs.length === 0) {
+      setBatchMode(false)
+      setSelectedIds([])
+    }
+  }, [batchMode, defs])
+
+  const selectedCount = selectedIds.length
+  const allSelected = (defs?.length ?? 0) > 0 && (defs ?? []).every(d => selectedIds.includes(d.id))
+
+  /** 全选/全不选（批删模式）。 */
+  const onToggleSelectAll = () => {
+    if (batchDeleting) return
+    const ids = (defs ?? []).map(d => d.id)
+    setSelectedIds(current =>
+      ids.length > 0 && ids.every(id => current.includes(id))
+        ? current.filter(id => !ids.includes(id))
+        : [...new Set([...current, ...ids])],
+    )
+  }
+
+  /**
+   * 批量删除选中定义（侧栏实例批删同款执行策略）：确认后**串行**逐个 def.delete，
+   * 首个失败即停（剩余保留勾选便于重试），已删除的移出勾选集合；只删 definitions/
+   * 目录——**已运行与历史实例持定义快照、一律不受影响**；无论成败最后重拉列表校准
+   * （推送帧到达时再校准一次）。
+   */
+  const onDeleteBatchSelected = () => {
+    void withBusy('batch-delete', async () => {
+      const targets = (defs ?? []).filter(d => selectedIds.includes(d.id))
+      if (targets.length === 0) return
+      const ok = await confirmDialog(
+        '批量删除工作流定义',
+        `确定要删除选中的 ${targets.length} 个工作流定义吗？仅删除定义——已运行与历史实例持定义快照、不受影响。此操作不可撤销。`,
+        '删除',
+      )
+      if (!ok) return
+      setBatchDeleting(true)
+      const deletedIds: string[] = []
+      try {
+        for (const def of targets) {
+          await workflowGateway.defDelete(workspaceId, def.id)
+          deletedIds.push(def.id)
+        }
+        setBatchMode(false)
+        setSelectedIds([])
+        toast(`已删除 ${deletedIds.length} 个定义`, 'success')
+      } catch (err) {
+        toast(`删除失败（已删 ${deletedIds.length} 个）：${rpcErrorMessage(err)}`, 'error')
+        setSelectedIds(current => current.filter(id => !deletedIds.includes(id)))
+      } finally {
+        setBatchDeleting(false)
+        reloadDefs()
+      }
+    })
+  }
+
   /** 增（导入）：文件文本 → 快速形态预检 → def.import（后端重赋顶层 wf id）。 */
   const onImportFile = (file: File) => {
     void withBusy('import', async () => {
@@ -400,21 +503,59 @@ export default function ManagePanel({ workspaceId }: ManagePanelProps) {
           {workspaceId}
         </span>
         <span className="wf-manage-actions">
-          <button type="button" className="wf-manage-btn wf-manage-btn--primary" onClick={onNewDefinition}>
-            <PlusIcon size={13} /> 新建
-          </button>
-          <button
-            type="button"
-            className="wf-manage-btn"
-            disabled={busyKey === 'import'}
-            title="导入 .workflow.json 文件到本工作区"
-            onClick={() => fileInputRef.current?.click()}
-          >
-            <UploadIcon size={13} /> {busyKey === 'import' ? '导入中…' : '导入'}
-          </button>
-          <button type="button" className="wf-manage-btn" title="重新拉取定义列表" onClick={renderAll}>
-            <RefreshIcon size={13} /> 刷新
-          </button>
+          {batchMode ? (
+            // 批删模式独占动作组（新建/导入/刷新让位，退出后恢复）：
+            // 全选 + 删除(n) + 取消，与侧栏实例批删控件同构。
+            <>
+              <label className="wf-manage-batch-label" onClick={e => e.stopPropagation()}>
+                <Checkbox
+                  checked={allSelected}
+                  disabled={batchDeleting || (defs?.length ?? 0) === 0}
+                  onChange={onToggleSelectAll}
+                />
+                <span>全选</span>
+              </label>
+              <button
+                type="button"
+                className="wf-manage-btn wf-manage-btn--danger"
+                disabled={selectedCount === 0 || batchDeleting}
+                title="删除选中的工作流定义（仅删定义，已运行/历史实例不受影响）"
+                onClick={onDeleteBatchSelected}
+              >
+                <DeleteIcon size={13} /> {batchDeleting ? '删除中…' : selectedCount > 0 ? `删除 (${selectedCount})` : '删除'}
+              </button>
+              <button type="button" className="wf-manage-btn" disabled={batchDeleting} onClick={onExitBatchMode}>
+                取消
+              </button>
+            </>
+          ) : (
+            <>
+              <button type="button" className="wf-manage-btn wf-manage-btn--primary" onClick={onNewDefinition}>
+                <PlusIcon size={13} /> 新建
+              </button>
+              <button
+                type="button"
+                className="wf-manage-btn wf-manage-btn--danger"
+                disabled={busyKey !== null || defs === null || defs.length === 0}
+                title="批量删除工作流定义（勾选后删除；不影响已运行/历史实例）"
+                onClick={onEnterBatchMode}
+              >
+                <DeleteIcon size={13} /> 删除
+              </button>
+              <button
+                type="button"
+                className="wf-manage-btn"
+                disabled={busyKey === 'import'}
+                title="导入 .workflow.json 文件到本工作区"
+                onClick={() => fileInputRef.current?.click()}
+              >
+                <UploadIcon size={13} /> {busyKey === 'import' ? '导入中…' : '导入'}
+              </button>
+              <button type="button" className="wf-manage-btn" title="重新拉取定义列表" onClick={renderAll}>
+                <RefreshIcon size={13} /> 刷新
+              </button>
+            </>
+          )}
         </span>
       </div>
       <div className="wf-manage-body">
@@ -452,10 +593,20 @@ export default function ManagePanel({ workspaceId }: ManagePanelProps) {
           defs.map(def => (
             <div
               key={def.id}
-              className="wf-manage-row"
-              onClick={() => onEditDef(def)}
-              title={`定义 ${def.id}\n点击打开编辑器`}
+              className={`wf-manage-row${batchMode ? ' wf-manage-row--select' : ''}`}
+              // 批删模式下点击行不再打开编辑器，改切勾选（勾选框点击已 stopPropagation 防双切）。
+              onClick={batchMode ? () => onToggleDefSelect(def.id) : () => onEditDef(def)}
+              title={batchMode ? undefined : `定义 ${def.id}\n点击打开编辑器`}
             >
+              {batchMode ? (
+                <span className="wf-manage-check" onClick={e => e.stopPropagation()}>
+                  <Checkbox
+                    checked={selectedIds.includes(def.id)}
+                    disabled={batchDeleting}
+                    onChange={() => onToggleDefSelect(def.id)}
+                  />
+                </span>
+              ) : null}
               <div className="wf-manage-name">
                 <span className="wf-manage-name-title">{def.name || def.id}</span>
                 {def.description ? (
@@ -471,46 +622,48 @@ export default function ManagePanel({ workspaceId }: ManagePanelProps) {
                   更新于 {defTimeText(def.updatedAt)}
                 </span>
               </div>
-              <span className="wf-manage-more">
-                <RowActions
-                  items={[
-                    {
-                      key: 'run',
-                      label: '运行',
-                      icon: <RunIcon size={13} />,
-                      onSelect: () => onRunDef(def),
-                    },
-                    {
-                      key: 'edit',
-                      label: '编辑',
-                      icon: <EditIcon size={13} />,
-                      onSelect: () => onEditDef(def),
-                    },
-                    {
-                      key: 'view',
-                      label: '查看 JSON',
-                      icon: <VariableIcon size={13} />,
-                      disabled: busyKey === `def:${def.id}`,
-                      onSelect: () => onViewJson(def),
-                    },
-                    {
-                      key: 'export',
-                      label: '导出 JSON',
-                      icon: <DownloadIcon size={13} />,
-                      onSelect: () => onExportDef(def),
-                    },
-                    {
-                      key: 'delete',
-                      label: '删除',
-                      danger: true,
-                      icon: <DeleteIcon size={13} />,
-                      onSelect: () => onDeleteDef(def),
-                    },
-                  ]}
-                  title="定义操作"
-                  disabled={busyKey === `def:${def.id}`}
-                />
-              </span>
+              {!batchMode ? (
+                <span className="wf-manage-more">
+                  <RowActions
+                    items={[
+                      {
+                        key: 'run',
+                        label: '运行',
+                        icon: <RunIcon size={13} />,
+                        onSelect: () => onRunDef(def),
+                      },
+                      {
+                        key: 'edit',
+                        label: '编辑',
+                        icon: <EditIcon size={13} />,
+                        onSelect: () => onEditDef(def),
+                      },
+                      {
+                        key: 'view',
+                        label: '查看 JSON',
+                        icon: <VariableIcon size={13} />,
+                        disabled: busyKey === `def:${def.id}`,
+                        onSelect: () => onViewJson(def),
+                      },
+                      {
+                        key: 'export',
+                        label: '导出 JSON',
+                        icon: <DownloadIcon size={13} />,
+                        onSelect: () => onExportDef(def),
+                      },
+                      {
+                        key: 'delete',
+                        label: '删除',
+                        danger: true,
+                        icon: <DeleteIcon size={13} />,
+                        onSelect: () => onDeleteDef(def),
+                      },
+                    ]}
+                    title="定义操作"
+                    disabled={busyKey === `def:${def.id}`}
+                  />
+                </span>
+              ) : null}
             </div>
           ))
         )}
@@ -536,8 +689,9 @@ export default function ManagePanel({ workspaceId }: ManagePanelProps) {
  * ── 人工验证清单（workflow-manage 标签页 · 单工作区定义管理）────────────────
  * 1. 侧边栏「工作流」面板组头点「管理」→ 打开本工作区的管理标签页；同一工作区
  *    重复点击聚焦同一标签（不新开）；不同工作区各自成标签。
- * 2. 顶栏：标题 + 工作区名/id 副标题；动作组=新建（绿）/导入/刷新；导入残缺或
- *    非法 JSON → 顶部红色逐项回显；导入成功 toast「已导入为 wf_…」并刷新列表。
+ * 2. 顶栏：标题 + 工作区名/id 副标题；动作组=新建（绿）/删除（红）/导入/刷新；
+ *    无定义或动作进行中时「删除」禁用；导入残缺或非法 JSON → 顶部红色逐项回显；
+ *    导入成功 toast「已导入为 wf_…」并刷新列表。
  * 3. 行卡片：名称+描述 / 等宽 id · 节点数 · 更新时间；hover 边框高亮；行点击
  *    打开编辑器（definitionId 正确）；⋯ 菜单=运行 / 编辑 / 查看 JSON / 导出 JSON /
  *    删除（红色，需确认；删除后行消失）。
@@ -545,8 +699,18 @@ export default function ManagePanel({ workspaceId }: ManagePanelProps) {
  *    列表同步出现新实例）。
  * 5. 查看 JSON：对话框展示完整 definition JSON（可滚动/复制按钮）；导出 JSON
  *    下载 `<名称>.workflow.json`。
+ * 5b. **批量删除**（新建右边的「删除」进入）：动作组换「☐ 全选 / 删除 / 取消」
+ *    （新建/导入/刷新让位），行首出勾选框、点行=切勾选（⋯ 菜单隐藏、不再打开
+ *    编辑器）；全选/反选联动「删除 (n)」计数（0 个禁用）→ 确认弹窗（提示仅删
+ *    定义、已运行/历史实例不受影响）→ 串行删除、toast「已删除 N 个定义」、自动
+ *    退出批删模式；删除途中报错（如定义恰好被他端删除）→ 首错即停、toast 报
+ *    「已删 X 个」、剩余保持勾选可重试；批删中他端删除选中定义 → 勾选自动清理；
+ *    定义清空 → 自动退出批删模式；「取消」无副作用退出。删除后侧栏实例不受影响
+ *    （持定义快照，可继续查看运行页）。
  * 6. **推送**：编辑器保存 / AI 调 workflow_create / 另一端导入 → 本页 ~150ms 内
  *    自动更新，无需手动刷新。
- * 7. **移动端（≤768px / 窄窗）**：顶栏动作组换行全宽、按钮等分放大；行内
- *    名称+⋯ 首行、meta 次行堆叠；⋯ 菜单常显可点；JSON 对话框 pre 可横向滚动。
+ * 7. **移动端（≤768px / 窄窗）**：顶栏动作组换行全宽、按钮等分放大（批删模式
+ *    下全选+删除+取消同样换行放大）；行内名称+⋯ 首行、meta 次行堆叠；批删模式
+ *    勾选框占行首列；⋯ 菜单常显（Menu.tsx 的移动端放行样式）；JSON 对话框 pre
+ *    可横向滚动。
  */
