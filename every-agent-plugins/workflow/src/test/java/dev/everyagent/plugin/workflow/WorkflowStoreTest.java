@@ -269,7 +269,7 @@ class WorkflowStoreTest {
     private static InstanceMeta withStatus(InstanceMeta m, InstanceStatus status) {
         return new InstanceMeta(m.schemaVersion(), m.id(), m.definitionId(), m.definitionName(),
                 m.workspaceId(), m.originTaskId(), m.definitionSnapshot(), m.variables(), status,
-                m.createdAt(), m.startedAt(), m.endedAt(), m.durationMs(),
+                m.createdAt(), m.startedAt(), m.endedAt(), m.durationMs(), m.resumedDurationMs(),
                 m.error(), m.pendingDecision(), m.nodeStates(), m.runCounter());
     }
 

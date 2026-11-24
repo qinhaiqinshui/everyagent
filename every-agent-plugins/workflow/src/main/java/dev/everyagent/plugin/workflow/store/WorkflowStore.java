@@ -348,7 +348,7 @@ public final class WorkflowStore {
             InstanceMeta failed = new InstanceMeta(
                     InstanceMeta.SCHEMA_VERSION, meta.id(), meta.definitionId(), meta.definitionName(),
                     meta.workspaceId(), meta.originTaskId(), meta.definitionSnapshot(), meta.variables(),
-                    InstanceStatus.FAILED, meta.createdAt(), meta.startedAt(), now, duration,
+                    InstanceStatus.FAILED, meta.createdAt(), meta.startedAt(), now, duration, null,
                     new InstanceMeta.Error(INTERRUPT_MESSAGE, null, null),
                     null, null, meta.runCounter() == null ? 0 : meta.runCounter());
             saveInstanceMeta(failed);
@@ -530,7 +530,7 @@ public final class WorkflowStore {
         InstanceMeta meta = new InstanceMeta(
                 InstanceMeta.SCHEMA_VERSION, wiId, def.id(), def.name(), wsId, origin, snapshot, vars,
                 InstanceStatus.CREATED, System.currentTimeMillis(), null, null, null,
-                null, null, null, 0);
+                null, null, null, null, 0);
         try {
             Files.createDirectories(instanceDir(wsId, wiId));
             Files.createDirectories(runsDir(wsId, wiId));

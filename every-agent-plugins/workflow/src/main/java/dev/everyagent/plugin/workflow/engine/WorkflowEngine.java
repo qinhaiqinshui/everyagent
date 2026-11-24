@@ -265,6 +265,7 @@ public final class WorkflowEngine {
         if (prev != null) {
             throw new BadParamsException("实例已在运行: " + instanceId);
         }
+        r.resumedAt = System.currentTimeMillis();
         log.info("[workflow] 实例重跑 id={} 定义={} 重开节点={} 替换输入={} originTask={} 绑定任务={}",
                 instanceId, meta.definitionId(), targetId, input == null || input.isBlank() ? "-" : "是",
                 meta.originTaskId(), taskExec == null ? "-" : taskExec.subjectId());
@@ -539,6 +540,8 @@ public final class WorkflowEngine {
         final ConcurrentHashMap<Integer, RunRecord> runRecords = new ConcurrentHashMap<>();
         /** 终态放行 latch（{@code finish} 收口尾 countDown；awaitTerminalMeta 的可中断等待点）。 */
         final CountDownLatch terminalLatch = new CountDownLatch(1);
+        /** 最近一次 rerun 时刻（终态时折算 resumedDurationMs；null=从未续跑）。 */
+        volatile Long resumedAt;
         /** nodeId:runNo → wf.node trace 固定 EmitEvent.id（started 生成、done/failed 同 id 重发 → 任务域 upsert 原地更新一行）。 */
         final ConcurrentHashMap<String, Long> traceIds = new ConcurrentHashMap<>();
         final AtomicInteger runCounter;
@@ -1061,12 +1064,14 @@ public final class WorkflowEngine {
                 : (to == InstanceStatus.CREATED ? null : now);
         Long endedAt = to.terminal() ? now : null;
         Long durationMs = to.terminal() && startedAt != null ? now - startedAt : null;
+        Long resumedDurationMs = to.terminal() && r.resumedAt != null ? now - r.resumedAt : null;
         Map<String, InstanceMeta.NodeState> projection = to.terminal() ? projectNodeStates(r)
                 : m.nodeStates();
         InstanceMeta updated = new InstanceMeta(
                 InstanceMeta.SCHEMA_VERSION, m.id(), m.definitionId(), m.definitionName(),
                 m.workspaceId(), m.originTaskId(), r.snapshot, m.variablesOrEmpty(), to, m.createdAt(),
-                startedAt, endedAt, durationMs, error, pd, projection, r.runCounter.get());
+                startedAt, endedAt, durationMs, resumedDurationMs, error, pd, projection,
+                r.runCounter.get());
         r.meta = updated;
         r.status.set(to);
         r.runtime.status(to);

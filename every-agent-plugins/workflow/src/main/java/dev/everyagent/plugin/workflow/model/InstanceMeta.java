@@ -34,7 +34,10 @@ public record InstanceMeta(
         Long createdAt,
         Long startedAt,
         Long endedAt,
+        /** 实例总时长（首次运行 → 终态，含 rerun 间的人工间隔——跨 run 的累计墙钟）。 */
         Long durationMs,
+        /** rerun 后终态时非 null：本次续跑段时长（终态时刻 − 最近一次 rerun 时刻）。 */
+        Long resumedDurationMs,
         /** 终态失败时非 null。 */
         Error error,
         /** askUser 挂起时非 null（与 supervisor 决策同构，前端同一组决策按钮）。 */

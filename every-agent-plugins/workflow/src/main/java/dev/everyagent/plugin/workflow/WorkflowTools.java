@@ -304,11 +304,21 @@ public final class WorkflowTools {
                 filtered.add(r);
             }
         }
+        // attemptIndex = 该节点第几次尝试(1 起,按全量 runs 顺序;runNo 是实例级全局序号,
+        // 二者并存防误读——BUG-06)
+        Map<String, Integer> seq = new LinkedHashMap<>();
+        int[] attemptOf = new int[filtered.size()];
+        for (int i = 0; i < filtered.size(); i++) {
+            String nid = filtered.get(i).nodeId();
+            attemptOf[i] = nid == null ? 1 : seq.merge(nid, 1, Integer::sum);
+        }
         int from = Math.max(0, filtered.size() - t);
         ArrayNode runs = Json.arr();
-        for (RunRecord r : filtered.subList(from, filtered.size())) {
+        for (int i = from; i < filtered.size(); i++) {
+            RunRecord r = filtered.get(i);
             ObjectNode n = Json.obj()
                     .put("runNo", r.runNo() == null ? 0 : r.runNo())
+                    .put("attemptIndex", attemptOf[i])
                     .put("nodeId", orEmpty(r.nodeId()))
                     .put("nodeName", orEmpty(r.nodeName()))
                     .put("nodeType", orEmpty(r.nodeType()))
@@ -529,8 +539,18 @@ public final class WorkflowTools {
                 .put("definitionName", orEmpty(m.definitionName()))
                 .put("status", statusWire(m.status()))
                 .put("durationMs", m.durationMs() == null ? 0L : m.durationMs());
+        if (m.resumedDurationMs() != null) {
+            // durationMs 是实例累计墙钟(含 rerun 前的人工间隔),续跑段单列防误读(BUG-06)
+            n.put("resumedDurationMs", m.resumedDurationMs());
+        }
         switch (m.status() == null ? InstanceStatus.CREATED : m.status()) {
-            case DONE -> n.set("nodes", nodeSummaries(m));
+            case DONE -> {
+                n.set("nodes", nodeSummaries(m));
+                String warning = completionWarning(m);
+                if (warning != null) {
+                    n.put("warning", warning);
+                }
+            }
             case FAILED -> {
                 InstanceMeta.Error err = m.error();
                 String nodeId = err == null ? null : err.nodeId();

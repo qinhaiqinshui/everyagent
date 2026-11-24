@@ -70,7 +70,7 @@ class ModelJsonRoundTripTest {
                 fullDefinition(),
                 Map.of("novelName", "星际牧羊人"),
                 InstanceStatus.WAITING_USER,
-                1730000001000L, 1730000001500L, null, null,
+                1730000001000L, 1730000001500L, null, null, null,
                 new InstanceMeta.Error("节点失败", "wn_c3", 7),
                 new InstanceMeta.PendingDecision("wn_c3", 7, "如何处理?",
                         List.of("retry", "skip", "fail", "retryWithInput"), "错误摘要", 1730000009000L),
@@ -79,6 +79,20 @@ class ModelJsonRoundTripTest {
         InstanceMeta back = Json.MAPPER.readValue(Json.write(meta), InstanceMeta.class);
         assertThat(back).isEqualTo(meta);
         assertThat(back.definitionSnapshot()).isEqualTo(meta.definitionSnapshot());
+        assertThat(back.resumedDurationMs()).isNull(); // 旧实例缺字段读为 null(兼容)
+
+        // 续跑后终态:durationMs=总时长,resumedDurationMs=本次续跑段
+        InstanceMeta resumed = new InstanceMeta(
+                InstanceMeta.SCHEMA_VERSION, meta.id(), meta.definitionId(), meta.definitionName(),
+                meta.workspaceId(), meta.originTaskId(), meta.definitionSnapshot(), meta.variables(),
+                InstanceStatus.DONE,
+                1730000001000L, 1730000001500L, 1730000100000L,
+                1730000100000L - 1730000001000L, 12_000L,
+                null, null,
+                Map.of("wn_c3", new InstanceMeta.NodeState(2, "done", 7)),
+                7);
+        InstanceMeta resumedBack = Json.MAPPER.readValue(Json.write(resumed), InstanceMeta.class);
+        assertThat(resumedBack.resumedDurationMs()).isEqualTo(12_000L);
 
         String json = Json.write(meta);
         assertThat(json).contains("\"status\":\"waiting-user\"");
