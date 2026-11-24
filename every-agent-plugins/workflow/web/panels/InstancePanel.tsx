@@ -9,10 +9,6 @@
  *   supervisor.decision（runs 记录已先于事件落盘）或终态事件 → 450ms 防抖重拉 meta+runs，
  *   详情面板与进度随事件自然保鲜，无空转定时器（仅运行中实例有 1s 计时 tick 刷时长）、
  *   **无手动刷新入口**（断线重连由宿主全局重连提示覆盖，恢复后自动续流）。
- * - node.delta 瞬态供给：AI 节点 thinking/text 增量经 gateway 瞬态旁路喂 nodeDeltaBuffer
- *   （instanceId→nodeId 内存累积；不进 events 数组、不推游标），本面板 rAF 节流刷快照、
- *   过滤 nodeType==='ai' 后以 liveDelta 供给 RunLogPanel 的 live 伪记录；收口事件/
- *   实例终态在 gateway 内清理，runLog 重拉后由本面板兜底清非运行节点（防陈旧残留）。
  * - 节点状态着色：**事件投影**（projectNodesFromEvents——node.started/output/error/
  *   skipped/wf.askUser 按序折叠；run 级留痕含 inputPreview/outputPreview/activatedEdges）
  *   + 终态 meta.nodeStates 补洞（worker 重启 activate 扫描改 meta 不补事件的场景）。
@@ -41,11 +37,6 @@ import WorkflowCanvas, {
 } from '../canvas/WorkflowCanvas'
 import { statusVisual, type RenderStatus } from '../canvas/renderStates'
 import { getPluginContext } from '../pluginRuntime'
-import {
-  pruneNodeDeltas,
-  snapshotNodeDeltas,
-  type NodeDeltaAccumulation,
-} from '../nodeDeltaBuffer'
 import {
   conditionLabel,
   isTerminalInstanceEvent,
@@ -78,7 +69,6 @@ import RunLogPanel, {
   runInputOf,
   runOutputOf,
   runSupervisorOf,
-  type LiveNodeDeltaView,
 } from './RunLogPanel'
 import { useIsMobile } from '../useIsMobile'
 import {
@@ -906,11 +896,6 @@ export default function InstancePanel({ instanceId, workspaceId }: InstancePanel
   const [actionBusy, setActionBusy] = React.useState<'cancel' | 'delete' | null>(null)
   const [deleted, setDeleted] = React.useState(false)
   const [, setTick] = React.useState(0)
-  // ── node.delta 瞬态累积供给：推送帧经 gateway 瞬态旁路到达并喂数 nodeDeltaBuffer
-  //    （累积本体在 gateway 订阅内完成），这里只按帧节流刷快照驱动重渲染（逐帧
-  //    setState 会按 token 频率打爆渲染——rAF 合并，无 rAF 环境退 100ms 定时）。
-  const [liveDeltaRaw, setLiveDeltaRaw] = React.useState<Record<string, NodeDeltaAccumulation>>({})
-  const deltaFlushRef = React.useRef<number | null>(null)
 
   // ── 全量拉取（meta + runLog 并行；局部失败分别落 error 态）。
   const loadAll = React.useCallback(async () => {
@@ -949,28 +934,7 @@ export default function InstancePanel({ instanceId, workspaceId }: InstancePanel
     }, 450)
   }, [loadAll])
 
-  // ── 瞬态快照刷新（rAF 合并；node.delta 逐帧高频，刷的是累积层只读快照）。
-  const flushLiveDelta = React.useCallback(() => {
-    setLiveDeltaRaw(snapshotNodeDeltas(instanceId))
-  }, [instanceId])
-  const scheduleLiveDeltaFlush = React.useCallback(() => {
-    if (deltaFlushRef.current != null) return
-    if (typeof requestAnimationFrame === 'function') {
-      deltaFlushRef.current = requestAnimationFrame(() => {
-        deltaFlushRef.current = null
-        flushLiveDelta()
-      })
-    } else {
-      deltaFlushRef.current = setTimeout(() => {
-        deltaFlushRef.current = null
-        flushLiveDelta()
-      }, 100) as unknown as number
-    }
-  }, [flushLiveDelta])
-
   // ── 事件流订阅（afterSeq='0' 全量回放 + 实时增量；终态/删除自动停）。
-  //    node.delta 走瞬态旁路：gateway 内喂 nodeDeltaBuffer 累积 + 本回调驱动快照刷新
-  //    （不进 events 数组——瞬态不落盘，重放/补拉天然不含）。
   React.useEffect(() => {
     if (!instanceId) return
     const handle = subscribeInstanceEvents(
@@ -982,21 +946,16 @@ export default function InstancePanel({ instanceId, workspaceId }: InstancePanel
           scheduleRefresh()
         }
       },
-      { onState: setPollState, onNodeDelta: scheduleLiveDeltaFlush },
+      { onState: setPollState },
     )
     return () => {
       handle.close()
     }
-  }, [instanceId, scheduleRefresh, scheduleLiveDeltaFlush])
+  }, [instanceId, scheduleRefresh])
 
   React.useEffect(
     () => () => {
       if (refreshTimerRef.current != null) clearTimeout(refreshTimerRef.current)
-      if (deltaFlushRef.current != null) {
-        if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(deltaFlushRef.current)
-        else clearTimeout(deltaFlushRef.current)
-        deltaFlushRef.current = null
-      }
     },
     [],
   )
@@ -1009,31 +968,6 @@ export default function InstancePanel({ instanceId, workspaceId }: InstancePanel
     () => mergeTerminalNodeStates(projectNodesFromEvents(events), meta?.nodeStates),
     [events, meta?.nodeStates],
   )
-
-  // ── runLog 重拉信号 → 瞬态累积兜底清理：runs 真记录已落盘的节点，其累积视为被
-  //    取代（保留运行中/等待决策节点——重跑场景的进行中增量不清）；清理后同步快照
-  //    （常规路径 node.output/node.error 事件已在 gateway 内收口清理，此处是兜底）。
-  React.useEffect(() => {
-    if (!instanceId) return
-    const keep = new Set<string>()
-    for (const [id, p] of Object.entries(projection)) {
-      if (p.status === 'running' || p.status === 'waiting') keep.add(id)
-    }
-    pruneNodeDeltas(instanceId, keep)
-    setLiveDeltaRaw(snapshotNodeDeltas(instanceId))
-  }, [instanceId, runs, projection])
-
-  // ── AI 节点实时增量视图（nodeType==='ai' 才有关联意义；供给运行日志页 live 伪记录）。
-  const liveDeltaByNode = React.useMemo(() => {
-    const m = new Map<string, LiveNodeDeltaView>()
-    for (const n of definition?.nodes ?? []) {
-      if (n.type !== 'ai') continue
-      const acc = liveDeltaRaw[n.id]
-      if (!acc || (acc.thinking === '' && acc.text === '')) continue
-      m.set(n.id, { thinking: acc.thinking, text: acc.text })
-    }
-    return m
-  }, [definition, liveDeltaRaw])
 
   const nodeNameById = React.useMemo(() => {
     const m: Record<string, string> = {}
@@ -1332,7 +1266,6 @@ export default function InstancePanel({ instanceId, workspaceId }: InstancePanel
             meta={meta}
             runs={runs}
             events={events}
-            liveDelta={liveDeltaByNode}
             loading={metaLoading}
             loadError={runsError}
             onReload={() => setReloadNonce(n => n + 1)}

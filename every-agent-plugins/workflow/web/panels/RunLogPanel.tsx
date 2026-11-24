@@ -14,9 +14,7 @@
  * - 状态行条目 = events 补充（wf.created/wf.status/wf.askUser/wf.cancelled/wf.done/
  *   node.skipped/supervisor.decision）；
  * - 「live run」条目 = 事件里有 node.started 但 runs 记录尚未落盘的进行中/未收口运行
- *   （按 runNo 去重后从事件合成伪记录，复用同一渲染器；收口落盘后重载即被真记录取代）；
- *   AI 节点的 live 条目额外挂 liveThinking/liveText（props.liveDelta：node.delta 瞬态
- *   旁路的 thinking/text 累积，仅 nodeType==='ai'；流式展示属渲染层后续步骤）。
+ *   （按 runNo 去重后从事件合成伪记录，复用同一渲染器；收口落盘后重载即被真记录取代）。
  * 归并排序：runs 按 startedAt 与事件条目按 ts 双指针稳定归并（同刻 run 在前）。
  *
  * 本文件自持基础读取助手（asStr/formatDuration/TokenTextView 等）——刻意不反向依赖
@@ -208,15 +206,6 @@ export function runOutputPreview(rec: WorkflowRunRecord): string {
 
 export type TimelineTone = 'info' | 'success' | 'warn' | 'error'
 
-/**
- * AI 节点实时增量视图（nodeDeltaBuffer 累积层的投影；thinking 与 text 分开的字符串，
- * 渲染层可直接分别流式显示）。仅 nodeType==='ai' 的节点有关联意义（调用方过滤）。
- */
-export interface LiveNodeDeltaView {
-  thinking: string
-  text: string
-}
-
 /** run 记录条目（真记录 + 事件合成的 live 伪记录共用渲染器）。 */
 export interface TimelineRunEntry {
   kind: 'run'
@@ -225,10 +214,6 @@ export interface TimelineRunEntry {
   run: WorkflowRunRecord
   /** live 伪记录的实时态（真记录=null，态由 error 字段自证）。 */
   liveStatus: 'running' | 'done' | 'failed' | null
-  /** live 伪记录关联的 AI 节点实时**思考**增量累积（无关联/空=undefined；真记录不携带）。 */
-  liveThinking?: string
-  /** live 伪记录关联的 AI 节点实时**正文**增量累积（无关联/空=undefined；真记录不携带）。 */
-  liveText?: string
 }
 
 /** 实例级状态行条目（events 补充）。 */
@@ -281,14 +266,12 @@ function synthesizeLiveRun(l: LiveRunDraft): WorkflowRunRecord {
 /**
  * runs + events → 时间线条目（归并排序：事件条目按 ts 稳定排序后与 runs 按 startedAt
  * 双指针归并，同刻 run 在前）。nodeNameById 供事件侧（node.skipped 等无 nodeName 的
- * payload）补节点显示名。liveDelta 供 live 伪记录关联 AI 节点的实时 thinking/text
- * 累积（瞬态旁路数据，nodeId → 增量视图；缺省无关联——不影响既有装配行为）。
+ * payload）补节点显示名。
  */
 export function buildTimelineEntries(
   runs: WorkflowRunRecord[],
   events: WorkflowInstanceEvent[],
   nodeNameById?: Record<string, string>,
-  liveDelta?: ReadonlyMap<string, LiveNodeDeltaView>,
 ): TimelineEntry[] {
   const covered = new Set<number>()
   for (const r of runs) {
@@ -417,19 +400,9 @@ export function buildTimelineEntries(
     }
   }
 
-  // live 伪记录 → 条目（加入后统一按 ts 稳定排序，与状态行交织）。AI 节点关联
-  // nodeDeltaBuffer 的实时 thinking/text 累积（收口清理后自然失联，真记录接管）。
+  // live 伪记录 → 条目（加入后统一按 ts 稳定排序，与状态行交织）。
   for (const l of live.values()) {
-    const d = liveDelta?.get(l.nodeId)
-    evEntries.push({
-      kind: 'run',
-      key: `live:${l.runNo}`,
-      ts: l.startedAt ?? 0,
-      run: synthesizeLiveRun(l),
-      liveStatus: l.status,
-      liveThinking: d && d.thinking !== '' ? d.thinking : undefined,
-      liveText: d && d.text !== '' ? d.text : undefined,
-    })
+    evEntries.push({ kind: 'run', key: `live:${l.runNo}`, ts: l.startedAt ?? 0, run: synthesizeLiveRun(l), liveStatus: l.status })
   }
   evEntries.sort((a, b) => a.ts - b.ts)
 
@@ -533,12 +506,6 @@ export interface RunLogPanelProps {
   runs: WorkflowRunRecord[]
   /** 事件流（父级长轮询累积的全量回放）。 */
   events: WorkflowInstanceEvent[]
-  /**
-   * AI 节点实时增量（nodeId → thinking/text 累积；node.delta 瞬态旁路数据，父级从
-   * nodeDeltaBuffer 快照过滤出 nodeType==='ai' 的节点）。live 伪记录关联用——
-   * 渲染层据此流式显示进行中 AI 节点的思考与正文（缺省无关联）。
-   */
-  liveDelta?: ReadonlyMap<string, LiveNodeDeltaView> | null
   /** runs/meta 拉取中。 */
   loading?: boolean
   /** runs/meta 拉取错误（重载入口）。 */
@@ -676,7 +643,7 @@ function RunItem({
   )
 }
 
-export default function RunLogPanel({ meta, runs, events, liveDelta, loading, loadError, onReload }: RunLogPanelProps) {
+export default function RunLogPanel({ meta, runs, events, loading, loadError, onReload }: RunLogPanelProps) {
   React.useEffect(ensureLogStyles, [])
 
   const nodeNameById = React.useMemo(() => {
@@ -696,8 +663,8 @@ export default function RunLogPanel({ meta, runs, events, liveDelta, loading, lo
   }, [meta])
 
   const entries = React.useMemo(
-    () => buildTimelineEntries(runs, events, nodeNameById, liveDelta ?? undefined),
-    [runs, events, nodeNameById, liveDelta],
+    () => buildTimelineEntries(runs, events, nodeNameById),
+    [runs, events, nodeNameById],
   )
 
   return (
