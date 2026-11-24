@@ -586,14 +586,14 @@ export default function DefinitionEditorPanel({
                 updateDef={updateDef}
                 onDelete={deleteSelection}
               />
-            ) : (
+            ) : selectedEdge ? (
               <EdgePropertySection
                 edge={selectedEdge}
                 def={def}
                 patchEdge={patchEdge}
                 onDelete={deleteSelection}
               />
-            )}
+            ) : null}
           </div>
         ) : null}
       </div>
