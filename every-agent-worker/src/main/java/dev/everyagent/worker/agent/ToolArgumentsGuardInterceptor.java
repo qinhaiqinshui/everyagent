@@ -14,7 +14,9 @@ import dev.everyagent.plugin.api.spi.ToolExecutionInterceptor;
  * 模型把参数名写错（update_file 的 {@code content} 写成 {@code newcontent}，21 次调用 12 次）时，
  * {@code content} 以 null 直入工具；update_file 曾把 {@code null} 当空串执行，旧内容被原地删空
  * 且返回「已更新」——静默丢内容、无任何错误。本护栏把这类调用拦在真实执行之前，并把
- * 「疑似改名」提示回给模型，下一轮即可自我纠正。
+ * 「疑似改名」提示回给模型，下一轮即可自我纠正。（后续 update_file 参数已更名
+ * {@code newcontent}——模型受 {@code oldcontent} 引导天然写 {@code newcontent}，更名即对该错类
+ * 对症根治；护栏对全部工具的缺参防护继续生效。）
  *
  * <p><b>校验口径</b>（{@link ToolArgumentsSchema}）：对照 {@code ToolDefinition.inputSchema()}
  * （框架按 {@code @ToolParam(required)} 生成的 {@code required} 清单），顶层键缺失或值为

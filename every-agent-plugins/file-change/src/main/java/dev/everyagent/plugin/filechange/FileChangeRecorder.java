@@ -14,7 +14,7 @@ import org.slf4j.LoggerFactory;
  * 携带文件级写前/写后<b>全文</b>——同文件并发写按 pathLock 串行,回调序=落盘序,
  * {@link FileChangesCollector} 按「首条 before 全文 + 末条 after 全文 + saveCount」聚合
  * 文件级净状态,diff 不错位。失败调用不回调即天然不记账(原 per-call 链「解析入参当全文」
- * 记账已退役:update_file 的 oldcontent/content 只是被替换的<b>片段</b>,同文件多次写时
+ * 记账已退役:update_file 的 oldcontent/newcontent 只是被替换的<b>片段</b>,同文件多次写时
  * 聚合出「首条 before=首次入参片段、末条 after=末次入参片段」,两段不相干片段拼 diff,
  * 轮末面板呈错误变更)。
  *

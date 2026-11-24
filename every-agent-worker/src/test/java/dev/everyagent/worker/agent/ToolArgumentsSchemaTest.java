@@ -45,8 +45,8 @@ class ToolArgumentsSchemaTest {
     }
 
     private static final String UPDATE_SCHEMA = "{\"type\":\"object\",\"properties\":{"
-            + "\"path\":{\"type\":\"string\"},\"oldcontent\":{\"type\":\"string\"},\"content\":{\"type\":\"string\"}},"
-            + "\"required\":[\"path\",\"oldcontent\",\"content\"]}";
+            + "\"path\":{\"type\":\"string\"},\"oldcontent\":{\"type\":\"string\"},\"newcontent\":{\"type\":\"string\"}},"
+            + "\"required\":[\"path\",\"oldcontent\",\"newcontent\"]}";
 
     // ── 前提:框架 schema 带 required(2026-12 t_jrm6 事故的护栏依据) ──
 
@@ -54,10 +54,11 @@ class ToolArgumentsSchemaTest {
     void frameworkSchemaCarriesRequiredListForUpdateFile() {
         String schema = real("update_file").getToolDefinition().inputSchema();
         assertTrue(schema.contains("\"required\""), "MethodToolCallbackProvider 生成的 schema 必须含 required: " + schema);
+        // 参数已更名 newcontent:模型按旧习惯写 content → 必须判缺失并给出改名提示
         String problem = ToolArgumentsSchema.missingRequired(real("update_file"),
-                "{\"path\":\"f.md\",\"oldcontent\":\"a\",\"newcontent\":\"b\"}");
-        assertNotNull(problem, "真实框架 schema 下,newcontent 顶替 content 必须判缺失");
-        assertTrue(problem.contains("content") && problem.contains("newcontent"), problem);
+                "{\"path\":\"f.md\",\"oldcontent\":\"a\",\"content\":\"b\"}");
+        assertNotNull(problem, "真实框架 schema 下,content 顶替 newcontent 必须判缺失");
+        assertTrue(problem.contains("newcontent") && problem.contains("content"), problem);
     }
 
     @Test
@@ -71,33 +72,34 @@ class ToolArgumentsSchemaTest {
     @Test
     void validArgumentsPass() {
         assertNull(ToolArgumentsSchema.missingRequired(withSchema("update_file", UPDATE_SCHEMA),
-                "{\"path\":\"f.md\",\"oldcontent\":\"a\",\"content\":\"b\"}"));
+                "{\"path\":\"f.md\",\"oldcontent\":\"a\",\"newcontent\":\"b\"}"));
     }
 
     @Test
     void missingKeyIsReportedWithRenameHint() {
+        // 旧习惯名 content 顶替 newcontent(t_jrm6 事故形态在更名后的镜像)
         String problem = ToolArgumentsSchema.missingRequired(withSchema("update_file", UPDATE_SCHEMA),
-                "{\"newcontent\":\"b\",\"oldcontent\":\"a\",\"path\":\"f.md\"}");
+                "{\"content\":\"b\",\"oldcontent\":\"a\",\"path\":\"f.md\"}");
         assertTrue(problem.startsWith("工具参数校验失败:"), problem);
-        assertTrue(problem.contains("缺少必填参数 content"), problem);
-        assertTrue(problem.contains("是否想说 content？本次收到的参数名是 newcontent"), problem);
-        assertTrue(problem.contains("未定义的参数名:newcontent"), problem);
+        assertTrue(problem.contains("缺少必填参数 newcontent"), problem);
+        assertTrue(problem.contains("是否想说 newcontent？本次收到的参数名是 content"), problem);
+        assertTrue(problem.contains("未定义的参数名:content"), problem);
         assertTrue(problem.contains("update_file"), problem);
     }
 
     @Test
     void jsonNullValueCountsAsMissing() {
         String problem = ToolArgumentsSchema.missingRequired(withSchema("update_file", UPDATE_SCHEMA),
-                "{\"path\":\"f.md\",\"oldcontent\":\"a\",\"content\":null}");
+                "{\"path\":\"f.md\",\"oldcontent\":\"a\",\"newcontent\":null}");
         assertNotNull(problem);
-        assertTrue(problem.contains("缺少必填参数 content"), problem);
+        assertTrue(problem.contains("缺少必填参数 newcontent"), problem);
     }
 
     @Test
     void blankArgumentsTreatedAsEmptyObjectAndListEveryMissingKey() {
-        List<String> missing = List.of("path", "oldcontent", "content");
+        List<String> missing = List.of("path", "oldcontent", "newcontent");
         String problem = ToolArgumentsSchema.describe("update_file", missing, List.of(), true);
-        assertTrue(problem.contains("缺少必填参数 path; 缺少必填参数 oldcontent; 缺少必填参数 content"), problem);
+        assertTrue(problem.contains("缺少必填参数 path; 缺少必填参数 oldcontent; 缺少必填参数 newcontent"), problem);
         assertFalse(problem.contains("是否想说"), "无多余键时不应有改名提示");
         assertNotNull(ToolArgumentsSchema.missingRequired(withSchema("update_file", UPDATE_SCHEMA), "  "),
                 "空白入参按 {} 归一 → 全部必填缺失");
@@ -106,7 +108,7 @@ class ToolArgumentsSchemaTest {
     @Test
     void extraKeysAloneDoNotFail() {
         assertNull(ToolArgumentsSchema.missingRequired(withSchema("update_file", UPDATE_SCHEMA),
-                "{\"path\":\"f.md\",\"oldcontent\":\"a\",\"content\":\"b\",\"newcontent\":\"ignored\"}"),
+                "{\"path\":\"f.md\",\"oldcontent\":\"a\",\"newcontent\":\"b\",\"content\":\"ignored\"}"),
                 "多余键只作提示,不改变「未知键被忽略」的框架语义");
     }
 

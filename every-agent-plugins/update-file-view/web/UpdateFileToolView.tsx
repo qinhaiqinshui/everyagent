@@ -67,10 +67,13 @@ import { UpdateFileDiff } from './UpdateFileDiff'
 /** 回退参数块里单个值的最大展示长度（超出截断，避免整篇正文挤占展开区）。 */
 const ARG_VALUE_LIMIT = 400
 
-/** 从 update_file 参数提取可 diff 的 (oldcontent, content) 二元组；不完整返回 null。 */
+/** 从 update_file 参数提取可 diff 的 (oldcontent, newcontent) 二元组；不完整返回 null。 */
 function extractDiffArgs(args: Record<string, unknown>): { oldContent: string; newContent: string } | null {
   const oldContent = typeof args.oldcontent === 'string' ? args.oldcontent : null
-  const newContent = typeof args.content === 'string' ? args.content : null
+  // 参数名 2026-12 由 content 更名 newcontent:新事件取 newcontent,历史事件回放回落
+  // content(任务日志永久落盘,旧调用的事件仍携带旧参数名),两者都不在则退参数块兜底。
+  const newContent = typeof args.newcontent === 'string' ? args.newcontent
+    : typeof args.content === 'string' ? args.content : null
   if (oldContent === null || newContent === null) return null
   return { oldContent, newContent }
 }

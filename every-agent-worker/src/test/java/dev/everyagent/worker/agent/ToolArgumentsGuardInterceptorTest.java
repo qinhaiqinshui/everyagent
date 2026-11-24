@@ -28,12 +28,15 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class ToolArgumentsGuardInterceptorTest {
 
     private static final String SCHEMA = "{\"type\":\"object\",\"properties\":{"
-            + "\"path\":{\"type\":\"string\"},\"oldcontent\":{\"type\":\"string\"},\"content\":{\"type\":\"string\"}},"
-            + "\"required\":[\"path\",\"oldcontent\",\"content\"]}";
+            + "\"path\":{\"type\":\"string\"},\"oldcontent\":{\"type\":\"string\"},\"newcontent\":{\"type\":\"string\"}},"
+            + "\"required\":[\"path\",\"oldcontent\",\"newcontent\"]}";
 
-    /** 复现 t_jrm6 事故形态:模型把 content 写成 newcontent。 */
+    /**
+     * 复现 t_jrm6 事故的同构形态:update_file 参数已更名 newcontent(模型受 oldcontent
+     * 引导天然写 newcontent,更名即对症根治),模型按旧习惯写 content → 缺必填。
+     */
     private static final String WRONG_ARGS =
-            "{\"newcontent\":\"新内容\",\"oldcontent\":\"旧内容\",\"path\":\"docs/a.md\"}";
+            "{\"content\":\"新内容\",\"oldcontent\":\"旧内容\",\"path\":\"docs/a.md\"}";
 
     private static ToolCallback updateFile() {
         return new ToolCallback() {
@@ -90,15 +93,15 @@ class ToolArgumentsGuardInterceptorTest {
         String out = new ToolArgumentsGuardInterceptor().invoke(ctx, tail);
 
         assertTrue(out.startsWith(ExecResults.TOOL_FAILURE_PREFIX), "失败前缀 → tool-events 标 error: " + out);
-        assertTrue(out.contains("缺少必填参数 content"), out);
-        assertTrue(out.contains("本次收到的参数名是 newcontent"), "给出疑似改名提示: " + out);
+        assertTrue(out.contains("缺少必填参数 newcontent"), out);
+        assertTrue(out.contains("本次收到的参数名是 content"), "给出疑似改名提示: " + out);
         assertTrue(out.contains("update_file"), out);
         assertTrue(realCalled.get() == false, "哨兵置位,链尾不得进入真实调用");
     }
 
     @Test
     void completeArgumentsPassThroughUntouched() throws Exception {
-        Ctx ctx = new Ctx("{\"path\":\"docs/a.md\",\"oldcontent\":\"旧\",\"content\":\"新\"}");
+        Ctx ctx = new Ctx("{\"path\":\"docs/a.md\",\"oldcontent\":\"旧\",\"newcontent\":\"新\"}");
         String out = new ToolArgumentsGuardInterceptor().invoke(ctx, c -> "已更新到：docs/a.md");
         assertEquals("已更新到：docs/a.md", out);
         assertNull(ctx.synthesizedResult(), "齐全不置哨兵");

@@ -18,7 +18,7 @@ export interface DiffLine {
 }
 
 /**
- * LCS 矩阵规模上限（单元格数）。update_file 的 oldcontent/content 是文件片段，
+ * LCS 矩阵规模上限（单元格数）。update_file 的 oldcontent/newcontent 是文件片段，
  * 绝大多数只有几十行；一旦两侧行数乘积超限（如整文件级替换），LCS 的 O(n·m)
  * 时间与内存会明显拖住渲染，此时降级为「整块替换」（旧行全删 + 新行全增），
  * 结果仍然正确，只是不够精简。
