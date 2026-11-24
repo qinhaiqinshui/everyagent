@@ -8,7 +8,8 @@
  * var() 第二参为色值兜底（照抄宿主 ui-tokens.css 的暗色主题值，防变量缺席）。
  *
  * 兜底色值来源（ui-tokens.css）：green #41d19c / blue #61a5ff / red #ff6b6b /
- * amber #f7bd54 / cyan #54d2e8 / purple #b59cff / muted #6f7a8b / border-strong #3b4658。
+ * amber #f7bd54 / cyan #54d2e8 / purple #b59cff / muted #6f7a8b /
+ * text-secondary #aab3c2 / border-strong #3b4658。
  */
 
 /** 节点运行态（实例视图投影；编辑态无 status=中性灰）。 */
@@ -71,10 +72,11 @@ export const STATUS_VISUALS: Record<RenderStatus, StatusVisual> = {
   },
 }
 
-/** 无 status（编辑态/未投影）的中性视觉。 */
+/** 无 status 的中性视觉（编辑态未知类型兜底 / 运行图未运行节点描边）。
+ *  灰取 text-secondary：border-strong(#3b4658) 对深底对比度仅 ~2:1，太不显眼。 */
 export const NEUTRAL_STATUS_VISUAL: StatusVisual = {
-  stroke: 'var(--border-strong, #3b4658)',
-  badgeFill: 'var(--border-strong, #3b4658)',
+  stroke: 'var(--text-secondary, #aab3c2)',
+  badgeFill: 'var(--text-secondary, #aab3c2)',
   markerId: 'wf-arrow',
   animated: false,
   label: '',

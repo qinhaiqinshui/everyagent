@@ -20,7 +20,7 @@
  */
 import React from 'react'
 import { nodeTypeGlyph } from '../icons'
-import { nodeStrokeColor, statusVisual, type RenderStatus } from './renderStates'
+import { nodeStrokeColor, statusVisual, NEUTRAL_STATUS_VISUAL, type RenderStatus } from './renderStates'
 
 // ─── 几何常量 ─────────────────────────────────────────────────────────────
 
@@ -380,7 +380,11 @@ export default function WorkflowCanvas({
         {nodes.map((node) => {
           const selected = selection?.kind === 'node' && selection.id === node.id
           const visual = statusVisual(node.status)
-          const stroke = nodeStrokeColor(node.type, node.status)
+          // 运行图（readonly）未运行节点用中性灰（对齐图例「灰=跳过/未运行」），不借用
+          // 类型色——类型色与状态色撞义（未运行 start 显绿=完成）；编辑态保持类型色优先。
+          const stroke = !editable && !node.status
+            ? NEUTRAL_STATUS_VISUAL.stroke
+            : nodeStrokeColor(node.type, node.status)
           const iconColor = node.status ? visual.stroke : stroke
           return (
             <g
