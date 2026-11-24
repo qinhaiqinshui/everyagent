@@ -418,15 +418,6 @@ export default function WorkflowCanvas({
                   strokeWidth: selected ? 2 : 1.4,
                 }}
               />
-              {/* 左侧类型色条 */}
-              <rect
-                x={0}
-                y={8}
-                width={3}
-                height={NODE_H - 16}
-                rx={1.5}
-                style={{ fill: stroke, pointerEvents: 'none' }}
-              />
               {/* 类型图标（16×16 glyph，缩进 10/居中） */}
               <g transform="translate(10, 12)" color={iconColor} style={{ pointerEvents: 'none' }}>
                 <g
