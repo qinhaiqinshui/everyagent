@@ -6,6 +6,7 @@ import dev.everyagent.plugin.api.event.Channels;
 import dev.everyagent.plugin.api.event.StreamEmitter;
 import dev.everyagent.plugin.workflow.engine.WorkflowEngine;
 import dev.everyagent.plugin.workflow.rpc.WorkflowRpc;
+import dev.everyagent.plugin.workflow.slash.WorkflowRunSlashResolver;
 import dev.everyagent.plugin.workflow.store.WorkflowStore;
 import dev.everyagent.contract.json.Json;
 import org.slf4j.Logger;
@@ -17,7 +18,7 @@ import java.util.Locale;
  * workflow 插件入口。
  *
  * <p>职责（模型/校验/存储层 + hidden 五工具 + 激活扫描 + <b>执行引擎</b>
- * （WorkflowRuntime/调度器/节点执行器）+ <b>RPC 面</b>（workflow.* 14 个方法））。本类 activate 做五件事：
+ * （WorkflowRuntime/调度器/节点执行器）+ <b>RPC 面</b>（workflow.* 14 个方法））。本类 activate 做六件事：
  * <ol>
  *   <li>构造 {@link WorkflowStore} 并执行 activate 扫描（建内存索引 + 非终态实例标
  *       failed("worker 重启中断")）；</li>
@@ -30,6 +31,9 @@ import java.util.Locale;
  *       契约=计划「RPC 参数契约」表）；</li>
  *   <li>注册 {@link WorkflowToolProvider}（定义 CRUD 五件 + workflow_run/实例查询四件 +
  *       cancel 共十个 hidden 工具；技能包由 plugin.json 声明 {@code skills} 目录物化，不走代码注册）。</li>
+ *   <li>注册 {@link dev.everyagent.plugin.workflow.slash.WorkflowRunSlashResolver}（kind=
+ *       {@code workflow.run} 的提交解析：任务页运行按钮的 token 原串 → 工作流名+参数+
+ *       workflow_run 调用引导的可读替换文本）。</li>
  * </ol>
  */
 public class WorkflowPlugin implements EveryAgentPlugin {
@@ -100,6 +104,11 @@ public class WorkflowPlugin implements EveryAgentPlugin {
 
         // hidden 十工具（定义 CRUD 五件 + 运行/查询五件；模型经 skill/workflow-tools/skill.md 认知后按名调用）
         ctx.registerToolProvider(new WorkflowToolProvider(store, engine));
+
+        // 「运行工作流」token 提交解析（kind=workflow.run）：任务页运行按钮发 task.run 的
+        // 用户消息携带 opaque token 原串（前端不注册提交 resolver），经复用的
+        // SlashTokenResolveAdvisor 分发到这里渲染「工作流名+参数+workflow_run 引导」文本
+        ctx.registerSlashTokenResolver(new WorkflowRunSlashResolver(store));
     }
 
     /** 执行引擎（RPC 层与本插件内部共用）。 */
