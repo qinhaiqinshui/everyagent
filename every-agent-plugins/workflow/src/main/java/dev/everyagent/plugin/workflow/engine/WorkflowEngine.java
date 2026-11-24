@@ -245,6 +245,12 @@ public final class WorkflowEngine {
         if (target == null) {
             throw new BadParamsException("重开节点不在定义快照中: " + targetId);
         }
+        if (input != null && !input.isBlank() && NodeDef.TYPE_COMMAND.equals(target.type())) {
+            // BUG-02 修复：命令节点输入=command 本体（文档语义不变），但静默丢弃替换
+            // 会让调用方白等一次注定失败的续跑——显式拒绝并指路
+            throw new BadParamsException("命令节点的输入为 command 本体,不支持 input 替换;"
+                    + "请改用 workflow_update 修改定义后重跑: " + targetId);
+        }
         if (taskExec != null && meta.originTaskId() != null
                 && !meta.originTaskId().equals(taskExec.subjectId())) {
             throw new BadParamsException("originTaskId 与绑定的任务不一致(meta=" + meta.originTaskId()

@@ -433,6 +433,30 @@ class WorkflowRerunTest {
         assertThat(meta(id).status()).isEqualTo(InstanceStatus.FAILED);
     }
 
+    @Test
+    void rerunRejectsInputReplacementForCommandNode() throws Exception {
+        // BUG-02：命令节点输入=command 本体,传 input 替换须显式报错——旧实现静默丢弃,
+        // 调用方白等一次注定失败的续跑
+        boolean win = System.getProperty("os.name").toLowerCase().contains("win");
+        String fail = win ? "exit /b 3" : "exit 3";
+        Definition d = save(
+                DefinitionValidatorTest.node("s", "start"),
+                DefinitionValidatorTest.node("c1", "command").command(fail),
+                DefinitionValidatorTest.edge("e1", "s", "c1"));
+        JsonNode r = Json.parse(tools.workflow_run(d.id(), null, null));
+        assertThat(r.path("status").asString()).isEqualTo("failed");
+        String id = r.path("instanceId").asString();
+
+        JsonNode rerun = Json.parse(tools.workflow_rerun(id, "c1", "echo fixed"));
+        assertThat(rerun.path("error").asString()).contains("不支持 input 替换");
+        assertThatThrownBy(() -> engine.rerun(id, "c1", "echo fixed", task))
+                .isInstanceOf(BadParamsException.class)
+                .hasMessageContaining("workflow_update");
+        // 实例未被启动(仍 failed,无新 runs)
+        assertThat(meta(id).status()).isEqualTo(InstanceStatus.FAILED);
+        assertThat(runs(id).stream().filter(rec -> "c1".equals(rec.nodeId()))).hasSize(1);
+    }
+
     // ══════════════════════════ 阻塞与级联取消（同 run 语义） ══════════════════════════
 
     @Test
