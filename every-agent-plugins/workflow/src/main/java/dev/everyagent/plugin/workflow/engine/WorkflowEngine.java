@@ -9,8 +9,10 @@ import java.util.Map;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
@@ -27,11 +29,12 @@ import dev.everyagent.plugin.api.model.EmitEvent;
 import dev.everyagent.plugin.api.proto.SnowflakeId;
 import dev.everyagent.plugin.api.slash.SlashTokenEncoder;
 import dev.everyagent.plugin.api.util.RootCause;
+import dev.everyagent.plugin.api.model.ModelConfig;
 import dev.everyagent.plugin.workflow.engine.NodeRunners.AiNodeRunner;
 import dev.everyagent.plugin.workflow.engine.NodeRunners.CommandNodeRunner;
 import dev.everyagent.plugin.workflow.engine.NodeRunners.Decision;
 import dev.everyagent.plugin.workflow.engine.NodeRunners.NodeResult;
-import dev.everyagent.plugin.workflow.engine.NodeRunners.SupervisorRunner;
+import dev.everyagent.plugin.workflow.model.AgentDef;
 import dev.everyagent.plugin.workflow.model.Definition;
 import dev.everyagent.plugin.workflow.model.EdgeDef;
 import dev.everyagent.plugin.workflow.model.EventLine;
@@ -39,6 +42,7 @@ import dev.everyagent.plugin.workflow.model.InstanceMeta;
 import dev.everyagent.plugin.workflow.model.InstanceStatus;
 import dev.everyagent.plugin.workflow.model.NodeDef;
 import dev.everyagent.plugin.workflow.model.RunRecord;
+import dev.everyagent.plugin.workflow.model.VariableDef;
 import dev.everyagent.plugin.workflow.store.WorkflowStore;
 
 /**
@@ -50,7 +54,7 @@ import dev.everyagent.plugin.workflow.store.WorkflowStore;
  * 并行节点各自虚拟线程；<b>同 agent 名节点全局互斥</b>（fair 锁，锁粒度=整个 run——
  * 读种子→发指令→run→事件追加，保证后跑节点读到上游完整事件流）。
  *
- * <p><b>循环上限</b>：调度时 {@code runCount+1 > maxRuns} 触发错误策略（fail/supervisor/askUser）；
+ * <p><b>循环上限</b>：调度时 {@code runCount+1 > maxRuns} 触发错误策略（fail/askUser）；
  * 错误策略的 retry 决策绕过上限（否则一次失败即永锁）。
  *
  * <p><b>完成判定</b>：无运行中节点、无挂起决策、无未消费激活（此时剩余 pending 节点均为
@@ -62,9 +66,15 @@ import dev.everyagent.plugin.workflow.store.WorkflowStore;
  * <p><b>异常契约</b>：InterruptedException（含流取消）→ 取消路径；ModelCallException/其他 →
  * 节点失败 → 错误策略。agent 终态由 claimTerminal CAS 收口不重复（与 advisor 链双通道）。
  *
+ * <p><b>错误策略 fail-fast（§7.20）</b>：独立督导 agent（SupervisorRunner 模型会话）已删除
+ * ——任务内运行失败即 fail-fast（supervisor 就是主 agent：错误上下文经 workflow_run 工具
+ * 结果回传，由主 agent 判断后可用 workflow_rerun 从中断节点续跑）；OnError.SUPERVISOR
+ * 枚举值仅为旧定义快照反序列化兼容保留，运行语义=fail。retry/retryWithInput 决策内核
+ * 保留（Decision/applyDecision，供 standalone askUser 挂起的 decide RPC 与 rerun 复用）。
+ *
  * <p>引擎不阻塞 RPC 线程：{@link #start} 异步开跑（调度器跑虚拟线程），本类即
- * workflow.run RPC 的后端入口（RPC 装配在步骤 6）。任务内运行经
- * {@link #start(InstanceMeta, ExecContext)} 传入 origin 任务 ExecContext（AI 节点/督导
+ * workflow.run RPC 的后端入口。任务内运行经
+ * {@link #start(InstanceMeta, ExecContext)} 传入 origin 任务 ExecContext（AI 节点
  * 装配与事件单写任务域的绑定源，§7.20.8）；无绑定的含 AI 节点定义在 start 即拒。
  */
 public final class WorkflowEngine {
@@ -110,7 +120,7 @@ public final class WorkflowEngine {
 
     /**
      * 启动实例并绑定 origin 任务（任务内运行的入口）：任务 ExecContext 存入实例运行态
-     * （{@link WorkflowRuntime#taskExec()}），AI 节点/督导经它装配 agent 与单写任务事件流。
+     * （{@link WorkflowRuntime#taskExec()}），AI 节点经它装配 agent 与单写任务事件流。
      *
      * <p><b>fail-fast 守卫</b>：定义快照含 AI 节点而绑定不可用（未传 / 任务事件口已失效）
      * 时拒绝启动（引导经任务运行，§7.20.8）；绑定与 meta.originTaskId 不一致同样拒绝。
@@ -275,6 +285,98 @@ public final class WorkflowEngine {
         return true;
     }
 
+    /**
+     * 实例终态等待口（workflow_run 工具的阻塞实现，§7.20）：可中断（虚拟线程上阻塞合法，
+     * 任务停止的中断直达本等待），无忙轮询——实例终态收口（{@code finish}）时 latch
+     * 放行。醒来后从 store 读终态 meta（finish 先写终态 meta 再注销运行态，故返回值恒为
+     * 终态投影）。
+     *
+     * @return 终态 meta；超时仍在运行 → null；实例不存在 → null
+     */
+    public InstanceMeta awaitTerminalMeta(String instanceId, long timeoutMs)
+            throws InterruptedException {
+        long deadline = System.currentTimeMillis() + Math.max(0, timeoutMs);
+        while (true) {
+            InstanceRun r = runs.get(instanceId);
+            if (r == null) {
+                return store.findInstance(instanceId)
+                        .filter(m -> m.status() != null && m.status().terminal())
+                        .orElse(null);
+            }
+            long remain = deadline - System.currentTimeMillis();
+            if (remain <= 0) {
+                return null; // 仍在运行，本次等待窗口耗尽
+            }
+            r.terminalLatch.await(remain, TimeUnit.MILLISECONDS);
+            // 醒来（终态/超时/虚假唤醒）→ 循环重读运行态
+        }
+    }
+
+    // ══════════════════════════ 运行前校验（RPC 与 workflow_run 工具共用） ══════════════════════════
+
+    /**
+     * 运行前校验（workflow.run RPC 与 workflow_run 工具的<b>公共方法</b>，两处共用同一
+     * 实现）：required 变量校验（缺→BAD_PARAMS 列出缺失名；默认值可满足 required——
+     * 与渲染口径一致）+ 定义引用的模型配置存在性校验（agent 声明与节点覆盖全查，
+     * 不存在→BAD_PARAMS 带定位；configId=null=用系统默认模型不在校验范围）。
+     */
+    public void validateForRun(Definition def, Map<String, String> variables) {
+        List<String> missing = missingRequiredVariables(def, variables);
+        if (!missing.isEmpty()) {
+            throw new BadParamsException("缺少必填运行变量: " + String.join(", ", missing));
+        }
+        List<String> unknown = unknownModelConfigs(def);
+        if (!unknown.isEmpty()) {
+            throw new BadParamsException("模型配置不存在: " + String.join("; ", unknown));
+        }
+    }
+
+    /** required 且运行变量既未提供也无默认值的名字（默认值可满足 required——渲染口径一致）。 */
+    private static List<String> missingRequiredVariables(Definition def, Map<String, String> variables) {
+        List<String> missing = new ArrayList<>();
+        for (VariableDef v : def.variablesOrEmpty()) {
+            if (v == null || v.name() == null || !Boolean.TRUE.equals(v.required())) {
+                continue;
+            }
+            String provided = variables.get(v.name());
+            if ((provided == null || provided.isEmpty())
+                    && (v.defaultValue() == null || v.defaultValue().isEmpty())) {
+                missing.add(v.name());
+            }
+        }
+        return missing;
+    }
+
+    /**
+     * 定义引用的模型配置存在性（经 {@code services.modelConfigs()}）：agent 声明与节点
+     * 覆盖全查。configId=null=用系统默认模型，不在校验范围。引用处带定位
+     * （「agent 名/节点名 → configId」逐项列出）。
+     */
+    private List<String> unknownModelConfigs(Definition def) {
+        LinkedHashSet<String> known = new LinkedHashSet<>();
+        for (ModelConfig c : services.modelConfigs()) {
+            if (c != null && c.configId() != null) {
+                known.add(c.configId());
+            }
+        }
+        List<String> unknown = new ArrayList<>();
+        LinkedHashSet<String> reported = new LinkedHashSet<>();
+        for (AgentDef a : def.agentsOrEmpty()) {
+            if (a != null && a.modelConfigId() != null && !known.contains(a.modelConfigId())
+                    && reported.add(a.modelConfigId())) {
+                unknown.add("agent「" + (a.name() == null ? "" : a.name()) + "」→ " + a.modelConfigId());
+            }
+        }
+        for (NodeDef n : def.nodesOrEmpty()) {
+            if (n != null && n.modelConfigId() != null && !known.contains(n.modelConfigId())
+                    && reported.add(n.modelConfigId())) {
+                unknown.add("节点「" + (n.name() == null || n.name().isBlank() ? n.id() : n.name())
+                        + "」→ " + n.modelConfigId());
+            }
+        }
+        return unknown;
+    }
+
     // ══════════════════════════ 实例运行态 ══════════════════════════
 
     /** 单实例调度器状态（全部内存态——重启即 failed，无需恢复，计划已定）。 */
@@ -296,13 +398,10 @@ public final class WorkflowEngine {
         final ConcurrentHashMap<String, ReentrantLock> agentLocks = new ConcurrentHashMap<>();
         /** 运行中节点线程（取消/失败收口时中断）。 */
         final ConcurrentHashMap<String, Thread> nodeThreads = new ConcurrentHashMap<>();
-        /** runNo → 已落盘 RunRecord（supervisor 决策链追加时重写）。 */
+        /** runNo → 已落盘 RunRecord（终态后供失败上下文/rerun 取节点历史）。 */
         final ConcurrentHashMap<Integer, RunRecord> runRecords = new ConcurrentHashMap<>();
-        /** nodeId:runNo → supervisor 介入链。 */
-        final ConcurrentHashMap<String, List<RunRecord.SupervisorEntry>> supervisorChains =
-                new ConcurrentHashMap<>();
-        /** nodeId → supervisor 已介入次数（上限 3）。 */
-        final ConcurrentHashMap<String, Integer> supervisorAttempts = new ConcurrentHashMap<>();
+        /** 终态放行 latch（{@code finish} 收口尾 countDown；awaitTerminalMeta 的可中断等待点）。 */
+        final CountDownLatch terminalLatch = new CountDownLatch(1);
         /** nodeId:runNo → wf.node trace 固定 EmitEvent.id（started 生成、done/failed 同 id 重发 → 任务域 upsert 原地更新一行）。 */
         final ConcurrentHashMap<String, Long> traceIds = new ConcurrentHashMap<>();
         final AtomicInteger runCounter;
@@ -578,7 +677,12 @@ public final class WorkflowEngine {
 
     // ══════════════════════════ 错误策略 ══════════════════════════
 
-    /** 错误策略分派：fail（实例失败）/ supervisor（督导决策）/ askUser（挂起等用户）。 */
+    /**
+     * 错误策略分派：fail（实例失败）/ askUser（挂起等用户）。
+     * <b>fail-fast（§7.20）</b>：SUPERVISOR（含缺省）语义=FAIL——独立督导 agent 已删除，
+     * 任务内运行的「supervisor」就是主 agent（错误上下文经 workflow_run 工具结果回传）；
+     * 枚举值仅为旧定义快照反序列化兼容保留。
+     */
     private void handleNodeError(InstanceRun r, NodeDef node, int runNo, String message) {
         if (r.stopping || r.status.get().terminal()) {
             return;
@@ -586,10 +690,9 @@ public final class WorkflowEngine {
         var onError = r.snapshot.onError();
         try {
             switch (onError == null ? dev.everyagent.plugin.workflow.model.OnError.SUPERVISOR : onError) {
-                case FAIL -> failInstance(r, "节点「" + display(node) + "」失败: " + message,
+                case FAIL, SUPERVISOR -> failInstance(r, "节点「" + display(node) + "」失败: " + message,
                         node.id(), runNo);
                 case ASK_USER -> askAndWait(r, node, runNo, message);
-                case SUPERVISOR -> supervise(r, node, runNo, message);
             }
         } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
@@ -653,30 +756,6 @@ public final class WorkflowEngine {
         applyDecision(r, node, runNo, d, errorMessage);
     }
 
-    /** supervisor 策略：结构化错误上下文跑督导会话线，决策协议见 SupervisorRunner。 */
-    private void supervise(InstanceRun r, NodeDef node, int runNo, String message)
-            throws InterruptedException {
-        int attempt = r.supervisorAttempts.merge(node.id(), 1, Integer::sum);
-        if (attempt > NodeRunners.SUPERVISOR_MAX_ATTEMPTS) {
-            failInstance(r, "节点「" + display(node) + "」supervisor 介入次数达上限("
-                    + NodeRunners.SUPERVISOR_MAX_ATTEMPTS + ")", node.id(), runNo);
-            return;
-        }
-        String context = NodeRunners.buildErrorContext(r.snapshot.name(), node, runNo, message,
-                historyPreviews(r, node, runNo), priorDecisionLines(r, node),
-                NodeRunners.SUPERVISOR_MAX_ATTEMPTS - attempt);
-        Decision d = new SupervisorRunner().decide(r.runtime.taskExec(), r.instanceId,
-                r.snapshot, context, r.agentLock(NodeRunners.SUPERVISOR_AGENT));
-        if (d == null) {
-            log.warn("[workflow] supervisor 决策不可解析,降级 askUser instance={} node={}",
-                    r.instanceId, node.id());
-            askAndWait(r, node, runNo, message + "(supervisor 决策不可解析,已降级为用户决策)");
-            return;
-        }
-        recordSupervisorDecision(r, node, runNo, attempt, d);
-        applyDecision(r, node, runNo, d, message);
-    }
-
     /** 决策落地：retry（绕上限重跑）/ retryWithInput（替换输入重跑）/ skip（终态+全出边激活）/ fail。 */
     private void applyDecision(InstanceRun r, NodeDef node, int runNo, Decision d,
             String errorMessage) {
@@ -718,31 +797,6 @@ public final class WorkflowEngine {
             tryScheduleLocked(r, node.id());
             checkCompletionLocked(r);
         }
-    }
-
-    /** supervisor 决策留档：runs 记录介入链重写 + supervisor.decision 事件。 */
-    private void recordSupervisorDecision(InstanceRun r, NodeDef node, int runNo, int attempt,
-            Decision d) {
-        String key = node.id() + ":" + runNo;
-        List<RunRecord.SupervisorEntry> chain = r.supervisorChains.computeIfAbsent(key,
-                k -> new java.util.concurrent.CopyOnWriteArrayList<>());
-        chain.add(new RunRecord.SupervisorEntry(attempt,
-                new RunRecord.SupervisorDecision(d.action(), d.input(), d.reason()), d.reason()));
-        RunRecord rec = r.runRecords.get(runNo);
-        if (rec != null) {
-            RunRecord rewritten = new RunRecord(rec.runNo(), rec.nodeId(), rec.nodeName(),
-                    rec.nodeType(), rec.startedAt(), rec.endedAt(), rec.durationMs(), rec.input(),
-                    rec.output(), rec.activatedEdges(), rec.agent(), rec.error(), List.copyOf(chain));
-            r.runRecords.put(runNo, rewritten);
-            store.saveRunRecord(r.wsId, r.instanceId, rewritten);
-        }
-        var payload = Json.obj().put("nodeId", node.id()).put("runNo", runNo)
-                .set("decision", Json.obj().put("action", d.action())
-                        .put("input", d.input() == null ? "" : d.input()));
-        if (d.reason() != null && !d.reason().isBlank()) {
-            payload.put("reason", d.reason());
-        }
-        store.appendEvent(r.wsId, r.instanceId, "supervisor.decision", payload);
     }
 
     // ══════════════════════════ 实例收口 ══════════════════════════
@@ -812,6 +866,7 @@ public final class WorkflowEngine {
         }
         runs.remove(r.instanceId);
         r.vt.shutdownNow();
+        r.terminalLatch.countDown();
         log.info("[workflow] 实例终态 id={} status={}", r.instanceId, terminal);
     }
 
@@ -890,12 +945,12 @@ public final class WorkflowEngine {
         long endedAt = System.currentTimeMillis();
         RunRecord.RunInput input = in == null || in.raw() == null ? null
                 : new RunRecord.RunInput(in.raw(), in.rendered(), in.visibleToAi());
-        List<RunRecord.SupervisorEntry> chain = r.supervisorChains.get(node.id() + ":" + runNo);
+        // supervisor 介入链已随督导机制删除（RunRecord.supervisor 字段仅为旧 runs 文件
+        // 反序列化兼容保留，恒 null——ModelJsonRoundTrip 兼容测试照旧过）
         return new RunRecord(runNo, node.id(), node.name(), node.type(), startedAt, endedAt,
                 endedAt - startedAt, input,
                 result == null ? null : result.output(), activated,
-                result == null ? null : result.agentTrace(), error,
-                chain == null || chain.isEmpty() ? null : List.copyOf(chain));
+                result == null ? null : result.agentTrace(), error, null);
     }
 
     private void replaceNodeInput(InstanceRun r, NodeDef node, String newInput) {
@@ -1099,38 +1154,5 @@ public final class WorkflowEngine {
             log.warn("[workflow] 工作区注册表解析失败 wsId={}", wsId, e);
         }
         return null;
-    }
-
-    /** 该节点此前完成的运行输出摘要（supervisor 错误上下文用）。 */
-    private List<String> historyPreviews(InstanceRun r, NodeDef node, int currentRunNo) {
-        List<String> out = new ArrayList<>();
-        r.runRecords.values().stream()
-                .filter(rec -> rec != null && node.id().equals(rec.nodeId())
-                        && rec.runNo() != null && rec.runNo() < currentRunNo)
-                .sorted(java.util.Comparator.comparing(RunRecord::runNo))
-                .forEach(rec -> {
-                    RunRecord.RunOutput o = rec.output();
-                    String text = o == null ? "" : (o.text() != null ? o.text()
-                            : (o.stdout() == null ? "" : o.stdout())
-                                    + (o.stderr() == null ? "" : o.stderr()));
-                    out.add("run #" + rec.runNo() + " → " + truncate(text, 200));
-                });
-        return out;
-    }
-
-    /** 该节点此前的介入决策链文本（supervisor 错误上下文用）。 */
-    private List<String> priorDecisionLines(InstanceRun r, NodeDef node) {
-        List<String> out = new ArrayList<>();
-        for (Map.Entry<String, List<RunRecord.SupervisorEntry>> e : r.supervisorChains.entrySet()) {
-            if (!e.getKey().startsWith(node.id() + ":")) {
-                continue;
-            }
-            for (RunRecord.SupervisorEntry entry : e.getValue()) {
-                out.add("attempt " + entry.attempt() + ": " + entry.decision().action()
-                        + (entry.reason() == null || entry.reason().isBlank()
-                                ? "" : " (" + truncate(entry.reason(), 120) + ")"));
-            }
-        }
-        return out;
     }
 }

@@ -1,31 +1,23 @@
 package dev.everyagent.plugin.workflow.rpc;
 
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.plugin.api.WorkerPluginContext;
-import dev.everyagent.plugin.api.WorkerServices;
 import dev.everyagent.plugin.api.exception.BadParamsException;
 import dev.everyagent.plugin.api.exception.NotFoundException;
-import dev.everyagent.plugin.api.model.ModelConfig;
 import dev.everyagent.plugin.api.rpc.RpcContext;
 import dev.everyagent.plugin.api.rpc.RpcMethod;
 import dev.everyagent.plugin.workflow.engine.WorkflowEngine;
-import dev.everyagent.plugin.workflow.model.AgentDef;
 import dev.everyagent.plugin.workflow.model.Definition;
 import dev.everyagent.plugin.workflow.model.EventLine;
 import dev.everyagent.plugin.workflow.model.InstanceMeta;
 import dev.everyagent.plugin.workflow.model.InstanceStatus;
 import dev.everyagent.plugin.workflow.model.NodeDef;
-import dev.everyagent.plugin.workflow.model.OnError;
 import dev.everyagent.plugin.workflow.model.RunRecord;
-import dev.everyagent.plugin.workflow.model.VariableDef;
 import dev.everyagent.plugin.workflow.store.WorkflowStore;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.ArrayNode;
@@ -78,12 +70,10 @@ public final class WorkflowRpc {
 
     private final WorkflowStore store;
     private final WorkflowEngine engine;
-    private final WorkerServices services;
 
-    public WorkflowRpc(WorkflowStore store, WorkflowEngine engine, WorkerServices services) {
+    public WorkflowRpc(WorkflowStore store, WorkflowEngine engine) {
         this.store = store;
         this.engine = engine;
-        this.services = services;
     }
 
     /** 方法名 → 处理器（注册与测试共用同一张表，防两处漂移）。 */
@@ -180,9 +170,10 @@ public final class WorkflowRpc {
 
     /**
      * workflow.run {workspace, definitionId, variables?} → {instanceId}：
-     * required 变量校验（缺→BAD_PARAMS）+ 模型配置存在性校验（不存在→BAD_PARAMS）；
-     * 立即创建实例并异步开跑（engine.start 只做状态迁移与首次调度，调度器跑虚拟线程，
-     * 不阻塞 RPC 线程）。
+     * required 变量校验（缺→BAD_PARAMS）+ 模型配置存在性校验（不存在→BAD_PARAMS）
+     * ——<b>与 workflow_run 工具共用 {@link WorkflowEngine#validateForRun}</b>（同一方法
+     * 两处调用）；立即创建实例并异步开跑（engine.start 只做状态迁移与首次调度，调度器跑
+     * 虚拟线程，不阻塞 RPC 线程）。
      *
      * <p><b>无任务绑定直启仅限无 AI 节点定义</b>（测试/兼容通道，§7.20.8）：AI 节点
      * 会话/呈现单写 origin 任务域，故含 AI 节点的定义在 engine.start 即被拒
@@ -194,14 +185,7 @@ public final class WorkflowRpc {
         Definition def = store.getDefinition(ws, definitionId)
                 .orElseThrow(() -> new NotFoundException("工作流定义不存在: " + definitionId + " @工作区 " + ws));
         Map<String, String> variables = variablesParam(ctx);
-        List<String> missing = missingRequiredVariables(def, variables);
-        if (!missing.isEmpty()) {
-            throw new BadParamsException("缺少必填运行变量: " + String.join(", ", missing));
-        }
-        List<String> unknownConfigs = unknownModelConfigs(def);
-        if (!unknownConfigs.isEmpty()) {
-            throw new BadParamsException("模型配置不存在: " + String.join("; ", unknownConfigs));
-        }
+        engine.validateForRun(def, variables);
         InstanceMeta meta = store.createInstance(def, variables);
         engine.start(meta);
         ctx.ok(Json.obj().put("instanceId", meta.id()));
@@ -380,59 +364,6 @@ public final class WorkflowRpc {
             out.put(e.getKey(), v.asString());
         }
         return out;
-    }
-
-    /** required 且运行变量既未提供也无默认值的名字（默认值可满足 required——渲染口径一致）。 */
-    private static List<String> missingRequiredVariables(Definition def, Map<String, String> variables) {
-        List<String> missing = new ArrayList<>();
-        for (VariableDef v : def.variablesOrEmpty()) {
-            if (v == null || v.name() == null || !Boolean.TRUE.equals(v.required())) {
-                continue;
-            }
-            String provided = variables.get(v.name());
-            if ((provided == null || provided.isEmpty())
-                    && (v.defaultValue() == null || v.defaultValue().isEmpty())) {
-                missing.add(v.name());
-            }
-        }
-        return missing;
-    }
-
-    /**
-     * 定义引用的模型配置存在性（经 services().modelConfigs()）：agent 声明与节点覆盖
-     * 全查；supervisor 仅 onError=supervisor（缺省同）时查。configId=null=用系统默认模型，
-     * 不在校验范围。引用处带定位（「agent 名/节点名 → configId」逐项列出）。
-     */
-    private List<String> unknownModelConfigs(Definition def) {
-        Set<String> known = new HashSet<>();
-        for (ModelConfig c : services.modelConfigs()) {
-            if (c != null && c.configId() != null) {
-                known.add(c.configId());
-            }
-        }
-        List<String> unknown = new ArrayList<>();
-        Set<String> reported = new LinkedHashSet<>();
-        for (AgentDef a : def.agentsOrEmpty()) {
-            if (a != null && a.modelConfigId() != null && !known.contains(a.modelConfigId())
-                    && reported.add(a.modelConfigId())) {
-                unknown.add("agent「" + orEmpty(a.name()) + "」→ " + a.modelConfigId());
-            }
-        }
-        for (NodeDef n : def.nodesOrEmpty()) {
-            if (n != null && n.modelConfigId() != null && !known.contains(n.modelConfigId())
-                    && reported.add(n.modelConfigId())) {
-                unknown.add("节点「" + (n.name() == null || n.name().isBlank() ? n.id() : n.name())
-                        + "」→ " + n.modelConfigId());
-            }
-        }
-        if (def.onError() == null || def.onError() == OnError.SUPERVISOR) {
-            Definition.Supervisor sup = def.supervisor();
-            if (sup != null && sup.modelConfigId() != null && !known.contains(sup.modelConfigId())
-                    && reported.add(sup.modelConfigId())) {
-                unknown.add("supervisor → " + sup.modelConfigId());
-            }
-        }
-        return unknown;
     }
 
     /** 可选 workspace 过滤参数（缺省/空白 → null=不过滤）。 */

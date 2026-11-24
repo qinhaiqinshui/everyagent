@@ -67,7 +67,7 @@ class WorkflowRpcTest {
                 List.of(new ModelConfig("gpt5", "openai", "http://localhost", null, "gpt-5", null)));
         store = new WorkflowStore(workspaces);
         engine = new WorkflowEngine(store, services);
-        rpc = new WorkflowRpc(store, engine, services);
+        rpc = new WorkflowRpc(store, engine);
     }
 
     // ── 调用桩与工具 ──

@@ -32,12 +32,16 @@ import dev.everyagent.plugin.workflow.model.VariableDef;
 import org.springframework.ai.chat.messages.Message;
 
 /**
- * 节点执行器三件套：命令节点（NativeExec 直跑）/ AI 节点（照搬子 agent 插件模式，经
- * origin 任务 ExecContext 的 agentFactory 装配，事件单写任务域，§7.20.8）/ supervisor
- * 节点（错误策略督导决策协议，同一任务 ExecContext 装配链）。
+ * 节点执行器两件套：命令节点（NativeExec 直跑）/ AI 节点（照搬子 agent 插件模式，经
+ * origin 任务 ExecContext 的 agentFactory 装配，事件单写任务域，§7.20.8）。
  *
  * <p>执行器只负责「把一个节点跑出结果」，调度/落盘/事件/错误策略收口在 {@link WorkflowEngine}
  * ——本类无状态、不持实例内存（锁由引擎传入）。
+ *
+ * <p><b>已删除</b>：SupervisorRunner（独立督导会话）随 fail-fast 改造整体移除
+ * （supervisor 就是主 agent，§7.20）；{@link Decision}/{@link #parseDecision}/
+ * {@link #buildErrorContext} 保留——决策内核服务 standalone askUser 的 decide RPC 与
+ * workflow_rerun（retryWithInput 语义）。
  */
 public final class NodeRunners {
 
@@ -45,24 +49,6 @@ public final class NodeRunners {
 
     /** 命令节点缺省超时（节点未配置 timeoutMs 时）。 */
     public static final long DEFAULT_COMMAND_TIMEOUT_MS = 120_000;
-
-    /** 每节点 supervisor 介入上限（超过即 fail）。 */
-    public static final int SUPERVISOR_MAX_ATTEMPTS = 3;
-
-    /** supervisor 决策 JSON 解析失败的重试次数（再失败降级 askUser）。 */
-    public static final int SUPERVISOR_PARSE_RETRIES = 1;
-
-    /** supervisor 缺省系统提示词（定义级 supervisor.systemPrompt 为空时使用）。 */
-    public static final String DEFAULT_SUPERVISOR_PROMPT = "你是工作流督导 agent。工作流节点执行失败时会向你提供结构化错误上下文,"
-            + "你负责诊断根因并给出处置决策。只输出纯 JSON,不要输出任何其他文本,格式:"
-            + "{\"action\":\"retry|skip|fail|retryWithInput\",\"input\":\"...\",\"reason\":\"...\"}。"
-            + "action 语义:retry=用原输入重试该节点;retryWithInput=用 input 字段替换节点输入后重试"
-            + "(此时 input 必填);skip=跳过该节点继续下游;fail=终止整个工作流实例。"
-            + "先在 reason 字段诊断根因再决策;保持保守:仅当问题看起来是可重试的瞬时问题时才 retry,"
-            + "反复失败优先 skip 或 fail。";
-
-    /** 督导 agent 固定名（保留名,与全部工作 agent 隔离的自己一条会话线）。 */
-    public static final String SUPERVISOR_AGENT = "supervisor";
 
     private static final Pattern VAR_REF = Pattern.compile("\\{\\{\\s*([A-Za-z0-9_-]+)\\s*\\}\\}");
 
@@ -82,7 +68,7 @@ public final class NodeRunners {
             RunRecord.AgentTrace agentTrace) {
     }
 
-    /** supervisor/askUser 决策协议（四 action；input 仅 retryWithInput 携带）。 */
+    /** 决策协议（四 action；input 仅 retryWithInput 携带）。askUser 挂起的 decide RPC 与 rerun 共用。 */
     public record Decision(String action, String input, String reason) {
 
         public static final String RETRY = "retry";
@@ -318,96 +304,6 @@ public final class NodeRunners {
         }
     }
 
-    // ══════════════════════════ supervisor ══════════════════════════
-
-    /**
-     * supervisor 执行器（错误策略 onError=supervisor）：以结构化错误上下文跑督导会话线
-     * （固定名 supervisor，经任务档案续写——连续介入记得此前决策），
-     * 输出纯 JSON 决策（剥 ```json 围栏容忍）；解析失败重试一次，再失败返回 null
-     * （调用方降级 askUser）。督导自身异常（模型故障等）同样返回 null 走降级。
-     */
-    public static final class SupervisorRunner {
-
-        SupervisorRunner() {
-        }
-
-        /**
-         * @param errorContext 结构化错误上下文（{@link #buildErrorContext} 产出）
-         * @return 解析成功的决策；两轮均不可解析/督导自身失败 → null（降级 askUser）
-         */
-        public Decision decide(ExecContext taskExec, String instanceId,
-                Definition snapshot, String errorContext, ReentrantLock supervisorLock)
-                throws InterruptedException {
-            String input = errorContext;
-            for (int attempt = 0; attempt <= SUPERVISOR_PARSE_RETRIES; attempt++) {
-                String output;
-                try {
-                    output = runSupervisorAgent(taskExec, instanceId, snapshot, input,
-                            supervisorLock);
-                } catch (InterruptedException ie) {
-                    throw ie;
-                } catch (Throwable t) {
-                    log.warn("[workflow] supervisor 运行失败(降级 askUser) instance={}", instanceId, t);
-                    return null;
-                }
-                Decision d = parseDecision(output);
-                if (d != null) {
-                    return d;
-                }
-                input = errorContext + "\n\n[系统提示] 你上一次的输出不是合法的决策 JSON。"
-                        + "请严格只输出 {\"action\":\"retry|skip|fail|retryWithInput\","
-                        + "\"input\":\"...\",\"reason\":\"...\"} 这一个 JSON 对象,不要有任何其他文本。";
-            }
-            return null;
-        }
-
-        /** 督导会话线执行（同 AI 节点命名 agent 机制，经任务 ExecContext 装配；失败抛出由 decide 处理）。 */
-        private String runSupervisorAgent(ExecContext taskExec, String instanceId,
-                Definition snapshot, String input, ReentrantLock supervisorLock)
-                throws InterruptedException {
-            supervisorLock.lockInterruptibly();
-            try {
-                requireTaskBinding(taskExec);
-                String agentKey = SUPERVISOR_AGENT + "#" + instanceId;
-                String configId = snapshot.supervisor() == null ? null
-                        : snapshot.supervisor().modelConfigId();
-                String prompt = snapshot.supervisor() != null
-                        && snapshot.supervisor().systemPrompt() != null
-                        && !snapshot.supervisor().systemPrompt().isBlank()
-                                ? snapshot.supervisor().systemPrompt() : DEFAULT_SUPERVISOR_PROMPT;
-
-                List<Message> seed = AgentSessions.ensureAlternation(
-                        loadArchive(taskExec, agentKey));
-                emitInstruction(taskExec, agentKey, input, input);
-                Agent agent = taskExec.agentFactory()
-                        .create(agentKey, configId)
-                        .title("工作流督导")
-                        .creator("workflow-supervisor")
-                        .tools(ExcludedTools.toRemove(), AgentBuilder.ModifyMode.REMOVE)
-                        .systemPrompt(prompt)
-                        .conversation(seed)
-                        .userInput(input)
-                        .build();
-                try {
-                    agent.run();
-                    agent.claimTerminal("completed");
-                } catch (InterruptedException ie) {
-                    Thread.currentThread().interrupt();
-                    agent.claimTerminal("stopped", "已取消");
-                    throw ie;
-                } catch (Throwable t) {
-                    agent.claimTerminal("error", RootCause.summary(t));
-                    throw t;
-                } finally {
-                    agent.finished(true);
-                }
-                return agent.lastText() == null ? "" : agent.lastText();
-            } finally {
-                supervisorLock.unlock();
-            }
-        }
-    }
-
     // ══════════════════════════ 共用 ══════════════════════════
 
     /** 经任务档案口读 agent 会话档案（未绑定/端口缺失/IO 失败返回空表，不抛）。 */
@@ -450,8 +346,8 @@ public final class NodeRunners {
     }
 
     /**
-     * supervisor 决策解析：剥 ```json 围栏与前后杂文本，取首个 '{' 到末个 '}' 的片段解析
-     * {action, input?, reason?}；action 非四值之一/无 JSON 片段 → null。
+     * 决策文本解析（rerun/主 agent 决策输入用）：剥 ```json 围栏与前后杂文本，取首个 '{' 到末个 '}'
+     * 的片段解析 {action, input?, reason?}；action 非四值之一/无 JSON 片段 → null。
      */
     public static Decision parseDecision(String output) {
         if (output == null || output.isBlank()) {
@@ -478,7 +374,7 @@ public final class NodeRunners {
     }
 
     /**
-     * 结构化错误上下文（supervisor 的输入；askUser 的 context 同源裁剪）：
+     * 结构化错误上下文（workflow_run 工具失败结果/askUser 挂起 context 同源）：
      * 定义名/节点名/nodeId/runNo/错误消息/历史输出摘要/此前介入决策链/剩余次数。
      */
     public static String buildErrorContext(String definitionName, NodeDef node, int runNo,

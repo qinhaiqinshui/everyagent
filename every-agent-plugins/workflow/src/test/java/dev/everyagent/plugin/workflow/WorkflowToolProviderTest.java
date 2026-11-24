@@ -17,6 +17,7 @@ import dev.everyagent.plugin.api.model.ModelConfig;
 import dev.everyagent.plugin.api.spi.SandboxBackend;
 import dev.everyagent.plugin.api.spi.ToolContext;
 import dev.everyagent.plugin.api.spi.WorkspaceManager;
+import dev.everyagent.plugin.workflow.engine.WorkflowEngine;
 import dev.everyagent.plugin.workflow.engine.WorkflowSubject;
 import dev.everyagent.plugin.workflow.store.WorkflowStore;
 
@@ -33,6 +34,7 @@ class WorkflowToolProviderTest {
 
     FakeWorkspaces workspaces;
     WorkflowStore store;
+    WorkflowEngine engine;
     WorkflowToolProvider provider;
 
     @BeforeEach
@@ -40,15 +42,19 @@ class WorkflowToolProviderTest {
         workspaces = new FakeWorkspaces(home);
         workspaces.register(home.resolve("proj"), WS_A);
         store = new WorkflowStore(workspaces);
-        provider = new WorkflowToolProvider(store);
+        engine = new WorkflowEngine(store, new Fakes.FakeWorkerServices(workspaces,
+                new Fakes.RealNativeExec(), new Fakes.FakeAgentFactory(), List.of()));
+        provider = new WorkflowToolProvider(store, engine);
     }
 
     @Test
     void hiddenToolsRegisteredWithExpectedNames() {
         List<ToolCallback> hidden = provider.createHiddenTools(taskCtx());
         assertThat(hidden).extracting(tc -> tc.getToolDefinition().name()).containsExactlyInAnyOrder(
-                "workflow_create", "workflow_get", "workflow_update", "workflow_delete", "workflow_list");
-        // 常规池为空（五工具全部 hidden）
+                "workflow_create", "workflow_get", "workflow_update", "workflow_delete", "workflow_list",
+                "workflow_run", "workflow_instance_status", "workflow_instance_log",
+                "workflow_instance_events", "workflow_instance_cancel");
+        // 常规池为空（十工具全部 hidden）
         assertThat(provider.createTools(taskCtx())).isEmpty();
         assertThat(provider.pluginId()).isEqualTo("workflow");
     }
@@ -83,7 +89,7 @@ class WorkflowToolProviderTest {
     @Test
     void fiveToolsCrudRoundTripThroughStore() {
         ToolContext ctx = taskCtx();
-        WorkflowTools tools = new WorkflowTools(store, ctx);
+        WorkflowTools tools = new WorkflowTools(store, engine, ctx);
 
         String definition = "{\"name\":\"评审流\",\"nodes\":["
                 + "{\"id\":\"n1\",\"type\":\"start\",\"name\":\"开始\"},"
@@ -123,7 +129,7 @@ class WorkflowToolProviderTest {
 
     @Test
     void listHonorsExplicitWorkspaceParamViaRegistry() {
-        WorkflowTools tools = new WorkflowTools(store, taskCtx());
+        WorkflowTools tools = new WorkflowTools(store, engine, taskCtx());
         tools.workflow_create("{\"name\":\"A\",\"nodes\":[{\"id\":\"n1\",\"type\":\"start\",\"name\":\"s\"}]}");
         // 未注册路径 → 报错 JSON（不抛异常回灌）
         String err = tools.workflow_list("Z:/not/registered");

@@ -548,10 +548,10 @@ class WorkflowEngineTest {
     }
 
     @Test
-    void errorPolicySupervisorSkipContinuesDownstream() throws Exception {
+    void onErrorSupervisorBehavesAsFailFast() throws Exception {
+        // fail-fast（§7.20）：独立督导已删除，SUPERVISOR（含缺省）语义=FAIL——
+        // 不起 supervisor 会话线、无 supervisor.decision 事件，实例直接 failed
         factory.script("writer", key -> Fakes.Script.failing(new RuntimeException("命令性失败")));
-        factory.script("supervisor", key -> Fakes.Script.echo(
-                "```json\n{\"action\":\"skip\",\"reason\":\"不可重试的配置错误\"}\n```"));
         Definition d = saveOnError(OnError.SUPERVISOR,
                 DefinitionValidatorTest.node("s", "start"),
                 DefinitionValidatorTest.node("n", "ai").agent("writer").maxRuns(10),
@@ -561,39 +561,38 @@ class WorkflowEngineTest {
                 new AgentDef("writer", null, null));
         InstanceMeta m = start(d);
         awaitTerminal(m.id());
-        assertThat(meta(m.id()).status()).isEqualTo(InstanceStatus.DONE);
+        assertThat(meta(m.id()).status()).isEqualTo(InstanceStatus.FAILED);
+        assertThat(meta(m.id()).error().message()).contains("失败");
+        assertThat(meta(m.id()).error().nodeId()).isEqualTo("n");
 
-        assertThat(eventNames(m.id())).contains("supervisor.decision", "node.skipped");
-        var decisionEv = events(m.id()).stream()
-                .filter(e -> "supervisor.decision".equals(e.event())).findFirst().orElseThrow();
-        assertThat(decisionEv.payload().path("decision").path("action").asString()).isEqualTo("skip");
-        assertThat(decisionEv.payload().path("reason").asString()).contains("配置错误");
-        // 跳过节点继续下游
-        assertThat(startedNodes(m.id())).contains("t");
-        // supervisor 会话线落任务档案（user.message + message + usage）
-        assertThat(task.agentLines("supervisor#" + m.id()))
-                .extracting(l -> l.event()).containsExactly("user.message", "message", "usage");
-        // runs 记录介入链
+        // 无督导会话、无决策事件；下游不被调度（fail-fast 收口）
+        assertThat(eventNames(m.id())).doesNotContain("supervisor.decision", "node.skipped", "wf.askUser");
+        assertThat(task.agentLinesByPrefix("supervisor#")).isEmpty();
+        assertThat(startedNodes(m.id())).doesNotContain("t");
+        // runs 留档失败（supervisor 介入链恒空）
         RunRecord rec = runs(m.id()).stream().filter(r -> "n".equals(r.nodeId()))
                 .findFirst().orElseThrow();
-        assertThat(rec.supervisor()).hasSize(1);
-        assertThat(rec.supervisor().get(0).decision().action()).isEqualTo("skip");
+        assertThat(rec.error()).isNotNull();
+        assertThat(rec.supervisor()).isNull();
     }
 
     @Test
-    void supervisorRetryWithInputReplacesNodeInput() throws Exception {
+    void askUserRetryWithInputReplacesNodeInput() throws Exception {
+        // 决策内核保留：retryWithInput 经 askUser 挂起 + decide RPC 落地（rerun 同源语义）
         AtomicInteger calls = new AtomicInteger();
         factory.script("writer", key -> calls.incrementAndGet() == 1
                 ? Fakes.Script.failing(new RuntimeException("输入不当"))
                 : Fakes.Script.echo("按新输入完成"));
-        factory.script("supervisor", key -> Fakes.Script.echo(
-                "{\"action\":\"retryWithInput\",\"input\":\"改用英文重写\",\"reason\":\"输入语言不匹配\"}"));
-        Definition d = saveOnError(OnError.SUPERVISOR,
+        Definition d = saveOnError(OnError.ASK_USER,
                 DefinitionValidatorTest.node("s", "start"),
                 DefinitionValidatorTest.node("n", "ai").agent("writer").maxRuns(10).input("原始输入"),
                 DefinitionValidatorTest.edge("e1", "s", "n"),
                 new AgentDef("writer", null, null));
         InstanceMeta m = start(d);
+        awaitStatus(m.id(), InstanceStatus.WAITING_USER);
+
+        InstanceMeta parked = meta(m.id());
+        engine.decide(m.id(), parked.pendingDecision().runNo(), "retryWithInput", "改用英文重写");
         awaitTerminal(m.id());
         assertThat(meta(m.id()).status()).isEqualTo(InstanceStatus.DONE);
 
@@ -606,49 +605,6 @@ class WorkflowEngineTest {
         List<Fakes.FakeAgent> writers = factory.built.stream()
                 .filter(a -> a.agentId().startsWith("writer#")).toList();
         assertThat(writers.get(1).userInput).isEqualTo("改用英文重写");
-    }
-
-    @Test
-    void supervisorUnparseableDegradesToAskUser() throws Exception {
-        factory.script("writer", key -> Fakes.Script.failing(new RuntimeException("持续失败")));
-        factory.script("supervisor", key -> Fakes.Script.echo("我觉得应该再试试看（非 JSON）"));
-        Definition d = saveOnError(OnError.SUPERVISOR,
-                DefinitionValidatorTest.node("s", "start"),
-                DefinitionValidatorTest.node("n", "ai").agent("writer").maxRuns(10),
-                DefinitionValidatorTest.edge("e1", "s", "n"),
-                new AgentDef("writer", null, null));
-        InstanceMeta m = start(d);
-        awaitStatus(m.id(), InstanceStatus.WAITING_USER);
-        assertThat(eventNames(m.id())).contains("wf.askUser");
-        // 解析失败重试一次：supervisor 会话线两轮指令（每轮 user/message/usage，任务档案）
-        assertThat(task.agentLines("supervisor#" + m.id()))
-                .extracting(l -> l.event())
-                .containsExactly("user.message", "message", "usage",
-                        "user.message", "message", "usage");
-        // 降级后用户决策 fail 收口
-        InstanceMeta parked = meta(m.id());
-        engine.decide(m.id(), parked.pendingDecision().runNo(), "fail", null);
-        awaitTerminal(m.id());
-        assertThat(meta(m.id()).status()).isEqualTo(InstanceStatus.FAILED);
-    }
-
-    @Test
-    void supervisorAttemptsCappedAtThree() throws Exception {
-        factory.script("writer", key -> Fakes.Script.failing(new RuntimeException("反复失败")));
-        factory.script("supervisor", key -> Fakes.Script.echo(
-                "{\"action\":\"retry\",\"reason\":\"再试一次\"}"));
-        Definition d = saveOnError(OnError.SUPERVISOR,
-                DefinitionValidatorTest.node("s", "start"),
-                DefinitionValidatorTest.node("n", "ai").agent("writer").maxRuns(10),
-                DefinitionValidatorTest.edge("e1", "s", "n"),
-                new AgentDef("writer", null, null));
-        InstanceMeta m = start(d);
-        awaitTerminal(m.id());
-        assertThat(meta(m.id()).status()).isEqualTo(InstanceStatus.FAILED);
-        assertThat(meta(m.id()).error().message()).contains("supervisor");
-        assertThat(meta(m.id()).error().message()).contains("上限");
-        // 3 次介入决策事件
-        assertThat(eventNames(m.id()).stream().filter("supervisor.decision"::equals).count()).isEqualTo(3);
     }
 
     // ══════════════════════════ 取消 ══════════════════════════
@@ -734,7 +690,8 @@ class WorkflowEngineTest {
         List<Fakes.FakeAgent> writers = factory.built.stream()
                 .filter(a -> a.agentId().startsWith("writer#")).toList();
         assertThat(writers).isNotEmpty();
-        // 断言在 builder 层：REMOVE 表收到了九个名字
+        // 断言在 builder 层：REMOVE 表收到了十五个名字（agent 族四件 + workflow CRUD 五件
+        // + 运行/查询五件 + rerun 防递归先占名）
         assertThat(factory.removeTables).isNotEmpty();
         List<String> removed = factory.removeTables.get(factory.removeTables.size() - 1).stream()
                 .map(tc -> tc.getToolDefinition().name())
@@ -742,7 +699,9 @@ class WorkflowEngineTest {
         assertThat(removed).containsExactlyInAnyOrder(
                 "run_agent", "list_agents", "wait_agents", "stop_agent",
                 "workflow_create", "workflow_get", "workflow_update",
-                "workflow_delete", "workflow_list");
+                "workflow_delete", "workflow_list",
+                "workflow_run", "workflow_instance_status", "workflow_instance_log",
+                "workflow_instance_events", "workflow_instance_cancel", "workflow_rerun");
     }
 
     @Test
