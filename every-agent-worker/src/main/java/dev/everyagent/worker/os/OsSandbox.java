@@ -20,7 +20,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 
 /**
  * OS 级进程沙箱门面（瘦身版）。
@@ -49,6 +48,10 @@ public final class OsSandbox implements SandboxBackend, NativeExec {
     private static final java.io.File NULL_INPUT = new java.io.File(
             System.getProperty("os.name").toLowerCase(java.util.Locale.ROOT).contains("win")
                     ? "NUL" : "/dev/null");
+
+    /** 平台判定（进程树终止策略分流）。 */
+    private static final boolean WINDOWS = System.getProperty("os.name")
+            .toLowerCase(java.util.Locale.ROOT).contains("win");
 
     private final WorkerProperties props;
     private final WorkerProperties.Sandbox cfg;
@@ -292,12 +295,13 @@ public final class OsSandbox implements SandboxBackend, NativeExec {
         pb.environment().putAll(sanitizedEnv(env, true));
         java.io.File outFile = null;
         java.io.File errFile = null;
+        Process p = null;
         try {
             outFile = createCarryFile("ea-stdout-", cwd);
             errFile = createCarryFile("ea-stderr-", cwd);
             pb.redirectOutput(ProcessBuilder.Redirect.to(outFile));
             pb.redirectError(ProcessBuilder.Redirect.to(errFile));
-            Process p = pb.start();
+            p = pb.start();
             boolean aborted;
             if (timeoutMs > 0) {
                 aborted = !p.waitFor(timeoutMs, TimeUnit.MILLISECONDS);
@@ -306,8 +310,8 @@ public final class OsSandbox implements SandboxBackend, NativeExec {
                 aborted = false;
             }
             if (aborted) {
-                p.destroyForcibly();
-                p.waitFor(5, TimeUnit.SECONDS);
+                killProcessTree(p);
+                p.waitFor(2, TimeUnit.SECONDS);
             }
             // 句柄随子进程退出关闭,故必须等进程结束/强杀后再读,否则拿到半份输出
             String outText = readCappedUtf8(outFile);
@@ -319,6 +323,9 @@ public final class OsSandbox implements SandboxBackend, NativeExec {
             return new ExecResult(capOutput(outText), capOutput(errText), p.exitValue(), false);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+            if (p != null) {
+                killProcessTree(p); // 取消路径同样不遗留子进程(与 runDirectCommand 对齐)
+            }
             return new ExecResult("", "exec 被中断", -1, true);
         } catch (IOException e) {
             return new ExecResult("", "exec 启动失败: " + e.getMessage(), 1, false);
@@ -388,6 +395,43 @@ public final class OsSandbox implements SandboxBackend, NativeExec {
         }
     }
 
+    /**
+     * 级联终止整棵进程树（超时/中止/取消共用）。
+     *
+     * <p>只杀直接子进程({@code destroyForcibly})会让孙进程脱离管理继续运行——工作流/AI
+     * 命令经 {@code cmd.exe /c} 派生的 powershell、构建脚本等在「已超时/已取消」之后仍
+     * 会对工作区产生副作用(rm/push/写盘),中止语义形同虚设。Windows 用
+     * {@code taskkill /T /F}(按进程树强杀,任意深度);POSIX 先枚举 {@code descendants()}
+     * 再逐个强杀(父先死会令子孙 reparent 到 init,枚举须在杀父之前完成);
+     * {@code destroyForcibly} 兜底主进程。枚举瞬间的新 fork 存在理论竞态,由各调用点的
+     * 有界等待兜底,不追求绝对原子。
+     */
+    private static void killProcessTree(Process p) {
+        if (WINDOWS) {
+            try {
+                Process killer = new ProcessBuilder(
+                        "taskkill", "/T", "/F", "/PID", Long.toString(p.pid()))
+                        .redirectInput(ProcessBuilder.Redirect.from(NULL_INPUT))
+                        .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                        .redirectError(ProcessBuilder.Redirect.DISCARD)
+                        .start();
+                killer.waitFor(10, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } catch (IOException | RuntimeException e) {
+                log.debug("[os-sandbox] taskkill 进程树终止失败(destroyForcibly 兜底): {}",
+                        e.getMessage());
+            }
+        } else {
+            try {
+                p.toHandle().descendants().forEach(ProcessHandle::destroyForcibly);
+            } catch (RuntimeException ignored) {
+                // 进程已死等场景:主进程兜底
+            }
+        }
+        p.destroyForcibly();
+    }
+
     /** 直接执行(ProcessBuilder 以 argv 直传,无 shell 解析;带超时 + 每流输出上限 + 网络 env 处理)。 */
     private ExecResult runDirectCommand(java.util.List<String> cmd, Path cwd, Map<String, String> extraEnv,
             boolean allowNetwork, long timeoutMs) {
@@ -406,30 +450,35 @@ public final class OsSandbox implements SandboxBackend, NativeExec {
             }
         }
         pb.environment().putAll(sanitizedEnv(extraEnv, allowNetwork));
+        Process started = null;
         try {
-            Process p = pb.start();
+            started = pb.start();
+            final Process p = started;
             Future<String> out = exec.submit(() -> drain(p.getInputStream()));
             Future<String> err = exec.submit(() -> drain(p.getErrorStream()));
-            boolean aborted = false;
-            String outText;
-            String errText;
-            try {
-                outText = out.get(timeoutMs, TimeUnit.MILLISECONDS);
-                errText = awaitQuiet(err);
-            } catch (TimeoutException e) {
-                aborted = true;
-                p.destroyForcibly();
-                outText = awaitQuiet(out);
-                errText = awaitQuiet(err);
+            // 超时判定以「进程退出」为准(而非 stdout 排空):孙进程可能持有管道写端,
+            // 令 drain 迟迟不 EOF——按输出流判超时会把正常完成误判成超时
+            boolean aborted = !p.waitFor(timeoutMs, TimeUnit.MILLISECONDS);
+            if (aborted) {
+                killProcessTree(p);
+            }
+            // 树已死 → 管道写端全关 → drain 即刻 EOF;awaitQuiet 的 5s 上限仅在
+            // kill 异常失败时兜底(旧实现固定等满 5s×2,表现为 durationMs ≈ timeout+10s)
+            String outText = awaitQuiet(out);
+            String errText = awaitQuiet(err);
+            if (aborted) {
                 errText += "\n[exec 超时中止: >" + timeoutMs + "ms]";
             }
-            int code = aborted ? -1 : p.waitFor();
+            int code = aborted ? -1 : p.exitValue();
             return new ExecResult(capOutput(outText), capOutput(errText), code, aborted);
         } catch (InterruptedException e) {
             // 中断 = 任务取消/级联 stopAll 的 cancel(true):恢复中断标记(供任务层按取消
             // 收口),按 aborted=true 报「exec 被中断」——与 spawnToFileRedirected 对齐;
             // 不得吞进通用异常分支伪装成 rc=1 的普通失败(丢中断标记 + 掩盖取消语义)
             Thread.currentThread().interrupt();
+            if (started != null) {
+                killProcessTree(started);
+            }
             return new ExecResult("", "exec 被中断", -1, true);
         } catch (IOException e) {
             return new ExecResult("", "exec 启动失败: " + e.getMessage(), 1, false);
