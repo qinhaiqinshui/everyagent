@@ -83,6 +83,28 @@ class DefinitionValidatorTest {
         assertThat(DefinitionValidator.validate(declared)).isEmpty();
     }
 
+    @Test
+    void unpairedDoubleBracesAreError() {
+        // BUG-04a：{{ 缺配对 }} 不得静默按字面量输出——创建期即拒绝
+        Definition unpaired = withVariables(def(
+                node("n1", "start"),
+                node("n2", "command").command("echo published={{topic}> done.txt"),
+                node("n3", "ai").agent("gen").input("写 {{topic} 主题"),
+                edge("e1", "n1", "n2"), edge("e2", "n2", "n3")),
+                new VariableDef("topic", null, true, null, null));
+        List<String> errors = DefinitionValidator.validate(unpaired);
+        assertThat(errors).anyMatch(e -> e.contains("未配对") && e.contains("command"));
+        assertThat(errors).anyMatch(e -> e.contains("未配对") && e.contains("input"));
+
+        // 配对完整、多余单花括号（shell 花括号展开）不报
+        Definition ok = withVariables(def(
+                node("n1", "start"),
+                node("n2", "command").command("echo {{topic}}} && echo {"),
+                edge("e1", "n1", "n2")),
+                new VariableDef("topic", null, true, null, null));
+        assertThat(DefinitionValidator.validate(ok)).isEmpty();
+    }
+
     // ── 命名会话线（agents 总表已删除：agent 名是 AI 节点自带引用） ──
 
     @Test

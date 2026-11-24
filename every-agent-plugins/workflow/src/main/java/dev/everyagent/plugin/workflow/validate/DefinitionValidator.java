@@ -250,6 +250,12 @@ public final class DefinitionValidator {
                 errors.add("{{" + ref + "}} 引用了未声明的变量 @" + nodeId + " " + field);
             }
         }
+        // 花括号配对 lint：挖掉合法 {{name}} 引用后仍残留 {{ = 引用写法不完整
+        // (如 {{topic} 缺右花括号)——旧实现静默按字面量输出,拼错只能靠读产物文件发现
+        if (m.replaceAll("").contains("{{")) {
+            errors.add(field + " 含未配对的 {{ (变量引用须写全 {{name}};不配对会按字面量输出)"
+                    + " @" + nodeId);
+        }
     }
 
     /** 大小写不敏感判保留名（Windows 文件系统大小写不敏感，同名异体同样有冲突风险）。 */
