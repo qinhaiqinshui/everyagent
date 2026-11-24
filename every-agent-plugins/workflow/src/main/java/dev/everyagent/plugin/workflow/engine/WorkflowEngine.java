@@ -706,16 +706,29 @@ public final class WorkflowEngine {
         }
     }
 
-    /** 成功收口：写 runs 记录 + node.output 事件 + 出边一次性求值激活 + 下游调度 + 完成判定。 */
+    /**
+     * 成功收口：写 runs 记录 + node.output 事件 + 出边一次性求值激活 + 下游调度 + 完成判定。
+     *
+     * <p><b>命令节点非零退出码 = 节点失败</b>（BUG-01 修复）：节点状态置 failed、发
+     * {@code node.error} 事件（失败上报/介入决策/rerun 的锚点——旧实现仅边路由按
+     * exitCode 求值，状态与事件按成功口径，失败全链路静默）。失败后的三段分派：
+     * ①未达 maxRuns 自动重试（node.retry 事件 + 强制重开，不激活出边——重试可能成功，
+     * 失败不得提前泄漏到 onError 分支）；②重试耗尽且有条件出边（onError/exitCode/always）
+     * 激活 → 分支接管（实例可正常收束，终态投影与 workflow_run 返回体携带 failed 告警）；
+     * ③无人接住 → 定义级错误策略（fail/askUser，在锁外执行）。
+     */
     private void completeNode(InstanceRun r, NodeDef node, int runNo, NodeResult result,
             RenderedInput in, long startedAt) {
         List<String> activated = new ArrayList<>();
+        boolean failed = result.exitCode() != 0;
+        boolean errorPolicy = false;
         synchronized (r.schedLock) {
             if (r.stopping || r.status.get().terminal()) {
                 return;
             }
             NodeState st = r.nodeStates.get(node.id());
-            st.status = "done";
+            int maxRuns = node.maxRuns() != null ? node.maxRuns() : 1;
+            st.status = failed ? "failed" : "done";
             st.runCount++;
             for (EdgeDef e : r.outEdges.getOrDefault(node.id(), List.of())) {
                 if (NodeRunners.evaluate(e.condition(), result.exitCode(), result.conditionOutput())) {
@@ -726,12 +739,40 @@ public final class WorkflowEngine {
             r.runRecords.put(runNo, rec);
             store.saveRunRecord(r.wsId, r.instanceId, rec);
             emitNodeOutput(r, node, runNo, result, activated);
-            emitNodeTrace(r, node, runNo, TRACE_DONE, in, outputTextOf(result), null, activated,
+            if (failed) {
+                emitNodeError(r, node.id(), display(node), runNo,
+                        "命令退出码非零: " + result.exitCode(), result.exitCode());
+            }
+            emitNodeTrace(r, node, runNo, failed ? TRACE_FAILED : TRACE_DONE, in,
+                    outputTextOf(result), null, activated,
                     System.currentTimeMillis() - startedAt, result.exitCode());
-            activateTargetsLocked(r, activated);
-            // 自查重调：本节点运行期间新到的激活（环/多前驱）
-            tryScheduleLocked(r, node.id());
-            checkCompletionLocked(r);
+            if (!failed) {
+                activateTargetsLocked(r, activated);
+                // 自查重调：本节点运行期间新到的激活（环/多前驱）
+                tryScheduleLocked(r, node.id());
+                checkCompletionLocked(r);
+            } else if (st.runCount < maxRuns) {
+                // ① 自动重试：非零退出码消耗 maxRuns 预算（与 CI 重试同直觉；旧实现
+                // 不重试，maxRuns=2 的失败节点只跑一次）
+                store.appendEvent(r.wsId, r.instanceId, "node.retry", Json.obj()
+                        .put("nodeId", node.id())
+                        .put("failedRunNo", runNo)
+                        .put("attempt", st.runCount)
+                        .put("maxRuns", maxRuns)
+                        .put("exitCode", result.exitCode()));
+                forceSchedule(r, node);
+            } else if (!activated.isEmpty()) {
+                // ② 分支接管：失败沿条件分支继续（节点保持 failed）
+                activateTargetsLocked(r, activated);
+                tryScheduleLocked(r, node.id());
+                checkCompletionLocked(r);
+            } else {
+                // ③ 无人接住：错误策略（askAndWait 含 park 等待，须在锁外执行）
+                errorPolicy = true;
+            }
+        }
+        if (errorPolicy) {
+            handleNodeError(r, node, runNo, "命令退出码非零: " + result.exitCode());
         }
     }
 

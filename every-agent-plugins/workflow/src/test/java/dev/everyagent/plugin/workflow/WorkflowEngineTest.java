@@ -313,7 +313,8 @@ class WorkflowEngineTest {
         assertNotActivated(routeCond("cmd-ok", "echo hello", new ConditionDef("onError", null, null, null), "sink"), "sink");
         assertActivated(routeCond("cmd-bad", "exit 3", new ConditionDef("onError", null, null, null), "sink"), "sink");
         assertActivated(routeCond("cmd-bad", "exit 3", new ConditionDef("exitCode", 3L, null, null), "sink"), "sink");
-        assertNotActivated(routeCond("cmd-bad", "exit 3", new ConditionDef("exitCode", 0L, null, null), "sink"), "sink");
+        // BUG-01 语义：失败节点(exit 3)无出边接住(exitCode=0 不匹配) → 实例 failed,不得静默收束 done
+        assertFailed(routeCond("cmd-bad", "exit 3", new ConditionDef("exitCode", 0L, null, null), "sink"), "sink");
         // 文本条件
         assertActivated(routeCond("cmd-ok", "echo hello", new ConditionDef("outputContains", null, "hello", null), "sink"), "sink");
         assertNotActivated(routeCond("cmd-ok", "echo hello", new ConditionDef("outputContains", null, "zzz", null), "sink"), "sink");
@@ -353,6 +354,14 @@ class WorkflowEngineTest {
         awaitTerminal(m.id());
         // 无匹配收束：实例照常 done，sink 不跑（不报错）
         assertThat(meta(m.id()).status()).isEqualTo(InstanceStatus.DONE);
+        assertThat(startedNodes(m.id())).doesNotContain(sinkId);
+    }
+
+    private void assertFailed(Definition d, String sinkId) throws InterruptedException {
+        InstanceMeta m = start(d);
+        awaitTerminal(m.id());
+        // 失败节点无出边接住：实例 failed（BUG-01：旧实现静默收束为 done 假成功）
+        assertThat(meta(m.id()).status()).isEqualTo(InstanceStatus.FAILED);
         assertThat(startedNodes(m.id())).doesNotContain(sinkId);
     }
 
@@ -768,5 +777,100 @@ class WorkflowEngineTest {
         RunRecord rec = runs(m.id()).stream().filter(r -> "c".equals(r.nodeId()))
                 .findFirst().orElseThrow();
         assertThat(rec.output().stdout().length()).isGreaterThan(1024);
+    }
+
+    // ══════════════════════════ 命令节点非零退出码（BUG-01 回归） ══════════════════════════
+
+    private static final boolean WIN = System.getProperty("os.name").toLowerCase().contains("win");
+
+    /** 跨平台失败命令（指定退出码）。 */
+    private static String failCmd(int code) {
+        return WIN ? "exit /b " + code : "exit " + code;
+    }
+
+    @Test
+    void nonZeroExitCodeFailsNodeAndInstanceAfterRetries() throws Exception {
+        // 无人接住（onSuccess 边不激活）→ maxRuns=2 自动重试两次仍失败 → 实例 failed + 上报链路全量
+        Definition d = saveOnError(OnError.FAIL,
+                DefinitionValidatorTest.node("s", "start"),
+                DefinitionValidatorTest.node("boom", "command").command(failCmd(3)).maxRuns(2),
+                DefinitionValidatorTest.node("down", "command").command("echo SHOULD_NOT_RUN"),
+                DefinitionValidatorTest.edge("e1", "s", "boom"),
+                DefinitionValidatorTest.edge("e2", "boom", "down",
+                        new ConditionDef(ConditionDef.ON_SUCCESS, null, null, null)));
+        InstanceMeta m = start(d);
+        awaitTerminal(m.id());
+        assertThat(meta(m.id()).status()).isEqualTo(InstanceStatus.FAILED);
+        assertThat(meta(m.id()).error().nodeId()).isEqualTo("boom");
+        assertThat(meta(m.id()).error().message()).contains("退出码非零");
+        // 节点 failed（非 done 假象）+ 重试满预算；下游保持 pending
+        assertThat(meta(m.id()).nodeStates().get("boom").status()).isEqualTo("failed");
+        assertThat(meta(m.id()).nodeStates().get("boom").runCount()).isEqualTo(2);
+        assertThat(meta(m.id()).nodeStates().get("down").runCount()).isZero();
+        assertThat(startedNodes(m.id())).doesNotContain("down");
+        // 失败可观测：node.error 带 exitCode + node.retry 留痕；两次 runs 均 exitCode=3
+        var errEvents = events(m.id()).stream()
+                .filter(e -> "node.error".equals(e.event())).toList();
+        assertThat(errEvents).hasSize(2);
+        assertThat(errEvents.get(0).payload().path("exitCode").asInt()).isEqualTo(3);
+        assertThat(eventNames(m.id())).contains("node.retry");
+        assertThat(runs(m.id()).stream().filter(r -> "boom".equals(r.nodeId())))
+                .hasSize(2)
+                .allSatisfy(r -> assertThat(r.output().exitCode()).isEqualTo(3));
+    }
+
+    @Test
+    void nonZeroExitCodeTakenOverByOnErrorBranchKeepsNodeFailed() throws Exception {
+        // 分支接管：失败沿 onError 边继续,实例可收束 done,但失败节点状态不得=done(BUG-01 期望)
+        Definition d = save(
+                DefinitionValidatorTest.node("s", "start"),
+                DefinitionValidatorTest.node("init", "command").command(failCmd(3)),
+                DefinitionValidatorTest.node("rescue", "command").command("echo rescued"),
+                DefinitionValidatorTest.node("after", "command").command("echo after"),
+                DefinitionValidatorTest.edge("e1", "s", "init"),
+                DefinitionValidatorTest.edge("e2", "init", "rescue",
+                        new ConditionDef(ConditionDef.ON_ERROR, null, null, null)),
+                DefinitionValidatorTest.edge("e3", "rescue", "after"));
+        InstanceMeta m = start(d);
+        awaitTerminal(m.id());
+        assertThat(meta(m.id()).status()).isEqualTo(InstanceStatus.DONE);
+        assertThat(meta(m.id()).nodeStates().get("init").status()).isEqualTo("failed");
+        assertThat(meta(m.id()).nodeStates().get("rescue").status()).isEqualTo("done");
+        assertThat(meta(m.id()).nodeStates().get("after").status()).isEqualTo("done");
+        assertThat(eventNames(m.id())).contains("node.error");
+        assertThat(runs(m.id()).stream().filter(r -> "rescue".equals(r.nodeId()))
+                .findFirst().orElseThrow().output().stdout()).contains("rescued");
+    }
+
+    @Test
+    void rescueBranchOwnFailureFailsInstance() throws Exception {
+        // BUG-01b：善后分支自身失败且无出边接住 → 二次失败不得被吞,实例 failed
+        Definition d = save(
+                DefinitionValidatorTest.node("s", "start"),
+                DefinitionValidatorTest.node("init", "command").command(failCmd(3)),
+                DefinitionValidatorTest.node("rescue", "command").command(failCmd(7)),
+                DefinitionValidatorTest.edge("e1", "s", "init"),
+                DefinitionValidatorTest.edge("e2", "init", "rescue",
+                        new ConditionDef(ConditionDef.ON_ERROR, null, null, null)));
+        InstanceMeta m = start(d);
+        awaitTerminal(m.id());
+        assertThat(meta(m.id()).status()).isEqualTo(InstanceStatus.FAILED);
+        assertThat(meta(m.id()).error().nodeId()).isEqualTo("rescue");
+        assertThat(meta(m.id()).error().message()).contains("7");
+        assertThat(meta(m.id()).nodeStates().get("rescue").status()).isEqualTo("failed");
+    }
+
+    @Test
+    void nonZeroExitCodeAskUserParksWithDecisionContext() throws Exception {
+        // onError=askUser：非零退出码同样走挂起决策（失败判定接入错误策略）
+        Definition d = saveOnError(OnError.ASK_USER,
+                DefinitionValidatorTest.node("s", "start"),
+                DefinitionValidatorTest.node("n", "command").command(failCmd(9)),
+                DefinitionValidatorTest.edge("e1", "s", "n"));
+        InstanceMeta m = start(d);
+        awaitStatus(m.id(), InstanceStatus.WAITING_USER);
+        InstanceMeta parked = meta(m.id());
+        assertThat(parked.pendingDecision()).isNotNull();
+        assertThat(parked.pendingDecision().context()).contains("退出码非零");
     }
 }

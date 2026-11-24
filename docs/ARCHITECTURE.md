@@ -1069,7 +1069,7 @@ public interface AgentFactory {
 - **originTaskId 关联**:`InstanceMeta.originTaskId`(可空;`wf.created` 事件 payload 同步携带)是实例↔任务的持久锚点;运行期绑定 = 引擎运行入口传入的 origin 任务 `ExecContext`(存实例运行态),AI 会话的 agentFactory/emitter/conversationArchive 全部经它取。RPC 直启(`workflow.run`)无绑定,仅限无 AI 节点的定义(测试/兼容通道)。
 - **AI 节点会话单写任务域**:AI 节点 = origin 任务里的子 agent——经任务 ExecContext 的 agentFactory 装配(creator=workflow),事件(user.message/message/tool.result/usage 与瞬态)单写任务 EventLog(落 `tasks/<taskId>/<agentId>.jsonl`,任务页呈现/回放/rerun 重建的唯一档案);agentId 约定 `<name>#<instanceId>`(命名,跨节点复用)/`<nodeId>.<runNo>`(匿名一次性)。**fail-fast**:无 originTaskId 绑定或绑定任务事件口已失效时,含 AI 节点的工作流运行被拒绝(错误引导经任务运行)。
 - **实例只记节点级三样**:`instances/<wiId>/` 下 meta.json / events.jsonl(node.* 输入输出错误预览) / `runs/<0007_nodeId>.json`,所有节点类型一律;agents/ 目录职责移除(督导 agent 已整体删除,见下条)。
-- **任务内运行的错误语义(目标契约)**:supervisor=主 agent,节点失败即工作流运行失败、错误上下文回传调用方(fail-fast;独立督导 agent 会话退役,retry/retryWithInput 决策内核保留供 rerun);`workflow_rerun` 从中断节点续跑——同 agentId 复用、上下文从任务档案重建、依赖 origin 任务存活(任务已删除/不在运行则只能全新运行)。
+- **任务内运行的错误语义(目标契约)**:supervisor=主 agent,节点失败即工作流运行失败、错误上下文回传调用方(fail-fast;独立督导 agent 会话退役,retry/retryWithInput 决策内核保留供 rerun);`workflow_rerun` 从中断节点续跑——同 agentId 复用、上下文从任务档案重建、依赖 origin 任务存活(任务已删除/不在运行则只能全新运行)。命令节点的失败判定:非零退出码=节点失败(发 `node.error`、状态 `failed`,不得按成功口径静默收束;`maxRuns` 即重试预算);失败存在满足条件的出边(onError/exitCode/always)时**优先分支接管**——fail-fast 仅在无人接住时生效;分支接住的失败实例可正常收束,但终态投影与 `workflow_run` 返回体必须携带未收净告警(pending/failed 计数)。命令中止(超时/取消)级联终止整个进程树,实例终态后命令不再有副作用。
 
 ---
 

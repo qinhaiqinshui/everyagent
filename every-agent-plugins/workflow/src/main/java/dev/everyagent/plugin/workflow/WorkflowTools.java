@@ -572,6 +572,31 @@ public final class WorkflowTools {
         return nodes;
     }
 
+    /**
+     * done 态的未收净告警（BUG-01c）：实例完成但仍有 pending（不可达分支）或 failed
+     * （被 onError 分支接住的失败）节点时，返回体不得是裸 done——计数 + 提示引导核对。
+     */
+    private static String completionWarning(InstanceMeta m) {
+        if (m.nodeStates() == null) {
+            return null;
+        }
+        int pending = 0;
+        int failed = 0;
+        for (InstanceMeta.NodeState st : m.nodeStates().values()) {
+            String s = st.status() == null ? "" : st.status();
+            if ("pending".equals(s)) {
+                pending++;
+            } else if ("failed".equals(s)) {
+                failed++;
+            }
+        }
+        if (pending == 0 && failed == 0) {
+            return null;
+        }
+        return "实例已完成,但存在未执行/失败节点(pending=" + pending + ", failed=" + failed
+                + "):失败被 onError 分支接住或分支未被激活,请核对 nodes 状态与 workflow_instance_log";
+    }
+
     /** 失败节点历史运行输出摘要（该节点全部 runs 的输出裁剪；主 agent 诊断用）。 */
     private ArrayNode failureContext(InstanceMeta m, String nodeId, int failedRunNo) {
         ArrayNode out = Json.arr();

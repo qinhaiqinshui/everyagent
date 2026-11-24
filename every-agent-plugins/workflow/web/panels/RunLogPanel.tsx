@@ -356,6 +356,12 @@ export function buildTimelineEntries(
           text: `节点 ${nameOf(nodeId)} 已跳过（run #${runNo}）`,
         })
         break
+      case 'node.retry':
+        evEntries.push({
+          kind: 'line', key: e.seq, ts: e.ts, tone: 'warn',
+          text: `节点 ${nameOf(nodeId)} 失败自动重试（第 ${asNum(p.attempt) ?? '?'} / ${asNum(p.maxRuns) ?? '?'} 次 · 退出码 ${asNum(p.exitCode) ?? '?'}）`,
+        })
+        break
       case 'supervisor.decision': {
         const d = (p.decision ?? {}) as Record<string, unknown>
         evEntries.push({
