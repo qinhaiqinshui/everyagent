@@ -454,8 +454,7 @@ export default function DefinitionEditorPanel({
           className="wf-editor-toolbar-label"
           style={{ color: 'var(--text-faint, #525c6a)', fontSize: 12 }}
         >
-          {definitionId ? `定义 ${definitionId}` : '新建定义'}
-          {resolvedWorker ? ` · ${resolvedWorker}` : ''}
+          {definitionId ?? '新建定义'}
         </span>
         <input
           className="wf-editor-input"
