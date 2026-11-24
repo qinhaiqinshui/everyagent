@@ -428,7 +428,14 @@ function ensureInstanceStyles(): void {
 .wf-inst-runrow-time { color: var(--text-faint, #525c6a); font-size: 11px; }
 .wf-inst-runrow-dur { color: var(--text-secondary, #aab3c2); font-size: 11px; }
 .wf-inst-hintcard { color: var(--text-faint, #525c6a); font-size: 12px; line-height: 1.7; padding: 4px 2px; }
-.wf-inst-side-close { display: none; }
+/* 桌面端关闭按钮：面板顶部吸顶条（滚动长详情时始终可点）；移动端在媒体查询中覆盖为抽屉右上角浮钮 */
+.wf-inst-side-close {
+  position: sticky; top: 0; z-index: 6;
+  display: flex; align-items: center; justify-content: flex-end;
+  width: 100%; height: 30px; padding: 0 8px 0 0; margin: 0 0 2px;
+  border: none; background: var(--bg-secondary, #11141b); color: var(--text-muted, #6f7a8b); cursor: pointer;
+}
+.wf-inst-side-close:hover { color: var(--text-primary, #eef1f5); }
 /* ── 移动端（≤768px）：详情面板退化底部抽屉；顶栏紧凑换行；输入 16px 防 iOS 缩放 ── */
 @media (max-width: 768px) {
   .wf-inst-textarea { font-size: 16px; }
@@ -1280,42 +1287,36 @@ export default function InstancePanel({ instanceId, workspaceId }: InstancePanel
                 style={{ position: 'absolute', inset: 0 }}
               />
             </div>
-            <div
-              className={`wf-inst-side${isMobile && sheetOpen ? ' wf-inst-side--open' : ''}`}
-              style={isMobile && !sheetOpen ? { pointerEvents: 'none' } : undefined}
-            >
-              {isMobile ? (
+            {/* 详情面板按需出现：点选节点/边才挂载（桌面端非选中不占位）；关闭=清选。
+                移动端保持常驻挂载由 transform 控制抽屉滑入滑出（条件卸载会丢过渡动画）。 */}
+            {!isMobile || selectedNode || selectedEdge ? (
+              <div
+                className={`wf-inst-side${isMobile && sheetOpen ? ' wf-inst-side--open' : ''}`}
+                style={isMobile && !sheetOpen ? { pointerEvents: 'none' } : undefined}
+              >
                 <button
                   type="button"
                   className="wf-inst-side-close"
-                  title="收起详情"
-                  onClick={() => setSheetOpen(false)}
+                  title="关闭详情"
+                  onClick={() => handleSelect(null)}
                 >
                   <CloseIcon size={16} />
                 </button>
-              ) : null}
-              {selectedNode ? (
-                <NodeDetail
-                  node={selectedNode}
-                  proj={projection[selectedNode.id] ?? null}
-                  nodeRuns={selectedNodeRuns}
-                  edgeLabelById={edgeLabelById}
-                  agentDef={(definition?.agents ?? []).find(a => a.name === selectedNode.agent) ?? null}
-                  detailRunNo={detailRunNo}
-                  onSelectRun={setDetailRunNo}
-                />
-              ) : selectedEdge ? (
-                <EdgeDetail edge={selectedEdge} definition={definition} activated={activatedEdgeIds.has(selectedEdge.id)} />
-              ) : (
-                <div className="wf-inst-hintcard">
-                  点击画布中的节点查看运行详情（输入三视图 / 输出全量 / 错误 / agent 用量 / 激活出边 / 历次运行记录）；
-                  点击边查看出边条件与激活状态。
-                  <br />
-                  <br />
-                  也可切换到「运行日志」查看物流式时间线。
-                </div>
-              )}
-            </div>
+                {selectedNode ? (
+                  <NodeDetail
+                    node={selectedNode}
+                    proj={projection[selectedNode.id] ?? null}
+                    nodeRuns={selectedNodeRuns}
+                    edgeLabelById={edgeLabelById}
+                    agentDef={(definition?.agents ?? []).find(a => a.name === selectedNode.agent) ?? null}
+                    detailRunNo={detailRunNo}
+                    onSelectRun={setDetailRunNo}
+                  />
+                ) : selectedEdge ? (
+                  <EdgeDetail edge={selectedEdge} definition={definition} activated={activatedEdgeIds.has(selectedEdge.id)} />
+                ) : null}
+              </div>
+            ) : null}
           </>
         )}
       </div>
