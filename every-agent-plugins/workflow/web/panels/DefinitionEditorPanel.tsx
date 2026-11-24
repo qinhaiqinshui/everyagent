@@ -10,7 +10,8 @@
  *
  * 布局三栏：左 = palette（添加节点）+ 变量/onError+supervisor/agents 折叠编辑区；
  * 中 = WorkflowCanvas(mode=edit)；右 = 属性面板（选中节点 → 类型特定字段；选中边 →
- * 七种出边条件编辑器）。顶部工具栏：定义名/描述 + 保存（def.save）+ 校验错误列表。
+ * 七种出边条件编辑器）——与实例详情面板同款隐藏规则：仅在选中后挂载，空白点按
+ * 保留内容，× 关闭清选。顶部工具栏：定义名/描述 + 保存（def.save）+ 校验错误列表。
  *
  * 移动端（≤768px，useIsMobile）：左右栏退化为滑入抽屉（遮罩 + 关闭按钮，工具栏
  * 「组件/属性」按钮切换）；选中节点/边自动弹右抽屉（palette 添加节点亦然）；
@@ -113,6 +114,14 @@ function ensureEditorStyles(): void {
 .wf-editor-divider { border-top: 1px solid var(--border-light, #1b202a); margin: 12px 0; }
 .wf-editor-mask { position: absolute; inset: 0; background: rgba(4, 6, 10, 0.5); z-index: 24; }
 .wf-editor-drawer-close { display: none; }
+/* 属性面板关闭按钮：桌面=面板顶部吸顶条（滚动长表单时始终可点）；移动端媒体查询覆盖为抽屉右上角浮钮 */
+.wf-editor-prop-close {
+  position: sticky; top: 0; z-index: 6;
+  display: flex; align-items: center; justify-content: flex-end;
+  width: 100%; height: 30px; padding: 0 8px 0 0; margin: 0 0 2px;
+  border: none; background: var(--bg-secondary, #11141b); color: var(--text-muted, #6f7a8b); cursor: pointer;
+}
+.wf-editor-prop-close:hover { color: var(--text-primary, #eef1f5); }
 .wf-editor-toolbar-label { white-space: nowrap; }
 /* ── 移动端（≤768px）：左右栏退化滑入抽屉；输入 16px 防 iOS 聚焦自动放大 ── */
 @media (max-width: 768px) {
@@ -135,6 +144,11 @@ function ensureEditorStyles(): void {
     background: transparent; color: var(--text-muted, #6f7a8b); cursor: pointer; align-self: flex-end;
   }
   .wf-editor-drawer-close:active { color: var(--text-primary, #eef1f5); background: var(--bg-hover, #202631); }
+  .wf-editor-prop-close {
+    position: absolute; top: 8px; right: 10px; z-index: 1;
+    width: 32px; height: 32px; justify-content: center; margin: 0; background: transparent;
+  }
+  .wf-editor-prop-close:active { color: var(--text-primary, #eef1f5); background: var(--bg-hover, #202631); }
   .wf-editor-icon-btn { width: 32px; height: 32px; }
   .wf-editor-btn { padding: 6px 12px; }
   .wf-editor-canvas-hint { left: 8px; right: 8px; }
@@ -274,11 +288,18 @@ export default function DefinitionEditorPanel({
     setSaveError(null)
   }, [])
 
-  // ── 选中入口（统一置 dirty 之外还驱动移动端抽屉：选中即弹属性面板）。
+  // ── 选中入口（画布点选）：空白点按不清选——属性面板保留最近选中，关闭只走
+  // closeProps；移动端空白 tap 收起抽屉（选中保留，再点节点重开）。
   const handleSelect = React.useCallback((sel: CanvasSelection) => {
-    setSelection(sel)
-    if (sel) setMobileDrawer(isMobile ? 'right' : 'none')
+    if (sel !== null) setSelection(sel)
+    setMobileDrawer(sel ? (isMobile ? 'right' : 'none') : 'none')
   }, [isMobile])
+
+  /** 关闭属性面板（× 按钮）：唯一清选入口（删除选中项后也走此处语义）。 */
+  const closeProps = React.useCallback(() => {
+    setSelection(null)
+    setMobileDrawer('none')
+  }, [])
 
   const patchNode = React.useCallback((id: string, patch: Partial<WorkflowNodeDef>) => {
     updateDef(d => ({ ...d, nodes: (d.nodes ?? []).map(n => (n.id === id ? { ...n, ...patch } : n)) }))
@@ -342,8 +363,10 @@ export default function DefinitionEditorPanel({
     } else {
       updateDef(d => ({ ...d, edges: (d.edges ?? []).filter(e => e.id !== selection.id) }))
     }
-    handleSelect(null)
-  }, [selection, def, updateDef, ui, handleSelect])
+    // 显式清选（handleSelect 对 null 不再清选）：选中项已删，面板随之卸载。
+    setSelection(null)
+    setMobileDrawer('none')
+  }, [selection, def, updateDef, ui])
 
   // Delete 键删除（输入控件聚焦时不拦截）；用 ref 防闭包过期。
   const deleteRef = React.useRef<() => void>(() => {})
@@ -537,47 +560,42 @@ export default function DefinitionEditorPanel({
           </div>
         </div>
 
-        {/* ── 右栏：属性面板（移动端=右滑抽屉） ── */}
-        <div className={`wf-editor-right${isMobile && mobileDrawer === 'right' ? ' wf-editor-drawer--open' : ''}`}>
-          {isMobile ? (
-            <button type="button" className="wf-editor-drawer-close" title="收起面板" onClick={() => setMobileDrawer('none')}>
+        {/* ── 右栏：属性面板（移动端=右滑抽屉）；与实例详情面板同款隐藏规则——
+            仅在选中节点/边后挂载（无选中不占位、画布占满），空白点按保留内容，
+            关闭只走 ×（清选卸载）。 ── */}
+        {selectedNode || selectedEdge ? (
+          <div className={`wf-editor-right${isMobile && mobileDrawer === 'right' ? ' wf-editor-drawer--open' : ''}`}>
+            <button
+              type="button"
+              className="wf-editor-prop-close"
+              title="关闭属性面板"
+              onClick={closeProps}
+            >
               <CloseIcon size={16} />
             </button>
-          ) : null}
-          {selectedNode ? (
-            <NodePropertySection
-              node={selectedNode}
-              def={def}
-              modelConfigs={modelConfigs}
-              resolvedRoot={resolvedRoot}
-              resolvedWorker={resolvedWorker}
-              fallbackTokenLabel={fallbackTokenLabel}
-              setFallbackTokenLabel={setFallbackTokenLabel}
-              patchNode={patchNode}
-              updateDef={updateDef}
-              onDelete={deleteSelection}
-            />
-          ) : selectedEdge ? (
-            <EdgePropertySection
-              edge={selectedEdge}
-              def={def}
-              patchEdge={patchEdge}
-              onDelete={deleteSelection}
-            />
-          ) : (
-            <div className="wf-editor-hint" style={{ marginTop: 8 }}>
-              {isMobile ? (
-                <>点按节点或边后在此编辑属性、删除选中项；从「组件」抽屉可添加节点。</>
-              ) : (
-                <>
-                  点击节点或边编辑属性；从节点右侧锚点拖出连线；Delete 键或删除按钮移除选中项。
-                  <br />
-                  节点位置（x/y）随定义保存。
-                </>
-              )}
-            </div>
-          )}
-        </div>
+            {selectedNode ? (
+              <NodePropertySection
+                node={selectedNode}
+                def={def}
+                modelConfigs={modelConfigs}
+                resolvedRoot={resolvedRoot}
+                resolvedWorker={resolvedWorker}
+                fallbackTokenLabel={fallbackTokenLabel}
+                setFallbackTokenLabel={setFallbackTokenLabel}
+                patchNode={patchNode}
+                updateDef={updateDef}
+                onDelete={deleteSelection}
+              />
+            ) : (
+              <EdgePropertySection
+                edge={selectedEdge}
+                def={def}
+                patchEdge={patchEdge}
+                onDelete={deleteSelection}
+              />
+            )}
+          </div>
+        ) : null}
       </div>
     </div>
   )
