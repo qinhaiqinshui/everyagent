@@ -15,6 +15,15 @@
  *   〔编辑 / 查看 JSON / 导出 JSON / 删除〕）；行点击=打开编辑器；
  * - 空态：引导文案 + 新建/导入直达按钮。
  *
+ * 查看与导入的细节：
+ * - 「查看 JSON」→ 只读对话框（可滚动）+「复制」——copyText（异步 API →
+ *   execCommand 同步兜底），双双失败弹手动复制降落伞（侧栏同款），非安全上下文
+ *   （局域网 http）也能复制。
+ * - 「导入」拆两路（MenuList 二选一）：**导入文件**（.workflow.json 文件选择器，
+ *   原路径）与**粘贴 JSON**（弹窗 textarea 粘贴 → 前端形态预检 → def.import；
+ *   校验错误在弹窗内回显、可直接改文本重试）。两路共用 importText 核心（成功
+ *   toast+重拉，后端重赋顶层 wf id）。
+ *
  * 批量删除定义（侧栏实例批删同款交互）：顶栏「删除」（新建右边）进入 → 动作组换
  * 「全选 / 删除(n) / 取消」（新建/导入/刷新让位）、行首出勾选框、行点击改切勾选
  * （⋯ 行菜单隐藏）→ 确认弹窗 → **串行**逐个 def.delete——只删 definitions/ 目录，
@@ -37,7 +46,8 @@ import React from 'react'
 import { Button, Checkbox } from 'antd'
 import { getPluginContext } from '../pluginRuntime'
 import { WORKFLOW_EDITOR_TAB_TYPE } from '../tabKeys'
-import { RowActions } from '../Menu'
+import { MenuList, RowActions } from '../Menu'
+import { copyText } from '../clipboard'
 import { openRunDialog } from './RunDialog'
 import {
   formatRelativeTime,
@@ -45,6 +55,7 @@ import {
   downloadDefinitionJson,
   exportFileName,
   parseImportedDefinition,
+  showManualCopyDialog,
 } from './SidebarPanel'
 import {
   WorkflowValidationError,
@@ -123,6 +134,11 @@ function ensureManageStyles(): void {
 .wf-manage-json { display: flex; flex-direction: column; gap: 10px; min-width: min(720px, 88vw); font-size: 13px; }
 .wf-manage-json pre { margin: 0; max-height: 60vh; overflow: auto; background: var(--bg-tertiary, #171b24); border: 1px solid var(--border-light, #1b202a); border-radius: 8px; padding: 10px 12px; font-size: 12px; line-height: 1.6; font-family: var(--font-mono, monospace); color: var(--text-primary, #eef1f5); white-space: pre; }
 .wf-manage-json-footer { display: flex; justify-content: flex-end; gap: 8px; }
+/* 粘贴导入弹窗（textarea 等宽 + 错误回显可多行）。 */
+.wf-manage-paste { display: flex; flex-direction: column; gap: 10px; min-width: min(640px, 88vw); font-size: 13px; }
+.wf-manage-paste-area { width: 100%; box-sizing: border-box; min-height: 38vh; max-height: 55vh; resize: vertical; background: var(--bg-primary, #0b0d12); border: 1px solid var(--border, #2a303b); border-radius: 8px; color: var(--text-primary, #eef1f5); padding: 8px 10px; font-size: 12.5px; line-height: 1.6; font-family: var(--font-mono, monospace); }
+.wf-manage-paste-area:focus { outline: none; border-color: var(--accent-blue, #61a5ff); }
+.wf-manage-paste-error { background: var(--accent-red-dim, rgba(255,107,107,0.14)); border: 1px solid var(--accent-red, #ff6b6b); border-radius: 8px; padding: 8px 10px; color: var(--accent-red, #ff6b6b); font-size: 12.5px; line-height: 1.6; white-space: pre-wrap; word-break: break-all; max-height: 20vh; overflow-y: auto; }
 /* ── 移动端（≤768px）：动作组全宽换行、按钮触控目标加大；行内堆叠已由 grid-template-areas 覆盖 ── */
 @media (max-width: 768px) {
   .wf-manage-bar { padding: 8px 10px; gap: 8px; }
@@ -134,6 +150,9 @@ function ensureManageStyles(): void {
   .wf-manage-row { padding: 10px; }
   .wf-manage-meta-id { max-width: 30ch; }
   .wf-manage-json pre { max-height: 48vh; font-size: 11px; }
+  /* 粘贴弹窗：输入 16px 防 iOS 聚焦自动放大；宽度收窄不溢出。 */
+  .wf-manage-paste { min-width: min(560px, 92vw); }
+  .wf-manage-paste-area { font-size: 16px; min-height: 34vh; }
 }
 `
   document.head.appendChild(style)
@@ -163,6 +182,73 @@ function confirmDialog(title: string, description: string, okText = '确认'): P
       ),
     })
     .then(r => r === true)
+}
+
+// ─── 粘贴导入对话框（「导入 → 粘贴 JSON」；textarea 粘贴 → 校验 → 导入） ─────
+
+/**
+ * 弹窗粘贴导入：textarea 承接用户粘贴的 .workflow.json 内容 → runImport（前端
+ * 形态预检 + def.import，核心逻辑在 ManagePanel.importText）→ 成功关窗、失败在
+ * 弹窗内回显错误（用户可直接改文本重试，不必关窗重来）。空文本/进行中有本地
+ * 拦截；导入中按钮 loading 防重复提交。
+ */
+function PasteImportDialog({
+  close,
+  runImport,
+}: {
+  close: () => void
+  /** 导入执行器：成功返回 null，失败返回错误文案（可多行，\n 连接）。 */
+  runImport: (text: string) => Promise<string | null>
+}) {
+  const [text, setText] = React.useState('')
+  const [busy, setBusy] = React.useState(false)
+  const [error, setError] = React.useState<string | null>(null)
+
+  const submit = async () => {
+    const trimmed = text.trim()
+    if (busy) return
+    if (trimmed === '') {
+      setError('请先粘贴 JSON 内容')
+      return
+    }
+    setBusy(true)
+    setError(null)
+    const err = await runImport(trimmed)
+    setBusy(false)
+    if (err === null) {
+      close()
+      return
+    }
+    setError(err)
+  }
+
+  return (
+    <div className="wf-manage-paste">
+      <textarea
+        className="wf-manage-paste-area"
+        value={text}
+        spellCheck={false}
+        placeholder={'粘贴工作流定义 JSON（.workflow.json 文件的完整内容）'}
+        onChange={e => setText(e.target.value)}
+        // Ctrl+Enter 直达导入（表单习惯）；Esc 交给宿主模态壳关闭。
+        onKeyDown={e => {
+          if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+            e.preventDefault()
+            void submit()
+          }
+        }}
+      />
+      {error ? <div className="wf-manage-paste-error">{error}</div> : null}
+      <div className="wf-manage-json-footer">
+        <Button disabled={busy} onClick={close}>
+          取消
+        </Button>
+        <Button type="primary" loading={busy} onClick={() => void submit()}>
+          导入
+        </Button>
+      </div>
+    </div>
+  )
 }
 
 // ─── 工作区显示名 ─────────────────────────────────────────────────────────
@@ -205,6 +291,8 @@ export default function ManagePanel({ workspaceId }: ManagePanelProps) {
   const [selectedIds, setSelectedIds] = React.useState<string[]>([])
   /** 批量删除执行中（勾选/退出/再删全部禁用）。 */
   const [batchDeleting, setBatchDeleting] = React.useState(false)
+  /** 导入方式菜单的锚点按钮（null=关闭；顶栏/空态两处导入按钮共用一个菜单）。 */
+  const [importMenuAnchor, setImportMenuAnchor] = React.useState<HTMLButtonElement | null>(null)
 
   const toast = React.useCallback(
     (message: string, type?: 'success' | 'error' | 'info' | 'warning') => {
@@ -329,10 +417,16 @@ export default function ManagePanel({ workspaceId }: ManagePanelProps) {
             <div className="wf-manage-json-footer">
               <Button
                 onClick={() => {
-                  void navigator.clipboard
-                    ?.writeText(text)
-                    .then(() => toast('已复制到剪贴板', 'success'))
-                    .catch(() => toast('复制失败（浏览器未授权剪贴板）', 'error'))
+                  // copyText：异步 API → execCommand 同步兜底（点击手势内调用，
+                  // 手势仍在，execCommand 大概率成功）；双双失败弹手动复制降落伞
+                  // （侧栏同款），非安全上下文（局域网 http）也能复制。
+                  void copyText(text).then(ok => {
+                    if (ok) {
+                      toast('已复制到剪贴板', 'success')
+                    } else {
+                      showManualCopyDialog('复制定义 JSON', text)
+                    }
+                  })
                 }}
               >
                 复制
@@ -466,26 +560,70 @@ export default function ManagePanel({ workspaceId }: ManagePanelProps) {
     })
   }
 
-  /** 增（导入）：文件文本 → 快速形态预检 → def.import（后端重赋顶层 wf id）。 */
+  // ── 导入（两路共用核心：文件文本 / 弹窗粘贴 JSON） ──
+
+  /**
+   * 导入核心：文本 → 快速形态预检（parseImportedDefinition）→ def.import（后端
+   * 重赋顶层 wf id）。成功 → 清错 + toast + 重拉列表，返回 null；失败返回逐项
+   * 错误列表（不 setImportError——文件路径回显在页顶、粘贴路径回显在弹窗内）。
+   */
+  const importText = async (text: string): Promise<string[] | null> => {
+    try {
+      const definition = parseImportedDefinition(text)
+      const { id } = await workflowGateway.defImport(workspaceId, definition)
+      setImportError(null)
+      toast(`已导入为 ${id}`, 'success')
+      reloadDefs()
+      return null
+    } catch (err) {
+      if (err instanceof WorkflowValidationError) {
+        return err.items.length > 0 ? err.items : [err.message]
+      }
+      return [rpcErrorMessage(err)]
+    }
+  }
+
+  /** 导入方式一·文件：选择器取文本 → importText；错误回显页顶（历史行为）。 */
   const onImportFile = (file: File) => {
     void withBusy('import', async () => {
-      try {
-        const text = await file.text()
-        const definition = parseImportedDefinition(text)
-        const { id } = await workflowGateway.defImport(workspaceId, definition)
-        setImportError(null)
-        toast(`已导入为 ${id}`, 'success')
-      } catch (err) {
-        if (err instanceof WorkflowValidationError) {
-          setImportError(err.items.length > 0 ? err.items : [err.message])
-        } else {
-          setImportError([rpcErrorMessage(err)])
-        }
-      } finally {
-        reloadDefs()
+      const errs = await importText(await file.text())
+      if (errs !== null) {
+        setImportError(errs)
       }
     })
   }
+
+  /**
+   * 导入方式二·弹窗粘贴：textarea 粘贴 JSON → importText；错误回显在弹窗内
+   * （可直接改文本重试），成功关窗。文本已在弹窗里，不再走页顶回显。
+   */
+  const onOpenPasteImport = () => {
+    if (typeof ctx.ui.showDialog !== 'function') {
+      toast('当前宿主不支持插件对话框，无法粘贴导入', 'error')
+      return
+    }
+    void ctx.ui.showDialog<null>({
+      title: '粘贴导入工作流定义',
+      description: '粘贴 .workflow.json 的完整 JSON 内容；导入时会重新分配顶层工作流 id。',
+      Content: ({ close }) => (
+        <PasteImportDialog
+          close={() => close(null)}
+          runImport={async text => {
+            const errs = await importText(text)
+            return errs === null ? null : errs.join('\n')
+          }}
+        />
+      ),
+    })
+  }
+
+  /** 导入菜单（MenuList 二选一）：导入文件 / 粘贴 JSON。锚点=点击的导入按钮；
+   *  再点同一按钮切换关闭（RowActions 同款 toggle 行为）。 */
+  const onOpenImportMenu = (e: React.MouseEvent<HTMLButtonElement>) => {
+    setImportMenuAnchor(cur => (cur === e.currentTarget ? null : e.currentTarget))
+  }
+
+  const closeImportMenu = () => setImportMenuAnchor(null)
 
   const renderAll = () => {
     reloadRegistry()
@@ -556,8 +694,8 @@ export default function ManagePanel({ workspaceId }: ManagePanelProps) {
                 type="button"
                 className="wf-manage-btn"
                 disabled={busyKey === 'import'}
-                title="导入 .workflow.json 文件到本工作区"
-                onClick={() => fileInputRef.current?.click()}
+                title="导入工作流定义（导入文件 / 粘贴 JSON）"
+                onClick={onOpenImportMenu}
               >
                 <UploadIcon size={13} /> {busyKey === 'import' ? '导入中…' : '导入'}
               </button>
@@ -593,7 +731,8 @@ export default function ManagePanel({ workspaceId }: ManagePanelProps) {
                 type="button"
                 className="wf-manage-btn"
                 disabled={busyKey === 'import'}
-                onClick={() => fileInputRef.current?.click()}
+                title="导入工作流定义（导入文件 / 粘贴 JSON）"
+                onClick={onOpenImportMenu}
               >
                 <UploadIcon size={13} /> 导入 .workflow.json
               </button>
@@ -686,6 +825,32 @@ export default function ManagePanel({ workspaceId }: ManagePanelProps) {
         )}
       </div>
 
+      {/* 导入方式菜单（顶栏/空态两处「导入」共用；选一即关，Esc/点外部由 MenuList 收口）。 */}
+      {importMenuAnchor ? (
+        <MenuList
+          anchor={importMenuAnchor}
+          anchorPointMode="top-start"
+          items={[
+            {
+              key: 'file',
+              label: '导入文件',
+              description: '选择 .workflow.json 文件导入',
+              icon: <UploadIcon size={13} />,
+              onSelect: () => fileInputRef.current?.click(),
+            },
+            {
+              key: 'paste',
+              label: '粘贴 JSON',
+              description: '在弹窗中粘贴 JSON 内容导入',
+              icon: <VariableIcon size={13} />,
+              onSelect: onOpenPasteImport,
+            },
+          ]}
+          onClose={closeImportMenu}
+          title="导入方式"
+        />
+      ) : null}
+
       {/* 导入文件选择（隐藏；处理后清值，同文件重复导入也触发 change）。 */}
       <input
         ref={fileInputRef}
@@ -707,7 +872,8 @@ export default function ManagePanel({ workspaceId }: ManagePanelProps) {
  * 1. 侧边栏「工作流」面板组头点「管理」→ 打开本工作区的管理标签页；同一工作区
  *    重复点击聚焦同一标签（不新开）；不同工作区各自成标签。
  * 2. 顶栏：标题 + 工作区名/id 副标题；动作组=新建（绿）/删除（红）/导入/刷新；
- *    无定义或动作进行中时「删除」禁用；导入残缺或非法 JSON → 顶部红色逐项回显；
+ *    无定义或动作进行中时「删除」禁用；「导入」弹二选一菜单（导入文件 / 粘贴
+ *    JSON，Esc/点外部关闭）；文件导入残缺或非法 JSON → 顶部红色逐项回显；
  *    导入成功 toast「已导入为 wf_…」并刷新列表。
  * 3. 行卡片：名称+描述 / 等宽 id · 节点数 · 更新时间；hover 边框高亮；行点击
  *    打开编辑器（definitionId 正确）；行尾=常显「▶ 运行」绿色直点按钮 + hover
@@ -716,8 +882,14 @@ export default function ManagePanel({ workspaceId }: ManagePanelProps) {
  * 4. 运行：行尾「▶ 运行」→ 打开变量表单运行窗 → 成功后自动打开实例运行页（侧栏
  *    实例列表同步出现新实例）；点运行按钮不触发行点击（不打开编辑器）；该定义
  *    查看 JSON 进行中时运行按钮同步禁用。
- * 5. 查看 JSON：对话框展示完整 definition JSON（可滚动/复制按钮）；导出 JSON
+ * 5. 查看 JSON：对话框展示完整 definition JSON（可滚动）；「复制」→ toast
+ *    「已复制到剪贴板」，**非安全上下文（局域网 http）下同样成功**（异步 API →
+ *    execCommand 兜底 → 手动复制降落伞三级收口，绝不静默失败）；导出 JSON
  *    下载 `<名称>.workflow.json`。
+ * 5a. **粘贴导入**：「导入 → 粘贴 JSON」→ 弹窗 textarea（Ctrl+Enter 直达导入）；
+ *    空文本点导入 → 弹窗内红字「请先粘贴 JSON 内容」；粘贴残缺/非法 JSON →
+ *    错误逐项回显在弹窗内（改完文本可直接重试，不必关窗）；成功 → 关窗 +
+ *    toast「已导入为 wf_…」+ 列表刷新；导入中按钮 loading 防重复提交。
  * 5b. **批量删除**（新建右边的「删除」进入）：动作组换「☐ 全选 / 删除 / 取消」
  *    （新建/导入/刷新让位），行首出勾选框、点行=切勾选（⋯ 菜单隐藏、不再打开
  *    编辑器）；全选/反选联动「删除 (n)」计数（0 个禁用）→ 确认弹窗（提示仅删
@@ -731,5 +903,6 @@ export default function ManagePanel({ workspaceId }: ManagePanelProps) {
  * 7. **移动端（≤768px / 窄窗）**：顶栏动作组换行全宽、按钮等分放大（批删模式
  *    下全选+删除+取消同样换行放大）；行内名称+⋯ 首行、meta 次行堆叠；行尾
  *    「▶ 运行」自然宽常显（不吃全宽规则）、⋯ 菜单常显（Menu.tsx 的移动端放行
- *    样式）；批删模式勾选框占行首列；JSON 对话框 pre 可横向滚动。
+ *    样式）；批删模式勾选框占行首列；粘贴弹窗 textarea 16px 防 iOS 聚焦自动
+ *    放大；JSON 对话框 pre 可横向滚动。
  */

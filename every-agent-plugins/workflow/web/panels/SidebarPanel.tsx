@@ -275,8 +275,10 @@ function confirmDialog(title: string, description: string, okText = '确认'): P
  *
  * 「重试复制」按钮本身是一次**新的点击手势**，其同步 copyTextSync 几乎必然成功
  * （这正是非安全上下文下 execCommand 需要的手势）。
+ *
+ * 导出供 ManagePanel「查看 JSON → 复制」复用（复制任何长文本的同一降落伞）。
  */
-function showManualCopyDialog(title: string, text: string): void {
+export function showManualCopyDialog(title: string, text: string): void {
   const ctx = getPluginContext()
   if (typeof ctx.ui.showDialog !== 'function') {
     // 宿主模态缺席：window.prompt 自带全选文本域，可直接 Ctrl+C / ⌘C。
