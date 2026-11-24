@@ -181,7 +181,7 @@ class WorkflowEngineTest {
     // ══════════════════════════ 任务绑定（§7.20.8） ══════════════════════════
 
     @Test
-    void aiDefinitionRejectedWithoutUsableTaskBinding() {
+    void aiDefinitionRejectedWithoutUsableTaskBinding() throws InterruptedException {
         Definition d = save(
                 DefinitionValidatorTest.node("s", "start"),
                 DefinitionValidatorTest.node("n", "ai").agent("writer"),
@@ -205,13 +205,15 @@ class WorkflowEngineTest {
                 store.createInstance(d, Map.of(), other.subjectId()), bound))
                 .isInstanceOf(BadParamsException.class)
                 .hasMessageContaining("不一致");
-        // 无 AI 节点定义无绑定照常可跑（RPC 直启兼容通道）
+        // 无 AI 节点定义无绑定照常可跑（RPC 直启兼容通道）；等终态后再收测试——
+        // 否则引擎线程仍在写 @TempDir，Windows 上目录清理间歇性失败（flaky）
         Definition cmdOnly = save(
                 DefinitionValidatorTest.node("s", "start"),
                 DefinitionValidatorTest.node("c", "command").command("echo ok"),
                 DefinitionValidatorTest.edge("e2", "s", "c"));
-        assertThat(engine.start(store.createInstance(cmdOnly, Map.of())).status())
-                .isEqualTo(InstanceStatus.RUNNING);
+        InstanceMeta unbound = engine.start(store.createInstance(cmdOnly, Map.of()));
+        assertThat(unbound.status()).isEqualTo(InstanceStatus.RUNNING);
+        assertThat(engine.awaitTerminal(unbound.id(), 20_000)).isTrue();
     }
 
     @Test
