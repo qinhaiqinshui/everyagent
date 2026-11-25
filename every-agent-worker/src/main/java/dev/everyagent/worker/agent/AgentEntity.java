@@ -71,9 +71,10 @@ public final class AgentEntity implements Agent {
     public final List<ToolCallback> tools;
 
     /**
-     * 本 run 的 hidden 工具池(键 = 工具名):<b>注册但不进请求 tool 定义</b>——模型经
-     * skill 文档认知后按名调用,由 {@link AgentBuilder} 聚合 createHiddenTools 产出、
-     * {@code build()} 转交(不可变;直接 new 本类的场景缺省空表,使用方无须判空)。
+     * 本 run 的 hidden 工具池(键 = 工具名)——<b>池内工具始终可执行</b>:未暴露期间
+     * 不进请求 tool 定义(模型可按 skill 文档直接按名调用;读取知识包后经自动暴露以
+     * 完整定义进请求,见 exposedTools),由 {@link AgentBuilder} 聚合 createHiddenTools
+     * 产出、{@code build()} 转交(不可变;直接 new 本类的场景缺省空表,使用方无须判空)。
      * {@link AgentRunner} 组装 prompt 时放入框架 ToolContext map 独立键
      * {@code PerCallToolCallingManager.HIDDEN_TOOLS_KEY} 随 prompt options 下行,
      * 回调解析期命中即执行(拦截链/事件/授权与常规工具完全一致)。
@@ -82,7 +83,7 @@ public final class AgentEntity implements Agent {
 
     /**
      * 已随请求 tool 定义暴露给模型的 hidden 工具名集合:<b>纯可见性语义</b>——不在集合内的
-     * hidden 工具仍可按 skill 文档认知后硬调(hidden 池解析照常执行,不因未暴露而拒绝);
+     * hidden 工具仍可按 skill 文档直接硬调(hidden 池解析照常执行);
      * 进集合的由 {@link AgentRunner} 组装期取 exposedTools ∩ hidden 池键集 的工具,以完整
      * 定义(池内原回调,含参数 schema)并入每轮请求 toolCallbacks。由自动暴露节点写入
      * (read_file 技能知识包时),组装期消费;final 集合本身可变(跨轮累积,不重建 agent 引用)。

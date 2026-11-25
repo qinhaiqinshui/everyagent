@@ -23,9 +23,9 @@ import static org.mockito.Mockito.verify;
  *       不再承担物化(旧「activate 物化产物逐字节一致」断言随迁移作废);</li>
  *   <li>声明链完整:plugin.json 声明 {@code "skills": "skill"},插件根
  *       {@code skill/agent-dispatch/skill.md} 存在且 frontmatter 以 name 起——
- *       这是 hidden 工具机制的「另一半」:四工具不进请求 tool 定义,模型全靠这份
- *       文档认知,文档缺失即工具失明;全文行数钉 ≤120(skill 全文注入 system
- *       prompt,写散就是拿上下文换上下文)。测试工作目录 = 模块根(surefire 缺省)。</li>
+ *       其 frontmatter tools 声明四工具绑定,读取本知识包即触发自动暴露,文档
+ *       缺失即绑定与暴露失明;全文行数钉 ≤120(全文按需 read_file 进入上下文,
+ *       写散就是拿上下文换上下文)。测试工作目录 = 模块根(surefire 缺省)。</li>
  * </ol>
  */
 class SubAgentPluginTest {
@@ -52,7 +52,7 @@ class SubAgentPluginTest {
 
         List<String> lines = Files.readAllLines(skillMd);
         assertTrue(lines.size() <= 120,
-                "skill 全文注入 system prompt,须保持紧凑(计划钉 ≤120 行): 实际 " + lines.size());
+                "skill 全文按需 read_file 进入上下文,须保持紧凑(计划钉 ≤120 行): 实际 " + lines.size());
         assertFalse(lines.isEmpty(), "skill.md 不应为空");
 
         // frontmatter 形态:--- 起,含 name(展示标题)

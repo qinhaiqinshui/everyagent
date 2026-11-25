@@ -141,7 +141,7 @@ hidden 工具与常规工具的差别**只在暴露形态**，执行链完全一
 | | 常规工具（`createTools`） | hidden 工具（`createHiddenTools`） |
 |---|---|---|
 | 进请求 tool 定义（schema 下发） | 是 | **frontmatter `tools` 绑定的工具在模型读取该知识包后以完整定义进请求（自动暴露）**；未读取前不占请求 token |
-| 模型怎么知道 | 请求里的 tool schema | **skill 文档**（SkillAdvisor 注入 system prompt，[advisors §5](advisors.md)）——读取前靠文档认知按名调用，读取后定义直接在请求里 |
+| 模型怎么知道 | 请求里的 tool schema | **skill 文档**（SkillAdvisor 注入技能索引到 system prompt，模型 read_file 读取知识包，[advisors §5](advisors.md)）——读取前靠文档按名直调，读取后定义直接在请求里 |
 | 怎么被调用 | 模型 tool call → 常规解析 | **始终可执行**：模型按名 tool call → 工具名解析 fallback **仅查本请求 hidden 池**（池随 prompt options 的框架 ToolContext map 下行，per-run 生命周期、独立键、每 run 组装期一次定型，与 RunContext 同路）；未命中走既有 soft-fail 兜底 |
 
 **安全边界**：解析 fallback 只查本请求 hidden 池，**不启用 Spring 全 Bean 解析**——未知工具名不得凭全局注册表命中（跨任务/跨主体串扰防线）。
@@ -155,7 +155,7 @@ hidden 工具与常规工具的差别**只在暴露形态**，执行链完全一
 - 读取触发：模型经 `read_file` **成功**读取该知识包 → `SkillToolExposeInterceptor`（per-call 拦截链节点，id=`skill-tool-expose`，order=450）把 frontmatter `tools` 写入当前 agent 的 `exposedTools`——写入点即 plugin-api 扩展方法 `AgentContext.exposeTools(List<String>)`（default 空实现，零破坏）；
 - 组装期把 `exposedTools` 与 hidden 池的**交集**以完整定义（含参数 schema）并入请求 `toolCallbacks`；集合持久化于 `agents.json` 台账条目 `exposedTools` 数组，跨轮/跨重启经 agent 重建回灌——下一轮无需重读知识包。
 
-**skill 文档化是 hidden 工具的另一半**：文档负责 frontmatter `tools` 绑定声明与方法论（何时用、怎么编排），**不再写参数细节**——参数的唯一真源是暴露后进请求的工具定义（schema），文档里再抄一份参数就是双源漂移。写法要点——frontmatter `tools` 列表 + 方法论叙述；skill 全文会被注入 system prompt（[advisors §5](advisors.md)），写散就是拿上下文换上下文，务必精炼。
+**skill 文档化是 hidden 工具的另一半**：文档负责 frontmatter `tools` 绑定声明与方法论（何时用、怎么编排），**不再写参数细节**——参数的唯一真源是暴露后进请求的工具定义（schema），文档里再抄一份参数就是双源漂移。写法要点——frontmatter `tools` 列表 + 方法论叙述；skill 全文按需 read_file 进入模型上下文（[advisors §5](advisors.md)），写散就是拿上下文换上下文，务必精炼。
 
 **配置**：无配置档位——自动暴露是唯一形态（旧应急回退布尔已删除，不存在「回落常规暴露」开关）。
 

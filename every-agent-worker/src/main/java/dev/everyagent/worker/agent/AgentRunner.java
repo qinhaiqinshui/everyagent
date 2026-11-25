@@ -113,8 +113,9 @@ public class AgentRunner {
                     new PerCallToolCallingManager.RunContext(a.agentId, a.emitter, a.execution, a.toolOutcomes));
             // hidden 池同 map 独立键下行(与 RUN_CONTEXT_KEY 共存、互不可见;builder 的
             // toolContext(key,value) 为累积 put):回调解析在请求 tool 定义未命中时先查
-            // 本池(PerCallToolCallingManager.resolveOutsideRequestTools)——hidden 工具不进
-            // 请求 tool 定义,模型按 skill 文档认知的工具名调用即在此命中,执行链照常。
+            // 本池(PerCallToolCallingManager.resolveOutsideRequestTools)——hidden 工具未
+            // 暴露期间不进请求 tool 定义(读取知识包后自动暴露,见上方 exposedTools 并入段),
+            // 未暴露时模型按 skill 文档直调即在此命中,执行链照常。
             if (!a.hiddenTools.isEmpty()) {
                 options.toolContext(PerCallToolCallingManager.HIDDEN_TOOLS_KEY, a.hiddenTools);
             }

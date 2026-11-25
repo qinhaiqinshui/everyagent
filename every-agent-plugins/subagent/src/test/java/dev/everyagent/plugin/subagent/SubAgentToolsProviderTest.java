@@ -11,13 +11,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 
 /**
- * subagent 四工具迁移 hidden 池(工作流插件计划步骤 3)钉子:
+ * subagent 四工具 hidden 池钉子:
  * <ul>
  *   <li>{@code createHiddenTools} 产出且仅产出四工具(run_agent/list_agents/wait_agents/
- *       stop_agent)——hidden 语义:不进请求 tool 定义,模型经 agent-dispatch skill 文档
- *       认知后按名调用;</li>
- *   <li>{@code createTools} 恒空——常规池不再出现派发工具(应急回退由 worker 聚合层把
- *       hidden 池落回常规暴露,与本 provider 无关)。</li>
+ *       stop_agent)——池内工具始终可执行,未暴露期间不进请求 tool 定义(读取
+ *       agent-dispatch 知识包后自动暴露);</li>
+ *   <li>{@code createTools} 恒空——常规池不出现派发工具(暴露形态由 worker 聚合层
+ *       统一处理,与本 provider 无关)。</li>
  * </ul>
  */
 class SubAgentToolsProviderTest {

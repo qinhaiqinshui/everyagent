@@ -102,7 +102,8 @@ public class WorkflowPlugin implements EveryAgentPlugin {
         // RPC 面：workflow.* 14 个方法（契约=计划「RPC 参数契约」表）
         new WorkflowRpc(store, engine).registerAll(ctx);
 
-        // hidden 十一工具（定义 CRUD 五件 + 运行/查询/重开六件；模型经 skill/workflow-tools/skill.md 认知后按名调用）
+        // hidden 十一工具（定义 CRUD 五件 + 运行/查询/重开六件；frontmatter tools 绑定，
+        // 读取 skill/workflow-tools/skill.md 后自动暴露进请求工具列表）
         ctx.registerToolProvider(new WorkflowToolProvider(store, engine));
 
         // 「运行工作流」token 提交解析（kind=workflow.run）：任务页运行按钮发 task.run 的

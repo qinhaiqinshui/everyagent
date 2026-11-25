@@ -42,7 +42,7 @@ import static org.mockito.Mockito.when;
  * hidden 工具机制(步骤 3)单测:
  * <ul>
  *   <li><b>聚合与请求组装</b>:AgentBuilder 聚合 createHiddenTools 为独立池(键=工具名),
- *       不进请求 tool 定义;AgentRunner 把池放 prompt options 框架 ToolContext map 独立键
+ *       未暴露期间不进请求 tool 定义;AgentRunner 把池放 prompt options 框架 ToolContext map 独立键
  *       {@code everyagent.hiddenTools}(与 RUN_CONTEXT_KEY 同 map 共存、互不可见);</li>
  *   <li><b>解析无串扰</b>:共享单例 PerCallToolCallingManager 上并发两请求各自 hidden 池,
  *       解析查本请求池;他请求池的工具名不命中;</li>
@@ -154,7 +154,7 @@ class HiddenToolsTest {
                 .map(tc -> tc.getToolDefinition().name()).toList();
     }
 
-    // ── ① 聚合 + 请求组装:hidden 不进请求 tool 定义,随独立键下行 ──
+    // ── ① 聚合 + 请求组装:hidden 未暴露不进请求 tool 定义,随独立键下行 ──
 
     @Test
     void hiddenPoolStaysOutOfRequestToolsAndRidesPromptOptions() throws Exception {
@@ -181,7 +181,7 @@ class HiddenToolsTest {
 
         assertThat(captured).hasSize(1);
         OpenAiChatOptions options = (OpenAiChatOptions) captured.get(0).getOptions();
-        // hidden 工具名不进请求 tool 定义(schema 无从下发,模型按 skill 文档认知)
+        // 未暴露:hidden 工具名不进请求 tool 定义(读取知识包后经自动暴露进请求)
         assertThat(requestToolNames(captured.get(0))).containsExactly("fs_read");
         // 两键同 map 共存、互不可见:hidden 池在独立键,值为键=工具名的 map
         Map<String, Object> ctxMap = options.getToolContext();

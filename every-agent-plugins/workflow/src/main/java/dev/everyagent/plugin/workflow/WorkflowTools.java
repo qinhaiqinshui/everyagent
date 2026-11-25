@@ -27,7 +27,8 @@ import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
 
 /**
- * workflow 工具集（hidden：模型经「工作流编排」skill 文档按名调用）——定义 CRUD 五件 +
+ * workflow 工具集（hidden 池：未暴露期间不进请求 tool 定义，读取「工作流编排」skill
+ * 知识包后自动暴露）——定义 CRUD 五件 +
  * 运行/查询/重开六件（workflow_run + instance_status/log/events/cancel + workflow_rerun，§7.20）。
  *
  * <p>绑定 createHiddenTools 传入的 {@link ToolContext}（随工具回调同生命周期）——

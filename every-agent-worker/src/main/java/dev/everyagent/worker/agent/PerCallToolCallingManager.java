@@ -55,8 +55,9 @@ import java.util.Optional;
  *   <li>{@code executeToolCall} 签名增 {@code chatResponse} 参数(切口 ctx 契约成员需要);</li>
  *   <li>工具调用 for 循环内插<b>两处切口</b>调用项目 per-call 工具执行拦截链(方案 B,见下);</li>
  *   <li>回调解析的 resolution fallback 分支前插<b>本请求 hidden 池</b>查找(见
- *       {@link #HIDDEN_TOOLS_KEY}:hidden 工具注册但不进请求 tool 定义,模型经 skill
- *       文档认知后按名调用;未命中仍走上游同款 soft-fail 兜底,语义不变)。</li>
+ *       {@link #HIDDEN_TOOLS_KEY}:hidden 工具未暴露期间不进请求 tool 定义,池内
+ *       始终可执行——模型按 skill 文档按名调用即在此命中(读取知识包后自动暴露进请求);
+ *       未命中仍走上游同款 soft-fail 兜底,语义不变)。</li>
  * </ol>
  * <b>升级 Spring AI 版本时 diff 框架源码对齐本类,禁止顺手重设计</b>(照抄纪律)。
  *

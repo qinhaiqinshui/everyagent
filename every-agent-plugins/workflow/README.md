@@ -56,9 +56,11 @@ workflow 插件
   扇出到实例流频道 `u.<K>.worker.<wid>.wf.<wiId>.stream`（store 落盘后通知监听器，
   同实例锁内回调=推送序与落盘序一致），历史/断线补齐走 `instance.events` RPC 拉取，
   前端先订阅后回放、按 seq 去重合流。
-- **hidden 五工具**（`WorkflowToolProvider` + `skill/workflow-tools/skill.md`）：
-  `workflow_create/get/update/delete/list`，只服务普通任务的 AI（工作流自己的 agent
-  不携带，`appliesTo` 排除），模型经 skill 文档按名调用。
+- **hidden 十一工具**（`WorkflowToolProvider` + `skill/workflow-tools/skill.md`）：
+  定义 CRUD 五件 `workflow_create/get/update/delete/list` + 运行/查询/重开六件
+  （`workflow_run/workflow_rerun/instance_status/instance_log/instance_events/instance_cancel`），
+  只服务普通任务的 AI（工作流自己的 agent 不携带，`appliesTo` 排除）；frontmatter
+  `tools` 绑定，读取 workflow-tools 知识包后自动暴露进请求工具列表。
 - **前端界面**（`web/`）：自研 SVG 画布（拖拽/连线/条件标签/运行态着色，Pointer
   Events 统一鼠标/触屏——节点拖拽、锚点连线、背景平移触屏可用）+ 定义编辑器
   （palette/节点属性面板/七种边条件/运行变量/出错策略；AI 节点会话线无 agents

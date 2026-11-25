@@ -129,9 +129,9 @@ public class AgentBuilder {
 
         // 聚合全部工具: 遍历 toolRegistry.getProviders() → appliesTo → createTools;
         // hidden 池同链聚合(createHiddenTools,键=工具名,同名先到先得),固定形态恒构建:
-        // 不进请求 tool 定义,随 prompt options 框架 ToolContext map 独立键下行(见
-        // AgentRunner);其中 exposedTools ∩ hidden 池键集 的工具由 AgentRunner 组装期
-        // 以完整定义并入请求 toolCallbacks(无开关回落形态)。
+        // 未暴露期间不进请求 tool 定义,随 prompt options 框架 ToolContext map 独立键
+        // 下行(见 AgentRunner);其中 exposedTools ∩ hidden 池键集 的工具由 AgentRunner
+        // 组装期以完整定义并入请求 toolCallbacks(无开关回落形态)。
         ToolContextImpl toolCtx = createToolContext(agentId, exec, toolOutcomes);
         List<ToolCallback> tools = new ArrayList<>();
         Map<String, ToolCallback> hiddenTools = new java.util.LinkedHashMap<>();
