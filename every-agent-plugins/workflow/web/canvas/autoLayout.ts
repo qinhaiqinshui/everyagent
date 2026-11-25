@@ -2,7 +2,7 @@
  * 工作流定义「自动布局」算法核（编辑器工具栏「自动布局」按钮）。
  *
  * Sugiyama 分层布局的简化实现（主流沿 y 轴自上而下展开），纯函数、零
- * React/画布依赖（几何常量除外），便于脱离 DOM 自测。流程四步：
+ * React/画布依赖（几何常量除外），便于脱离 DOM 自测。流程五步：
  *   ① 回边识别——DFS（灰→灰 = 指向栈上祖先）把有环图的「回指边」标为逆向边，
  *      分层只看前向边、逆向边留作绘制时的回线（从下层弯回上层）；
  *      指向 start 的边一律先标回边（start 是执行入口，入边语义上是「回到起点
@@ -11,13 +11,24 @@
  *   ② 最长路分层——去回边后必为 DAG（任一有向环至少含一条 DFS 回边），
  *      layer(v) = max(layer(前向前驱)) + 1，前向入度 0 的根层为 0；Kahn 按
  *      定义序取队，结果确定。
- *   ③ 层内排序——初序 = 定义列表序（start 置最左）；再做若干轮重心（barycenter）
- *      微调：按前驱/后继在邻层的行号均值重排，减少连线交叉；无邻接的节点锚在
- *      当前行不被推走；稳定排序 + 平局保持现序，结果确定。
- *   ④ 网格坐标——y = 层深×层距、x = 层内序×行距（层深沿垂直方向、层内沿水平
- *      方向）；间距取节点尺寸的合理倍数（NODE_W / NODE_H，见常量注释），60 节点
- *      规模不重叠。孤立节点（无边，自环除外）集中排在主流最深层下方的独立行，
- *      不与主流重叠。
+ *   ③ 跨层边拆段（虚拟节点）——跨多层的前向边在沿途每层插一个虚拟节点，
+ *      把一条长边拆成逐层短边，虚拟节点与真实节点一同参与层内排序、并独占一列。
+ *      这是「两条线重叠」的结构性解法：不断开的话，长边从源底锚直落目标顶锚，
+ *      落点与中间层同列节点完全重合——既穿过节点矩形，又与同列的短边共线重叠
+ *      （长边整段覆盖短边，画布上根本分不清是几条线）。拆段后每条边在每一层都
+ *      占独立列，任意两条不同边的「层-列」端点组合必不相同，几何上不可能共线。
+ *   ④ 层内排序——初序 = 定义列表序（start 置最左，虚拟节点随其后）；再做若干轮
+ *      重心（barycenter）微调：按前驱/后继在邻层的行号均值重排，减少连线交叉；
+ *      虚拟节点同样参与均值，长边因此被「拉直」成直上直下的走廊。无邻接的节点
+ *      锚在当前行不被推走；稳定排序 + 平局保持现序，结果确定。
+ *   ⑤ 层间横向对齐——层内行号只是相对序，直接拿行号当列号会让「只有一个节点的层」
+ *      永远落在第 0 列（汇合节点被甩到最左，入边全被拉成横穿全图的近水平长线、叠成
+ *      一片）。故按前驱列位的中位偏移整层平移（整数档，网格不乱），末尾归一到最左列
+ *      为留白值：汇合/分叉节点落在上下游扇形的中间，长横线跨度大幅缩短。
+ *   ⑥ 网格坐标——y = 层深×层距、x = 列号×行距（层深沿垂直方向、层内沿水平方向）；
+ *      间距取节点尺寸的合理倍数（NODE_W / NODE_H，见常量注释），60 节点规模不重叠。
+ *      孤立节点（无边，自环除外）集中排在主流最深层下方的独立行，不与主流重叠；
+ *      虚拟节点只占列、不产出坐标（画布不渲染它们）。
  *
  * 调用方（DefinitionEditorPanel）经 updateDef 一次性写回全部节点 x/y——与
  * 手工拖拽同一条定义更新链（dirty / 保存语义一致），其余字段一律不动。
@@ -35,6 +46,9 @@ export const LAYOUT_ROW_GAP = 240
 const LAYOUT_MARGIN = 40
 /** 重心排序轮数（前向贴前驱 + 后向贴后继各算一轮；两轮后收益递减）。 */
 const BARYCENTER_PASSES = 2
+/** 虚拟节点 id 前缀（私有区控制符 + 语义前缀）：真实节点 id 来自用户输入，
+ *  肉眼可见的 id 不会含控制符，故不会与虚拟节点撞名。 */
+const VIRTUAL_PREFIX = '\u0000layout-dummy-'
 
 /** 布局产物：节点坐标（整数；画布与定义坐标 1:1，无缩放）。 */
 export interface LayoutPosition {
@@ -178,7 +192,26 @@ export function computeAutoLayout(def: WorkflowDefinition): AutoLayoutResult {
     if (gridNodes.has(n.id) && !layerOf.has(n.id)) layerOf.set(n.id, 0)
   }
 
-  // ── ③ 层内排序：初序 = 定义序（start 置最左）→ 重心微调（减少连线交叉）。 ──
+  // ── ③ 跨层边拆段：跨多层的前向边在中间每层插一个虚拟节点（独占一列）。
+  //     虚拟节点 id 带不可见前缀（真实节点 id 来自用户输入，正常不会撞上）。
+  const segs: Array<{ from: string; to: string }> = []
+  const virtualLayer = new Map<string, number>()
+  let dummySeq = 0
+  edges.forEach((e, i) => {
+    if (isBack[i]) return // 回边不参与分层/网格：绘制走画布的回线绕行
+    const lf = layerOf.get(e.from) ?? 0
+    const lt = layerOf.get(e.to) ?? 0
+    let prev = e.from
+    for (let l = lf + 1; l < lt; l++) {
+      const vid = `${VIRTUAL_PREFIX}${dummySeq++}`
+      virtualLayer.set(vid, l)
+      segs.push({ from: prev, to: vid })
+      prev = vid
+    }
+    segs.push({ from: prev, to: e.to })
+  })
+
+  // ── ④ 层内排序：初序 = 定义序（start 置最左，虚拟节点排本层队尾）→ 重心微调。 ──
   // -1 初值：grid 为空（无 start 且全部孤立）时不产生空层，layerCount=0。
   const maxLayer = Array.from(layerOf.values()).reduce((m, l) => Math.max(m, l), -1)
   const layers: string[][] = Array.from({ length: maxLayer + 1 }, () => [])
@@ -188,6 +221,8 @@ export function computeAutoLayout(def: WorkflowDefinition): AutoLayoutResult {
     const l = layerOf.get(id) ?? 0
     layers[l].push(id)
   }
+  // 虚拟节点插队尾（Map 迭代序 = 边处理序，结果确定）；重心轮次会把它们归位。
+  for (const [vid, l] of virtualLayer) layers[l].push(vid)
   if (startId !== null) {
     const s = layers[0]?.indexOf(startId) ?? -1
     if (s > 0) {
@@ -195,7 +230,7 @@ export function computeAutoLayout(def: WorkflowDefinition): AutoLayoutResult {
       layers[0].unshift(startId)
     }
   }
-  /** 前向边邻接（层内排序用，只看行号，不看层号——前驱必在更浅层、后继必在更深层）。 */
+  /** 前向段邻接（层内排序用，只看行号，不看层号——前驱必在更浅层、后继必在更深层）。 */
   const fwdIn = new Map<string, string[]>()
   const fwdOut = new Map<string, string[]>()
   const pushMap = (m: Map<string, string[]>, k: string, v: string): void => {
@@ -203,11 +238,10 @@ export function computeAutoLayout(def: WorkflowDefinition): AutoLayoutResult {
     if (list) list.push(v)
     else m.set(k, [v])
   }
-  edges.forEach((e, i) => {
-    if (isBack[i]) return
-    pushMap(fwdOut, e.from, e.to)
-    pushMap(fwdIn, e.to, e.from)
-  })
+  for (const s of segs) {
+    pushMap(fwdOut, s.from, s.to)
+    pushMap(fwdIn, s.to, s.from)
+  }
   /** node → 当前行号（层内序；重心迭代中持续更新）。 */
   const row = new Map<string, number>()
   layers.forEach(list => list.forEach((id, r) => row.set(id, r)))
@@ -234,10 +268,47 @@ export function computeAutoLayout(def: WorkflowDefinition): AutoLayoutResult {
     for (let k = layers.length - 2; k >= 0; k--) resort(k, 'out') // 后向：贴后继
   }
 
-  // ── ④ 网格坐标：y = 层深×层距、x = 层内序×行距；孤立区在主流下方独立行。 ──
+  // ── ⑤ 层间横向对齐：层内行号只表达相对序，直接 row×行距 会让「只有一个节点的层」
+  //     永远落在第 0 列——一个汇合节点被甩到最左，所有入边被拉成横穿全图的近水平长线，
+  //     这些长线互相叠在一起（宽图上尤其明显）。改为：每层按前驱列位的中位偏移整体
+  //     平移（整数档，保持网格整齐），再全局归一到最左列 = MARGIN。汇合/分叉节点因此
+  //     落在上下游扇形的中间，长横线的跨度大幅缩短。
+  const colOf = new Map<string, number>()
   layers.forEach((list, k) => {
-    list.forEach((id, r) => {
-      positions.set(id, { x: LAYOUT_MARGIN + r * LAYOUT_ROW_GAP, y: LAYOUT_MARGIN + k * LAYOUT_LAYER_GAP })
+    let offset = 0
+    if (k > 0) {
+      const deltas: number[] = []
+      list.forEach((id, r) => {
+        const nbrs = fwdIn.get(id)
+        if (!nbrs || nbrs.length === 0) return
+        let sum = 0
+        let count = 0
+        for (const nb of nbrs) {
+          const c = colOf.get(nb)
+          if (c === undefined) continue
+          sum += c
+          count++
+        }
+        if (count > 0) deltas.push(sum / count - r)
+      })
+      if (deltas.length > 0) {
+        deltas.sort((a, b) => a - b) // 中位：个别离群前驱不至于把整层拽走
+        offset = Math.round(deltas[Math.floor(deltas.length / 2)])
+      }
+    }
+    list.forEach((id, r) => colOf.set(id, offset + r))
+  })
+  const minCol = Math.min(0, ...colOf.values())
+
+  // ── ⑥ 网格坐标：y = 层深×层距、x = 列号×行距；孤立区在主流下方独立行。
+  //     虚拟节点只占列（保证长边有独立走廊），不写坐标。
+  layers.forEach((list, k) => {
+    list.forEach(id => {
+      if (virtualLayer.has(id)) return
+      positions.set(id, {
+        x: LAYOUT_MARGIN + ((colOf.get(id) ?? 0) - minCol) * LAYOUT_ROW_GAP,
+        y: LAYOUT_MARGIN + k * LAYOUT_LAYER_GAP,
+      })
     })
   })
   // 孤立行起点 = 主流层数×层距（与最深层隔一整行，垂直即不重叠），定义序横排。

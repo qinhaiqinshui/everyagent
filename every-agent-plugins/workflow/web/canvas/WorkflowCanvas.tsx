@@ -3,7 +3,8 @@
  *
  * 能力（数据驱动，位置即 NodeDef.x/y——位置存定义）：
  * - 节点矩形（类型图标 + 标题 + 简略信息）+ 贝塞尔边（from 底锚点 → to 顶锚点，
- *   与自动布局的自上而下主流方向一致）；
+ *   与自动布局的自上而下主流方向一致；会被中间层节点挡住的长边、回指边/自环改走
+ *   避障绕行与侧向回线，见 canvas/edgeRouting.ts）；
  * - 选中态（节点/边高亮）、背景点按取消选中；
  * - mode='edit'：节点拖拽（pointerdown→capture→pointermove 改 x/y）、从底锚点拖出
  *   连线到目标节点（pointerup 命中测试）、Delete 删除由宿主面板处理（本组件只回调
@@ -29,6 +30,7 @@ import React from 'react'
 import { nodeTypeGlyph } from '../icons'
 import { nodeStrokeColor, statusVisual, NEUTRAL_STATUS_VISUAL, type RenderStatus } from './renderStates'
 import { NODE_H, NODE_W } from './geometry'
+import { computeEdgeRoutes, EDGE_CURVE_MIN_DY } from './edgeRouting'
 
 // ─── 几何常量 ─────────────────────────────────────────────────────────────
 
@@ -38,9 +40,9 @@ export { NODE_H, NODE_W } from './geometry'
 /** 画布最小尺寸（历史固定值，内容不足时兜底）。 */
 const CANVAS_W = 3200
 const CANVAS_H = 2400
-/** 内容自适应留白：节点包围盒右侧/底部的拖放余量。 */
-const CANVAS_PAD = 160
-const EDGE_GAP = 60
+/** 内容自适应留白：节点包围盒右侧/底部的拖放余量（同时要容得下回线通道外推出来的
+ *  宽度，见 canvas/edgeRouting.ts 的 LOOP_GAP + 外推档）。 */
+const CANVAS_PAD = 200
 /** tap 判定阈值（px）：pointerup 与 down 的 client 位移不超过它才算点按选中。 */
 const TAP_SLOP = 8
 
@@ -404,27 +406,14 @@ export default function WorkflowCanvas({
     setPanning(false)
   }
 
-  // ── 边几何（主流自上而下：底锚点出、顶锚点入，控制点沿 y 轴偏移） ──
-  const anchorOut = (n: CanvasNodeView) => ({ x: n.x + NODE_W / 2, y: n.y + NODE_H })
-  const anchorIn = (n: CanvasNodeView) => ({ x: n.x + NODE_W / 2, y: n.y })
-
-  const edgePath = (from: CanvasNodeView, to: CanvasNodeView): string => {
-    const s = anchorOut(from)
-    const t = anchorIn(to)
-    const dy = Math.max(EDGE_GAP, Math.abs(t.y - s.y) / 2)
-    return `M ${s.x} ${s.y} C ${s.x} ${s.y + dy}, ${t.x} ${t.y - dy}, ${t.x} ${t.y}`
-  }
-
-  const midPoint = (from: CanvasNodeView, to: CanvasNodeView): { x: number; y: number } => {
-    // 三次贝塞尔 t=0.5：0.125·P0 + 0.375·P1 + 0.375·P2 + 0.125·P3
-    const s = anchorOut(from)
-    const t = anchorIn(to)
-    const dy = Math.max(EDGE_GAP, Math.abs(t.y - s.y) / 2)
-    return {
-      x: 0.125 * s.x + 0.375 * s.x + 0.375 * t.x + 0.125 * t.x,
-      y: 0.125 * s.y + 0.375 * (s.y + dy) + 0.375 * (t.y - dy) + 0.125 * t.y,
-    }
-  }
+  // ── 边几何：路由统一交给 canvas/edgeRouting（避障绕行 + 回线 + 平行边错开）：
+  //    相邻层且无遮挡的边仍是自上而下的贝塞尔；会被中间层节点挡住的长边改走列间空隙，
+  //    回指边/自环走侧向回线——避免「几条线叠成一条」看不清。
+  const routes = React.useMemo(
+    () => computeEdgeRoutes(nodes, edges),
+    [nodes, edges],
+  )
+  const anchorOutPoint = (n: CanvasNodeView) => ({ x: n.x + NODE_W / 2, y: n.y + NODE_H })
 
   return (
     <div
@@ -509,8 +498,10 @@ export default function WorkflowCanvas({
           if (!from || !to) return null
           const selected = selection?.kind === 'edge' && selection.id === edge.id
           const visual = statusVisual(edge.status)
-          const d = edgePath(from, to)
-          const mid = midPoint(from, to)
+          const route = routes.get(edge.id)
+          if (!route) return null
+          const d = route.d
+          const mid = route.mid
           const stroke = selected
             ? 'var(--accent-blue, #61a5ff)'
             : edge.status
@@ -566,8 +557,8 @@ export default function WorkflowCanvas({
         {pendingEdge ? (() => {
           const from = nodeById.get(pendingEdge.from)
           if (!from) return null
-          const s = anchorOut(from)
-          const dy = Math.max(EDGE_GAP, Math.abs(pendingEdge.y - s.y) / 2)
+          const s = anchorOutPoint(from)
+          const dy = Math.max(EDGE_CURVE_MIN_DY, Math.abs(pendingEdge.y - s.y) / 2)
           return (
             <path
               d={`M ${s.x} ${s.y} C ${s.x} ${s.y + dy}, ${pendingEdge.x} ${pendingEdge.y - dy}, ${pendingEdge.x} ${pendingEdge.y}`}
