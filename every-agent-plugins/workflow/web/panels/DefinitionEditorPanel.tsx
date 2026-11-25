@@ -1054,7 +1054,7 @@ function NodePropertySection({
             )}
           </div>
           <div className="wf-editor-field">
-            <label>会话线（agent）——延续上游已有，或在本节点新建</label>
+            <label>agent名</label>
             <select
               className="wf-editor-select"
               value={referencing ? node.agent ?? '' : NEW_LINE_VALUE}
