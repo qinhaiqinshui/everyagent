@@ -47,12 +47,12 @@ class SkillSlashProviderTest {
     /** 构造一组目录扫描形态的 skill(按 id 升序,与 SkillCatalog.scan() 的确定序一致)。 */
     private static List<Skill> catalogSkills() {
         return List.of(
-                new Skill("agent-dispatch", "子 Agent", "派发子 Agent",
+                new Skill("agent-dispatch", "子 Agent", "派发子 Agent", List.of(),
                         "/skills/agent-dispatch/skill.md"),
-                new Skill("code-review", "代码审查", "审查代码变更",
+                new Skill("code-review", "代码审查", "审查代码变更", List.of(),
                         "/skills/code-review/skill.md"),
-                new Skill("plan", "计划模式", "做计划", "/skills/plan/skill.md"),
-                new Skill("skill-creator", "Skill 创建器", "创建新 skill",
+                new Skill("plan", "计划模式", "做计划", List.of(), "/skills/plan/skill.md"),
+                new Skill("skill-creator", "Skill 创建器", "创建新 skill", List.of(),
                         "/skills/skill-creator/skill.md"));
     }
 

@@ -1,10 +1,12 @@
 package dev.everyagent.worker.config;
 
 import dev.everyagent.plugin.api.spi.SandboxBackend.Access;
+import dev.everyagent.worker.agent.AgentLedger;
 import dev.everyagent.worker.agent.PerCallToolCallingManager;
 import dev.everyagent.worker.agent.ToolCallLimits;
 import dev.everyagent.worker.agent.ToolArgumentsGuardInterceptor;
 import dev.everyagent.worker.agent.ToolEventInterceptor;
+import dev.everyagent.worker.agent.SkillToolExposeInterceptor;
 import dev.everyagent.worker.modules.SkillExposureStore;
 import dev.everyagent.worker.os.SandboxPathRegistry;
 import dev.everyagent.worker.plugin.adapters.SkillAdvisorProvider;
@@ -64,8 +66,10 @@ public class WorkerBeanConfiguration {
      * per-run 上下文由 AgentRunner 经 prompt options 的 toolContext 下行,不依赖 ThreadLocal。
      */
     @Bean
-    public ToolCallingManager toolCallingManager(ToolExecutionInterceptorRegistry interceptorRegistry) {
+    public ToolCallingManager toolCallingManager(ToolExecutionInterceptorRegistry interceptorRegistry,
+            SkillCatalog skillCatalog, SandboxPathRegistry pathRegistry, AgentLedger agentLedger) {
         interceptorRegistry.register(new ToolArgumentsGuardInterceptor());
+        interceptorRegistry.register(new SkillToolExposeInterceptor(skillCatalog, pathRegistry, agentLedger));
         interceptorRegistry.register(new ToolEventInterceptor());
         ToolCallLimits limits = new ToolCallLimits(200, Map.of(), Set.of(), 500,
                 ToolCallLimitBehavior.THROW);

@@ -183,6 +183,20 @@ public interface AgentContext {
     void resetForRerun();
 
     /**
+     * 将工具名并入本 agent 的已暴露 hidden 工具集合(skill 工具自动暴露,§7.14)。
+     *
+     * <p>触发源是 per-call 工具执行链的被动观察节点——read_file <b>成功</b>读取某 skill
+     * 知识包时,按其 frontmatter {@code tools} 绑定整表并入;集合由 worker 组装期取与
+     * hidden 池的交集以完整定义并入请求 toolCallbacks。本方法只写可见性集合(纯内存,
+     * 跨轮累积),不触碰工具注册与解析机制;持久化由调用方(拦截节点)另行并入台账。
+     * 默认无操作(未实现方零破坏)。
+     *
+     * @param toolNames 要暴露的工具名(null/空白项安全跳过)
+     */
+    default void exposeTools(List<String> toolNames) {
+    }
+
+    /**
      * 终态声明(CAS 幂等,无附言的兼容入口)。
      *
      * @param status 终态状态(completed / stopped / error)

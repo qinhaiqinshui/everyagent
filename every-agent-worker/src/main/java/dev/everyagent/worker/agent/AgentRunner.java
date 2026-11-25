@@ -14,9 +14,11 @@ import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -78,16 +80,29 @@ public class AgentRunner {
      */
     public void run(AgentEntity a) throws InterruptedException {
         // 2.0.1:prompt options 原样透传并强转 OpenAiChatOptions(且不与默认 options 合并),
-            // 正交性(与 SchemaStrippedToolCallback,核实结论):SchemaStripped = 工具进请求
-            // 但 schema 精简(剥 $schema 键省 token);hidden = 连工具名都不进请求(模型经
-            // skill 文档认知后按名调用)。两者作用对象不相交——hidden 工具不参与
-            // SchemaStripped 包装(它根本不进 a.tools → toolCallbacks 这条请求侧通路,
-            // 无 schema 可剥),常规工具照常包装。
+            // 请求 tool 定义统一经 SchemaStrippedToolCallback 包装(只剥 schema 内 $schema
+            // 键省 token,参数定义完整):常规工具全量 + exposedTools 命中 hidden 池的工具。
             OpenAiChatOptions.Builder options = a.options.mutate();
-            if (!a.tools.isEmpty()) {
-                options.toolCallbacks(a.tools.stream()
-                        .map(SchemaStrippedToolCallback::new)
-                        .toArray(ToolCallback[]::new));
+            List<ToolCallback> toolCallbacks = new ArrayList<>();
+            for (ToolCallback tc : a.tools) {
+                toolCallbacks.add(new SchemaStrippedToolCallback(tc));
+            }
+            // exposedTools 并入(交集语义):仅 hidden 池内确实注册的名字才以完整定义(池内
+            // 原回调,含参数 schema,与常规工具同路剥 $schema)进请求 tool 定义——skill
+            // frontmatter 捏造的未注册名不生效;名字已在常规工具名集合中则跳过(去重保护)。
+            // 每轮组装重算(幂等):exposedTools 跨轮累积,同一名不会重复进定义。
+            Set<String> regularNames = new HashSet<>();
+            for (ToolCallback tc : a.tools) {
+                regularNames.add(tc.getToolDefinition().name());
+            }
+            for (String name : a.exposedTools) {
+                ToolCallback tc = a.hiddenTools.get(name);
+                if (tc != null && !regularNames.contains(name)) {
+                    toolCallbacks.add(new SchemaStrippedToolCallback(tc));
+                }
+            }
+            if (!toolCallbacks.isEmpty()) {
+                options.toolCallbacks(toolCallbacks.toArray(ToolCallback[]::new));
             }
             // per-run 四件套经框架 ToolContext map 下行(架构 §7.14.3):共享单例
             // PerCallToolCallingManager 的切口由此取出 agentId(链节点 MAIN/SUB_AGENT 归属判定,

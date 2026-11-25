@@ -171,6 +171,21 @@ class SkillCatalogTest {
         assertTrue(catalog.scan().isEmpty());
     }
 
+    @Test
+    void frontmatterToolsBound(@TempDir Path tmp) throws Exception {
+        Path skillsDir = Files.createDirectory(tmp.resolve("skills"));
+        writeSkill(skillsDir, "agent-dispatch",
+                "---\nname: 子 Agent\ntools: [run_agent, wait_agents]\n---\n# 标题\n正文\n");
+        writeSkill(skillsDir, "plain", "# 标题\n正文\n");
+
+        List<Skill> skills = newCatalog(skillsDir).scan();
+
+        assertEquals(List.of("agent-dispatch", "plain"), skills.stream().map(Skill::id).toList());
+        assertEquals(List.of("run_agent", "wait_agents"), skills.get(0).boundTools(),
+                "frontmatter tools 流式数组透出为 boundTools");
+        assertEquals(List.of(), skills.get(1).boundTools(), "无 tools 键 → 空列表");
+    }
+
     private static void writeSkill(Path skillsDir, String id, String content) throws IOException {
         Path dir = Files.createDirectory(skillsDir.resolve(id));
         Files.writeString(dir.resolve("skill.md"), content);

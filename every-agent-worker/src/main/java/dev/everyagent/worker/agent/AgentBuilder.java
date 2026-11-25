@@ -66,6 +66,8 @@ public class AgentBuilder {
     private final InteractionServiceImpl interaction;
     private final SandboxPathRegistry pathRegistry;
     private final AgentRunner runner;
+    /** agent 台账(可空 = 单测桩):build() 期回灌该 agentId 已持久化的 exposedTools(§7.14)。 */
+    private final AgentLedger agentLedger;
 
     public AgentBuilder(ToolProviderRegistry toolRegistry,
             AdvisorProviderRegistry advisorRegistry,
@@ -77,7 +79,8 @@ public class AgentBuilder {
             RipgrepBinary rgBinary,
             InteractionServiceImpl interaction,
             SandboxPathRegistry pathRegistry,
-            AgentRunner runner) {
+            AgentRunner runner,
+            AgentLedger agentLedger) {
         this.toolRegistry = toolRegistry;
         this.advisorRegistry = advisorRegistry;
         this.defaultTcm = defaultTcm;
@@ -89,6 +92,7 @@ public class AgentBuilder {
         this.interaction = interaction;
         this.pathRegistry = pathRegistry;
         this.runner = runner;
+        this.agentLedger = agentLedger;
     }
 
     /**
@@ -124,8 +128,10 @@ public class AgentBuilder {
         ToolOutcomeLog toolOutcomes = new ToolOutcomeLog();
 
         // 聚合全部工具: 遍历 toolRegistry.getProviders() → appliesTo → createTools;
-        // hidden 池同链聚合(createHiddenTools,键=工具名,同名先到先得):不进请求
-        // tool 定义,随 prompt options 框架 ToolContext map 独立键下行(见 AgentRunner)。
+        // hidden 池同链聚合(createHiddenTools,键=工具名,同名先到先得),固定形态恒构建:
+        // 不进请求 tool 定义,随 prompt options 框架 ToolContext map 独立键下行(见
+        // AgentRunner);其中 exposedTools ∩ hidden 池键集 的工具由 AgentRunner 组装期
+        // 以完整定义并入请求 toolCallbacks(无开关回落形态)。
         ToolContextImpl toolCtx = createToolContext(agentId, exec, toolOutcomes);
         List<ToolCallback> tools = new ArrayList<>();
         Map<String, ToolCallback> hiddenTools = new java.util.LinkedHashMap<>();
@@ -136,12 +142,6 @@ public class AgentBuilder {
                     hiddenTools.putIfAbsent(toolNameOf(tc), tc);
                 }
             }
-        }
-        // 应急回退(worker.tools.hidden-enabled=false,默认 true):hidden 池回落常规池
-        //(进请求 tool 定义、带 schema)。开关语义只在聚合层生效,provider 侧不感知。
-        if (!props.getTools().isHiddenEnabled()) {
-            tools.addAll(hiddenTools.values());
-            hiddenTools.clear();
         }
         return new Build(agentId, chatModel, options, exec, configId, tools, toolOutcomes,
                 java.util.Collections.unmodifiableMap(new java.util.LinkedHashMap<>(hiddenTools)));
@@ -322,6 +322,16 @@ public class AgentBuilder {
             // hidden 池转交 entity(不可变;AgentRunner 随 prompt options 下行,见其 run())
             entity.hiddenTools = Map.copyOf(hiddenTools);
             entity.conversation.addAll(conversation);
+            // 冷启动/续跑回灌(§7.14):从台账(AgentLedger,内存优先、未 track 回退磁盘
+            // agents.json)读回该 agentId 已持久化的 skill 工具暴露集合——主 agent 每轮新建
+            // 实体、子 agent 跨轮/重启档案重建均经本方法收口,下一轮/重启后无需重读知识包。
+            if (agentLedger != null) {
+                List<String> persisted = agentLedger.exposedToolsOf(
+                        execution.subjectId(), execution.dataDir(), agentId);
+                if (!persisted.isEmpty()) {
+                    entity.exposedTools.addAll(persisted);
+                }
+            }
 
             // 2. 装配 TCM(两层,架构 §7.14.3):共享 PerCallToolCallingManager 单例
             //    (切口自带 per-call 拦截链,per-run 三件套由 AgentRunner 经 prompt

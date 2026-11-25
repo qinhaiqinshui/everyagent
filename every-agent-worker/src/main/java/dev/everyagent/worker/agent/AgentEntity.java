@@ -20,6 +20,7 @@ import tools.jackson.databind.node.ObjectNode;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -78,6 +79,15 @@ public final class AgentEntity implements Agent {
      * 回调解析期命中即执行(拦截链/事件/授权与常规工具完全一致)。
      */
     public Map<String, ToolCallback> hiddenTools = Map.of();
+
+    /**
+     * 已随请求 tool 定义暴露给模型的 hidden 工具名集合:<b>纯可见性语义</b>——不在集合内的
+     * hidden 工具仍可按 skill 文档认知后硬调(hidden 池解析照常执行,不因未暴露而拒绝);
+     * 进集合的由 {@link AgentRunner} 组装期取 exposedTools ∩ hidden 池键集 的工具,以完整
+     * 定义(池内原回调,含参数 schema)并入每轮请求 toolCallbacks。由自动暴露节点写入
+     * (read_file 技能知识包时),组装期消费;final 集合本身可变(跨轮累积,不重建 agent 引用)。
+     */
+    public final Set<String> exposedTools = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
     /** 仅由本 agent 的执行线程读写(任务线程 / 子 agent 线程)。 */
     public final List<Message> conversation = new ArrayList<>();
@@ -408,6 +418,23 @@ public final class AgentEntity implements Agent {
         AgentActivity a = activity.get();
         if (a != null && a.error() != null) {
             activity.set(new AgentActivity(a.reasoning(), a.content(), null, a.createdAt(), a.updatedAt()));
+        }
+    }
+
+    /**
+     * skill 工具自动暴露写入口(§7.14):并入 {@link #exposedTools} 可见性集合——
+     * 纯内存语义,持久化由拦截节点(SkillToolExposeInterceptor)另行并入 AgentLedger;
+     * 重复调用幂等(集合语义),跨轮累积不随 resetForRerun 清空(读包一次,长期有效)。
+     */
+    @Override
+    public void exposeTools(List<String> toolNames) {
+        if (toolNames == null || toolNames.isEmpty()) {
+            return;
+        }
+        for (String name : toolNames) {
+            if (name != null && !name.isBlank()) {
+                exposedTools.add(name);
+            }
         }
     }
 

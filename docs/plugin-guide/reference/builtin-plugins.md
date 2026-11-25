@@ -76,7 +76,7 @@ has_children: false
 | 想实现 | 推荐范本 | 源码相对路径 | 为什么推荐 |
 |---|---|---|---|
 | ToolProvider（给模型加工具） | subagent | `every-agent-plugins/subagent/src/main/java/dev/everyagent/plugin/subagent/SubAgentPlugin.java:41` | 典型工具型实现,注册即用 |
-| ToolProvider 的 hidden 工具（`createHiddenTools`——注册但不进请求 tool 定义，模型经 skill 按名调用） | workflow | `every-agent-plugins/workflow/`（hidden 定义 CRUD 五工具 + skill 文档化，见 [工具 §1.5](../backend/tools-and-sandbox.md)） | hidden 工具 + skill 文档化组合的范本 |
+| ToolProvider 的 hidden 工具（`createHiddenTools`——常驻可执行池，frontmatter `tools` 绑定 + 读取知识包后自动暴露） | workflow | `every-agent-plugins/workflow/`（hidden 工具 11 件 + skill frontmatter 绑定，见 [工具 §1.5](../backend/tools-and-sandbox.md)） | hidden 工具 + 自动暴露组合的范本 |
 | AdvisorProvider（请求/响应链增强） | system-info | `every-agent-plugins/system-info/src/main/java/dev/everyagent/plugin/sysinfo/SystemInfoAdvisorProvider.java` | 全仓最小 Advisor 范例（入口 19 行），只做请求前 system prompt 注入 |
 | SandboxProvider（自定义沙箱） | sandbox-wsl-ubuntu | `every-agent-plugins/sandbox-wsl-ubuntu/src/main/java/dev/everyagent/plugin/sandbox/wslubuntu/WslUbuntuSandboxProvider.java:81-82` | 独立沙箱后端完整样例（codex 为强隔离样本,体量大） |
 | SearchProvider | **无内置范例** | —（声明：`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/WorkerPluginContext.java:52`） | 内置插件零使用，别照抄空气；SPI 已接线（统一 `search` 聚合——内置 `file-content`/`file-name`/`task` 三引擎本身就是内置 provider、与插件 provider 同权，见 [advisors §6](../backend/advisors.md)） |
@@ -378,8 +378,8 @@ Token 估算器（全仓唯一实现 BuiltinTokenEstimator）+ 在线校准 Advi
 
 工作流引擎与界面：画布定义编辑、实例运行、并行调度（**同 agent 名节点全局互斥 = 会话线串行**）、循环上限（maxRuns）、运行变量、定义导入导出、出错 supervisor 介入（retry / skip / fail / retryWithInput，或 askUser 挂起等人工决策）。
 - 存储位置：`<homeDir>/workspaces/<workspaceId>/workflows/`（`definitions/<wf_id>/definition.json` + `instances/<wi_id>/`，与 `tasks/` 平级、工作区即隔离边界；[架构文档](../../ARCHITECTURE.md) §7.15 / §7.20.7）。
-- AI 可用 hidden 工具五件：`workflow_create` / `workflow_get` / `workflow_update` / `workflow_delete` / `workflow_list`——经 `ToolProvider.createHiddenTools` 注册（不进请求 tool 定义，模型经本插件 skill 文档按名调用，[工具 §1.5](../backend/tools-and-sandbox.md)）。
-- 值得看：**非任务主体的 ExecContext 实现**（`WorkflowRuntime`）——advisor 链 / 授权链 / 工具链零改动复用的范本，任务域 advisor 靠 `AdvisorContext.isTaskSubject()` 过滤（[advisors §1.6](../backend/advisors.md)）；hidden 工具 + skill 文档化组合的最大实例；自研 SVG 画布与 `instance.events` 长轮询的工程范本。
+- AI 可用 hidden 工具 11 件：定义 CRUD（`workflow_create`/`workflow_get`/`workflow_update`/`workflow_delete`/`workflow_list`）+ 运行/查询/重开（`workflow_run`/`workflow_rerun`/`workflow_instance_status`/`workflow_instance_log`/`workflow_instance_events`/`workflow_instance_cancel`）——经 `ToolProvider.createHiddenTools` 注册，frontmatter `tools` 绑定，模型读取 workflow 技能知识包后以完整定义自动进请求（未读取前不在请求列表，按文档硬调仍可执行，[工具 §1.5](../backend/tools-and-sandbox.md)）。
+- 值得看：**非任务主体的 ExecContext 实现**（`WorkflowRuntime`）——advisor 链 / 授权链 / 工具链零改动复用的范本，任务域 advisor 靠 `AdvisorContext.isTaskSubject()` 过滤（[advisors §1.6](../backend/advisors.md)）；hidden 工具 + frontmatter 绑定自动暴露组合的最大实例；自研 SVG 画布与 `instance.events` 长轮询的工程范本。
 
 ## 6. 下一步读
 

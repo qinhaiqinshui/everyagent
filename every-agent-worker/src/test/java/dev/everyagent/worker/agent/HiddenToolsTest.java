@@ -46,9 +46,7 @@ import static org.mockito.Mockito.when;
  *       {@code everyagent.hiddenTools}(与 RUN_CONTEXT_KEY 同 map 共存、互不可见);</li>
  *   <li><b>解析无串扰</b>:共享单例 PerCallToolCallingManager 上并发两请求各自 hidden 池,
  *       解析查本请求池;他请求池的工具名不命中;</li>
- *   <li><b>soft-fail 回归</b>:hidden 池在位时未知工具名仍走 MissingToolCallbackResolver 兜底;</li>
- *   <li><b>应急回退</b>:worker.tools.hidden-enabled=false 时 hidden 池回落常规暴露
- *       (进请求 tool 定义、带 schema)。</li>
+ *   <li><b>soft-fail 回归</b>:hidden 池在位时未知工具名仍走 MissingToolCallbackResolver 兜底。</li>
  * </ul>
  */
 class HiddenToolsTest {
@@ -118,7 +116,7 @@ class HiddenToolsTest {
     private static AgentBuilder agentBuilder(ToolProviderRegistry tools, WorkerProperties props) {
         return new AgentBuilder(tools, new AdvisorProviderRegistry(),
                 mock(ToolCallingManager.class), props,
-                null, null, null, null, null, null, mock(AgentRunner.class));
+                null, null, null, null, null, null, mock(AgentRunner.class), null);
     }
 
     private static ExecContext exec() {
@@ -254,39 +252,6 @@ class HiddenToolsTest {
         assertThat(data).startsWith("[工具执行失败]")
                 .contains("No ToolCallback found for tool name: nope");
         assertThat(hidden.calls).isZero();
-    }
-
-    // ── ④ 应急回退:hidden-enabled=false 时 hidden 池回落常规暴露 ──
-
-    @Test
-    void disabledSwitchFallsHiddenToolsBackToRegularExposure() throws Exception {
-        MixedProvider provider = new MixedProvider();
-        ToolProviderRegistry registry = new ToolProviderRegistry();
-        registry.register(provider);
-        WorkerProperties props = new WorkerProperties();
-        props.getTools().setHiddenEnabled(false);
-
-        AgentEntity entity = agentBuilder(registry, props)
-                .create("a_main", chatModel(), OpenAiChatOptions.builder().build(),
-                        exec(), "cfg1")
-                .build();
-
-        // 聚合回落:hidden 工具进常规池(将随请求 tool 定义下发、带 schema),hidden 池清空
-        assertThat(entity.tools).extracting(tc -> tc.getToolDefinition().name())
-                .containsExactlyInAnyOrder("fs_read", "run_agent", "list_agents");
-        assertThat(entity.hiddenTools).isEmpty();
-        assertThat(entity.tools.get(1).getToolDefinition().inputSchema())
-                .contains("object");
-
-        // 请求组装:进请求 tool 定义,不再下发 hidden 池键
-        List<Prompt> captured = new ArrayList<>();
-        entity.chatClient = capturingChatClient(captured);
-        new AgentRunner(props).run(entity);
-
-        assertThat(requestToolNames(captured.get(0)))
-                .containsExactlyInAnyOrder("fs_read", "run_agent", "list_agents");
-        assertThat(((OpenAiChatOptions) captured.get(0).getOptions()).getToolContext())
-                .doesNotContainKey(PerCallToolCallingManager.HIDDEN_TOOLS_KEY);
     }
 
     // ── TCM 级辅助 ──

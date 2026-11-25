@@ -223,8 +223,9 @@
 
 1. 普通任务里问模型「帮我创建一个工作流定义…」→ 模型经 skill 文档调用
    `workflow_create/update/list/get/delete`；`plugin.list` RPC 可见 workflow 已启用。
-2. 工具不进请求 tool 定义（前端/抓包看不到 schema），但模型按名调用成功——
-   hidden 机制生效（应急回退：`worker.tools.hidden-enabled=false` 后工具转为常规暴露）。
+2. 读取 workflow 技能知识包后，绑定工具以完整定义出现在请求工具列表（前端/抓包可见
+   schema——自动暴露生效）；未读取知识包前不在请求工具列表，但模型按文档硬调仍执行
+   成功——hidden 池常驻可执行。
 3. **工作流自身 agent 不可见**：工作流 AI 节点里让模型尝试调用 workflow_create →
    不在 hidden 池（`appliesTo` 排除工作流主体），soft-fail 提示工具不存在。
 

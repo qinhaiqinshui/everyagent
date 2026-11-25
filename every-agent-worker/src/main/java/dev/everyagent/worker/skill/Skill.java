@@ -1,5 +1,7 @@
 package dev.everyagent.worker.skill;
 
+import java.util.List;
+
 /**
  * skill 领域模型(纯数据,不耦合 Spring AI 或 prompt 构造):目录即真相源,
  * 每个 skill = 系统技能目录 {@code <skillsDir>/} 下一个一级目录 + 目录内的
@@ -11,8 +13,8 @@ package dev.everyagent.worker.skill;
  * 物化到系统技能目录,AI 需要执行某技能时经 {@code read_file} 按
  * {@link #knowledgePath()}(绝对路径,系统技能目录对 AI 工具只读放行)自行读取。
  *
- * <p>展示元数据(title/description)来自 {@code skill.md} 的 frontmatter
- * ({@link SkillFrontmatter},仅 {@code name}+{@code description} 两个键),
+ * <p>展示元数据(title/description)与工具绑定(boundTools)来自 {@code skill.md} 的
+ * frontmatter({@link SkillFrontmatter},键为 {@code name}/{@code description}/{@code tools}),
  * 缺失时回落「目录名 + 首个非 {@code #} 正文行」。是否进 system prompt
  * <b>不是</b> skill 本体的属性(是 skill × 工作区的关系,由 worker 侧按工作区
  * 排除配置决定,不在本记录、也不在 frontmatter 中)。
@@ -27,6 +29,13 @@ public record Skill(
 
         /** 一句话说明何时使用该 skill(渐进式披露的「触发条件」索引)。 */
         String description,
+
+        /**
+         * 知识包绑定的工具名列表(纯可见性绑定声明,来自 frontmatter {@code tools} 键):
+         * AI 读取该知识包后,这些工具名将并入请求的 tool 定义(自动暴露);缺省为空列表
+         * (不绑定任何工具)。只是「读包即暴露」的声明,不改变工具本身的注册与解析机制。
+         */
+        List<String> boundTools,
 
         /**
          * 知识包路径,<b>宿主绝对路径</b>(如 {@code C:\Users\...\.everyagent\skills\agent-dispatch\skill.md})。

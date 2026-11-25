@@ -38,18 +38,19 @@ class BuiltInSkillPacksTest {
      * 不归一的话同一份文件在 LF/CRLF 工作区会算出不同 hash。
      * 若日后有意修改正文,请连同此常量一起更新。
      *
-     * <p>两包的钉子基线不同:
+     * <p>两包的钉子均为「钉住现状正文」口径——此后任何再改动(无论有意或误改)都须
+     * 显式连常量一起更新,误改即红灯:
      * <ul>
-     *   <li>{@code plan}:自旧扁平资源 {@code skill/plan.md} 迁移以来正文从未改动,
-     *       hash = 迁移前(旧资源)正文 hash;「只加头部、正文不动」的回归护栏。</li>
+     *   <li>{@code plan}:初始钉「迁移前正文」(自旧扁平资源 {@code skill/plan.md} 迁移
+     *       只加头部、正文一字未动);其后在 skill 工具自动暴露特性中<b>有意修改</b>了
+     *       「执行方式」段(新增同批读取「子 Agent 编排」知识包的指引),常量随之同步。</li>
      *   <li>{@code skill-creator}:迁移时同样只加头部;但其知识包正文在文档收尾步
      *       (教 AI 新 frontmatter 写法:仅 name/description、无暴露字段)被<b>有意整体改写</b>,
-     *       故此处置换为改写后正文的 hash——钉住「现状正文」,此后任何再改动(无论有意
-     *       或误改)都须显式连此常量一起更新,误改即红灯。</li>
+     *       故此处置换为改写后正文的 hash。</li>
      * </ul>
      */
     private static final String PLAN_BODY_SHA256 =
-            "4E48F7A4DED1281625E86BA82C2BC6DEF14BCA24443127707CC77A7E5301B489";
+            "F73AAE45677816ED6561A250FFB6CB8783F8E352C547307C346DF4F202733BF3";
     private static final String SKILL_CREATOR_BODY_SHA256 =
             "AFEA1E076D8F124072E8C50AAD26B4C169C92BFD0ACE995691C87CBB41BECA53";
 
@@ -172,8 +173,8 @@ class BuiltInSkillPacksTest {
 
     /**
      * 迁移钉子:物化产物 = classpath 源逐字节一致;且去掉 frontmatter 头后的正文
-     * (行尾归一)SHA-256 与钉子常量一致——plan 钉「迁移前正文」(只加头部、正文不动
-     * 的回归护栏),skill-creator 钉「知识包有意改写后的现状正文」(见常量 javadoc)。
+     * (行尾归一)SHA-256 与钉子常量一致——两包均钉「现状正文」(见常量 javadoc:
+     * plan 正文已在 skill 工具自动暴露特性中有意修改过一次,常量随之同步)。
      * 行尾归一理由见常量 javadoc。
      */
     @Test
@@ -205,7 +206,7 @@ class BuiltInSkillPacksTest {
         String body = bodyAfterFrontmatter(text).replace("\r\n", "\n");
         String sha = HexFormat.of().withUpperCase().formatHex(
                 MessageDigest.getInstance("SHA-256").digest(body.getBytes(StandardCharsets.UTF_8)));
-        assertEquals(expectedSha256, sha, id + " 去头正文 hash 应与迁移前一致(正文一字未动)");
+        assertEquals(expectedSha256, sha, id + " 去头正文 hash 应与钉子常量一致(有意修改正文须连常量一起更新)");
     }
 
     /** 剥离首部 frontmatter 块(--- 起、下一个 --- 止)及其后的分隔空行;无块则原样返回。 */

@@ -3,13 +3,15 @@ package dev.everyagent.worker.skill;
 import dev.everyagent.worker.skill.SkillFrontmatter.Frontmatter;
 import org.junit.jupiter.api.Test;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 
 /**
  * {@link SkillFrontmatter} 纯单测(无 Spring):逐条钉住计划「skill 目录唯一真相源」步骤 3 的
  * 解析规格——有/无/未闭合块、BOM、引号与空值、注释行、未知键忽略(历史遗留的暴露控制键等外来键)、
- * description 截断 200、name 回落目录名,以及易错点「description 回落必须跳过 frontmatter 块本身」。
+ * description 截断 200、name 回落目录名,以及易错点「description 回落必须跳过 frontmatter 块本身」;
+ * 以及 tools 键(知识包绑定的工具名)的流式/块式解析、缺省空列表、非字符串项降级。
  */
 class SkillFrontmatterTest {
 
@@ -247,5 +249,106 @@ class SkillFrontmatterTest {
 
         String md2 = "---  \nname: 尾空白定界\n---\t\n正文。";
         assertEquals("尾空白定界", SkillFrontmatter.parse(md2, DIR).name());
+    }
+
+    // ===== tools 键(知识包绑定的工具名,读包后自动并入请求 tool 定义)=====
+
+    // 12. 流式数组解析:合法字符串项按序收集,name/description 照常不受影响
+    @Test
+    void flowStyleToolsParsed() {
+        String md = """
+                ---
+                name: 子 Agent
+                description: 派发子 Agent。
+                tools: [run_agent, list_agents, wait_agents, stop_agent]
+                ---
+
+                正文。
+                """;
+        Frontmatter fm = SkillFrontmatter.parse(md, DIR);
+        assertThat(fm.boundTools()).containsExactly("run_agent", "list_agents", "wait_agents", "stop_agent");
+        assertEquals("子 Agent", fm.name());
+        assertEquals("派发子 Agent。", fm.description());
+    }
+
+    // 12b. 流式数组:项两侧空白剥离 + 成对引号剥离(引号内是数字/布尔也按显式字符串原样保留)
+    @Test
+    void flowStyleToolsTrimAndQuotes() {
+        String md = "---\ntools: [ \"a b\" , 'c' ,d ]\n---\n正文。";
+        assertThat(SkillFrontmatter.parse(md, DIR).boundTools()).containsExactly("a b", "c", "d");
+
+        String md2 = "---\ntools: [\"42\", 'true']\n---\n正文。";
+        assertThat(SkillFrontmatter.parse(md2, DIR).boundTools()).containsExactly("42", "true");
+    }
+
+    // 13. 块式列表解析(tools: 空值 + 后续 - item 行;缩进/顶格皆可,穿插空行/注释不断列表,
+    //     出现普通键值行即结束列表回到常规解析)
+    @Test
+    void blockStyleToolsParsed() {
+        String md = """
+                ---
+                name: 块式
+                tools:
+                  - run_agent
+                  - wait_agents
+
+                # 列表内穿插注释与空行,列表不断
+                - stop_agent
+                description: 键回到普通行,列表结束
+                ---
+
+                正文。
+                """;
+        Frontmatter fm = SkillFrontmatter.parse(md, DIR);
+        assertThat(fm.boundTools()).containsExactly("run_agent", "wait_agents", "stop_agent");
+        assertEquals("键回到普通行,列表结束", fm.description());
+        assertEquals("块式", fm.name());
+    }
+
+    // 14. 缺省 = 空列表(恒非 null):无 tools 键 / 空流式数组 / 块式零项 / 无块 / null 输入
+    @Test
+    void toolsDefaultsToEmptyList() {
+        assertThat(SkillFrontmatter.parse("---\nname: 无工具\n---\n正文。", DIR).boundTools()).isEmpty();
+        assertThat(SkillFrontmatter.parse("---\ntools: []\n---\n正文。", DIR).boundTools()).isEmpty();
+        assertThat(SkillFrontmatter.parse("---\ntools: [ ]\n---\n正文。", DIR).boundTools()).isEmpty();
+        assertThat(SkillFrontmatter.parse("---\ntools:\n---\n正文。", DIR).boundTools()).isEmpty();
+        assertThat(SkillFrontmatter.parse("# 无块\n正文。", DIR).boundTools()).isEmpty();
+        assertThat(SkillFrontmatter.parse(null, DIR).boundTools()).isNotNull().isEmpty();
+    }
+
+    // 15. 非字符串项降级:数字/布尔/null 字面量、空项、嵌套结构逐项 WARN 跳过,合法项保留
+    @Test
+    void nonStringToolItemsSkipped() {
+        String md = "---\ntools: [ok_tool, 42, 3.14, true, false, null, \"\", b]\n---\n正文。";
+        assertThat(SkillFrontmatter.parse(md, DIR).boundTools()).containsExactly("ok_tool", "b");
+
+        // 嵌套结构项(流式)跳过
+        String md2 = "---\ntools: [a, [b]]\n---\n正文。";
+        assertThat(SkillFrontmatter.parse(md2, DIR).boundTools()).containsExactly("a");
+
+        // 块式列表内的非字符串项同样逐项降级
+        String md3 = "---\ntools:\n  - a\n  - 42\n  - b\n---\n正文。";
+        assertThat(SkillFrontmatter.parse(md3, DIR).boundTools()).containsExactly("a", "b");
+    }
+
+    // 16. 非数组标量值 WARN 降级为空列表;同块其他键照常解析(整体不失败)
+    @Test
+    void nonArrayToolsValueDowngraded() {
+        String md = "---\nname: 标量误用\ntools: run_agent\ndescription: 其他键不受影响。\n---\n正文。";
+        Frontmatter fm = SkillFrontmatter.parse(md, DIR);
+        assertThat(fm.boundTools()).isEmpty();
+        assertEquals("标量误用", fm.name());
+        assertEquals("其他键不受影响。", fm.description());
+
+        // 未闭合的流式数组 / 映射结构:均按非数组降级为空列表
+        assertThat(SkillFrontmatter.parse("---\ntools: [a, b\n---\n正文。", DIR).boundTools()).isEmpty();
+        assertThat(SkillFrontmatter.parse("---\ntools: {a: b}\n---\n正文。", DIR).boundTools()).isEmpty();
+    }
+
+    // 17. 重复 tools 键 = 后值覆盖(与 name/description 同语义)
+    @Test
+    void duplicateToolsKeyLastWins() {
+        String md = "---\ntools: [a, b]\ntools: [c]\n---\n正文。";
+        assertThat(SkillFrontmatter.parse(md, DIR).boundTools()).containsExactly("c");
     }
 }

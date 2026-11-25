@@ -158,8 +158,8 @@ class SkillAdvisorTest {
         assertNotNull(text, "应注入「# 可用技能」区块");
         // 工具说明与技能清单同一条 system 消息注入(不单独追加消息,不落会话末位)
         assertTrue(text.contains("工具说明"), "应默认注入工具说明段落:" + text);
-        assertTrue(text.contains("未出现在工具列表"),
-                "应声明:未出现在工具列表中的工具也可直接调用:" + text);
+        assertTrue(text.contains("自动加入工具列表"),
+                "应声明:知识包关联的工具在读取知识包后自动加入工具列表(自动暴露语义):" + text);
         assertTrue(text.contains("直接调用"), "应给出直接调用的指引:" + text);
     }
 

@@ -37,8 +37,9 @@ import dev.everyagent.worker.config.WorkerProperties;
  *   <li>目录名即 id,须匹配 {@code [a-z0-9][a-z0-9-]*}(非法跳过);</li>
  *   <li>目录内须存在 {@code skill.md}(缺失跳过);</li>
  *   <li>realpath 必须仍落在 {@code skillsDir} 内(符号链接越界拒绝该目录);</li>
- *   <li>展示元数据(title/description)经 {@link SkillFrontmatter#parse} 解析
- *       (fallbackName = 目录名;无 frontmatter 时回落「目录名 + 首个非 {@code #} 正文行」)。</li>
+ *   <li>展示元数据(title/description)与工具绑定(boundTools)经 {@link SkillFrontmatter#parse}
+ *       解析(fallbackName = 目录名;无 frontmatter 时回落「目录名 + 首个非 {@code #} 正文行」,
+ *       boundTools 回落空列表)。</li>
  * </ol>
  *
  * <p>结果按 id 升序(确定序,保证 {@code /} 菜单条目顺序稳定)。单目录扫描下目录名
@@ -153,18 +154,19 @@ public class SkillCatalog {
             return;
         }
         SkillFrontmatter.Frontmatter fm = parseFrontmatter(skillMd, id);
-        result.add(new Skill(id, fm.name(), fm.description(), skillMd.toAbsolutePath().normalize().toString()));
+        result.add(new Skill(id, fm.name(), fm.description(), fm.boundTools(),
+                skillMd.toAbsolutePath().normalize().toString()));
         log.debug("skill 发现:{} ({})", id, skillMd);
     }
 
-    /** 读 skill.md 并解析 frontmatter;读取失败降级为「目录名 + 空描述」。 */
+    /** 读 skill.md 并解析 frontmatter;读取失败降级为「目录名 + 空描述 + 空工具绑定」。 */
     private SkillFrontmatter.Frontmatter parseFrontmatter(Path skillMd, String id) {
         try {
             String content = Files.readString(skillMd, StandardCharsets.UTF_8);
             return SkillFrontmatter.parse(content, id);
         } catch (IOException e) {
             log.warn("skill 元数据解析失败(不可读 skill.md,降级为目录名 + 空描述):{}", id, e);
-            return new SkillFrontmatter.Frontmatter(id, "");
+            return new SkillFrontmatter.Frontmatter(id, "", List.of());
         }
     }
 }

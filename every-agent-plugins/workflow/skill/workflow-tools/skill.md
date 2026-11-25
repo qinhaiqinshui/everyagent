@@ -1,12 +1,13 @@
 ---
 name: 工作流编排
 description: 当用户任务与工作流相关时使用本技能。
+tools: [workflow_create, workflow_get, workflow_update, workflow_delete, workflow_list, workflow_run, workflow_rerun, workflow_instance_status, workflow_instance_log, workflow_instance_events, workflow_instance_cancel]
 ---
 
 # 工作流编排
 
 工作流 = 可复用的多步骤执行图：开始节点先行，命令节点经系统 shell 执行（Windows=`cmd.exe /c`、Unix=`/bin/sh -c`，详见「命令节点执行环境」），AI 节点由命名 agent（持续会话线）执行；边条件决定路由（支持循环，maxRuns 兜限）；运行变量在 command/input 里以 `{{varName}}` 注入。
-本技能的十一工具**未随请求下发工具定义**，按本文档的名称与参数直接调用即可（调用失败请核对参数拼写与 JSON 格式）。
+本技能的十一个工具会在你读取本知识包后自动加入工具列表，直接按列表中的定义调用即可。
 
 ## 适用条件
 - 用户要建立可复用、可多次运行的多步骤流程（生成/构建/检查流水线等）。
@@ -15,19 +16,19 @@ description: 当用户任务与工作流相关时使用本技能。
 - 在当前任务内运行工作流并跟进其过程/结果/故障时。
 
 ## 工具参考
-| 工具 | 关键参数 | 作用 |
-| --- | --- | --- |
-| `workflow_create` | `definition`（完整定义 JSON 文本） | 创建定义，返回 `{id}` |
-| `workflow_get` | `id` | 返回完整定义 JSON |
-| `workflow_update` | `id`、`definition`（完整定义 JSON） | 全量替换更新（非增量合并） |
-| `workflow_delete` | `id` | 删除定义（历史运行实例保留） |
-| `workflow_list` | `workspace`（可选，工作区根绝对路径） | 定义摘要列表，按更新时间倒序 |
-| `workflow_run` | `definitionId`（必填）、`variables`（可选 JSON 文本 `{k:v}`）、`workspace`（可选） | **在当前任务内运行工作流，阻塞至终态**；成功返回结构化摘要，失败返回 `{error,nodeId,runNo,context,hint}` |
-| `workflow_rerun` | `instanceId`（必填）、`nodeId`（可选，缺省=失败节点）、`input`（可选，替换该节点输入） | **从失败实例的中断节点续跑**（阻塞至终态，语义同 run）；已完成节点不重跑，runNo 延续 |
-| `workflow_instance_status` | `instanceId` | 实例状态摘要（status/nodeStates/error/pendingDecision/变量/耗时；不含定义快照） |
-| `workflow_instance_log` | `instanceId`、`nodeId`（可选）、`tail`（可选，缺省 10） | 实例节点运行日志（runs 过滤投影；stdout/stderr/text 各截断 4000 字符） |
-| `workflow_instance_events` | `instanceId`、`afterSeq`（可选）、`limit`（可选，缺省 50） | 实例事件流直通 `{events:[{seq(字符串),ts,event,payload}],nextSeq}` |
-| `workflow_instance_cancel` | `instanceId` | 取消运行中的实例（已终态报错） |
+以下十一个工具在你读取本知识包后自动出现在工具列表中（含参数定义），按列表内工具正常调用即可，无需记忆参数。
+
+- `workflow_create`：创建定义，返回 `{id}`。
+- `workflow_get`：返回完整定义 JSON。
+- `workflow_update`：全量替换更新（非增量合并）。
+- `workflow_delete`：删除定义（历史运行实例保留）。
+- `workflow_list`：定义摘要列表，按更新时间倒序。
+- `workflow_run`：**在当前任务内运行工作流，阻塞至终态**；成功返回结构化摘要，失败返回 `{error,nodeId,runNo,context,hint}`（详见下文「workflow_run 的返回与字段语义」）。
+- `workflow_rerun`：**从失败实例的中断节点续跑**（阻塞至终态，语义同 run）；已完成节点不重跑，runNo 延续（详见下文「workflow_rerun 的语义与边界」）。
+- `workflow_instance_status`：实例状态摘要（status/nodeStates/error/pendingDecision/变量/耗时；不含定义快照）。
+- `workflow_instance_log`：实例节点运行日志（runs 过滤投影；stdout/stderr/text 各截断 4000 字符；每条含 `runNo` 实例级全局序号与 `attemptIndex` 该节点第几次尝试，从 1 起）。
+- `workflow_instance_events`：实例事件流直通 `{events:[{seq(字符串),ts,event,payload}],nextSeq}`。
+- `workflow_instance_cancel`：取消运行中的实例（已终态报错）。
 
 ### definition JSON 结构
 ```json
@@ -68,80 +69,20 @@ description: 当用户任务与工作流相关时使用本技能。
 - **引用节点**：下游节点复用同名 `agent` 即延续同一会话线（跨节点共享上下文）；`systemPrompt` 不写（写了也不该写——生效值始终来自上游定义节点），`modelConfigId` 可各自另配。
 - 模型取值优先级：节点 `modelConfigId` → 系统默认模型。
 
-### workflow_create
-```json
-{"definition": "<完整定义 JSON 文本>"}
-```
-调用示例（最小两节点）：
-```json
-{"definition": "{\"name\":\"代码评审\",\"nodes\":[{\"id\":\"n1\",\"type\":\"start\",\"name\":\"开始\",\"x\":40,\"y\":200},{\"id\":\"n2\",\"type\":\"ai\",\"name\":\"评审\",\"x\":240,\"y\":200,\"agent\":\"reviewer\",\"systemPrompt\":\"你是严格的首席工程师\",\"input\":\"评审当前工作区改动\"}],\"edges\":[{\"id\":\"e1\",\"from\":\"n1\",\"to\":\"n2\"}]}"}
-```
-
-### workflow_get
-```json
-{"id": "wf_xxx"}
-```
-
-### workflow_update
-```json
-{"id": "wf_xxx", "definition": "<修改后的完整定义 JSON 文本>"}
-```
-
-### workflow_delete
-```json
-{"id": "wf_xxx"}
-```
-
-### workflow_list
-```json
-{}
-```
-
-### workflow_run
-```json
-{"definitionId": "wf_xxx", "variables": "{\"title\":\"星际牧羊人\"}"}
-```
-阻塞至终态后返回：
+### workflow_run 的返回与字段语义
+`workflow_run` 阻塞至终态后返回：
 - 成功：`{"instanceId":"wi_...","status":"done","durationMs":1234,"nodes":[{"nodeId":"c","nodeName":"...","status":"done","runCount":1}]}`；若存在未执行(pending)/失败(failed)节点（失败被 onError 分支接住或分支未激活），附带 `"warning":"... pending=N, failed=M ..."`——不要忽略该告警，核对 nodes 与 `workflow_instance_log`。
 - 节点失败（fail-fast，主 agent 即督导者）：`{"error":"节点「X」失败: ...","nodeId":"n2","runNo":3,"message":"...","context":[失败节点历史输出摘要],"hint":"可用 workflow_rerun 从中断节点续跑..."}`——先诊断 context，能修复再按 hint 续跑或全新运行，把结论告诉用户。命令节点非零退出码重试耗尽且无人接住时同样走此形态（message 形如「命令退出码非零: N」）。
 - 挂起等用户（onError=askUser）：`{"status":"waiting-user","pendingDecision":{...}}`——把 question 呈现给用户，决策经工作流实例页落地，之后用 `workflow_instance_status` 跟进。
 - 运行中实例在任务页实时可见（AI 节点=子 agent 会话条目，命令节点=wf.node 轨迹卡片），无需轮询。
 - 字段语义：`runNo` 是**实例级全局序号**（每节点运行递增、跨节点延续，不是节点内尝试次数；节点内尝试次数看 `workflow_instance_log` 的 `attemptIndex`）；`durationMs` 是实例累计墙钟（含 rerun 前的人工间隔），rerun 后的返回另有 `resumedDurationMs`=本次续跑段时长。
 
-### workflow_rerun
-```json
-{"instanceId": "wi_xxx"}
-```
-带输入替换重开失败节点（修正提示词后从该节点续跑）：
-```json
-{"instanceId": "wi_xxx", "nodeId": "n2", "input": "请改用英文重写上一版"}
-```
-阻塞至终态后返回（形态同 workflow_run）：
+### workflow_rerun 的语义与边界
+`workflow_rerun` 阻塞至终态后返回（形态同 workflow_run）：
 - 续跑成功：`{"instanceId":"wi_...","status":"done","durationMs":...,"nodes":[...]}`——从中断节点续跑后的完整节点进度。
 - 再失败：`{"error":...,"nodeId":...,"runNo":...,"context":[...],"hint":"可用 workflow_rerun 从中断节点续跑..."}`——可诊断后再次调用（幂等链），或换 `nodeId` 重开其它节点。
 - 语义要点：仅 `failed` 实例可重开；已完成节点（done/skipped）不重跑，只重跑指定节点及其下游；runNo/runs/events 续号追加；命名 agent 复用同一会话（上下文从任务档案恢复，无需也不能重建）；`input` 替换目标节点输入并持久化到实例快照（AI 节点支持 `{{var}}` 模板；**命令节点的输入=command 本体，传 input 会被拒绝报错**——改命令请用 `workflow_update` 修改定义后重跑）。
 - 边界：实例关联的原任务已结束/删除（或当前任务不是原任务）时报错——会话档案在原任务目录，只能重新 `workflow_run` 全新运行；实例非 failed（含运行中/挂起）报错。
-
-### workflow_instance_status
-```json
-{"instanceId": "wi_xxx"}
-```
-
-### workflow_instance_log
-```json
-{"instanceId": "wi_xxx", "nodeId": "n2", "tail": 5}
-```
-每条含 `runNo`（实例级全局序号）与 `attemptIndex`（该节点第几次尝试，从 1 起）。
-
-### workflow_instance_events
-```json
-{"instanceId": "wi_xxx", "afterSeq": "0", "limit": 50}
-```
-
-### workflow_instance_cancel
-```json
-{"instanceId": "wi_xxx"}
-```
 
 ## 边界与注意
 - `definition` 参数是 **JSON 字符串**（整体作为一个参数传入，内部引号转义），不是逐字段传参。

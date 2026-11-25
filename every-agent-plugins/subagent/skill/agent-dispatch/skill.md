@@ -1,12 +1,13 @@
 ---
 name: 子 Agent
 description: 当任务可并行执行以提高效率、只需结论但自行探索会读取大量无用上下文，或需等待、停止、重启子 Agent 及查看其运行状态与结果时，使用本技能。
+tools: [run_agent, list_agents, wait_agents, stop_agent]
 ---
 
 # 子 Agent 编排
 
 子 Agent 上下文独立于你：它看不到你的对话，任务描述务必自包含。它拥有与你一样的工具，可读写当前工作区文件。
-本技能的四工具**未随请求下发工具定义**，按本文档的名称与参数直接调用即可（调用失败请核对参数拼写）。
+本技能的四工具会在你读取本知识包后自动加入工具列表，直接按列表中的定义调用即可。
 
 ## 适用条件
 - 某个任务可并行执行以提高效率时，交给子 Agent。
@@ -18,48 +19,12 @@ description: 当任务可并行执行以提高效率、只需结论但自行探�
 2. 派发后必须收尾：用 `wait_agents` 等待并收集结果，不可派发后不管。
 
 ## 工具参考
-| 工具 | 关键参数 | 作用 |
-| --- | --- | --- |
-| `run_agent` | `input`（必填）；新建时 `title` 必填；续跑时填 `agentId` | 异步派发或续跑子 Agent，立即返回 `agentId` |
-| `wait_agents` | `agentId`（可选）；`timeoutMs`（默认 30000） | 等待完成：传 `agentId` 返回 `{mode:"single",waitStatus,agent}`，省略则等全部返回 `{mode:"list",waitStatus,agents}` |
-| `list_agents` | 无 | 列出当前任务全部子 Agent（**含之前轮次已结束的**），是 wait/stop 的 `agentId` 来源 |
-| `stop_agent` | `agentId`（必填） | 停止一个运行中的子 Agent |
+以下四个工具在你读取本知识包后自动出现在工具列表中（含参数定义），按列表内工具正常调用即可，无需记忆参数。
 
-### run_agent
-```json
-{"input": "交给子 agent 的完整任务描述(必填,自包含)", "title": "简短标题(新建时必填)", "agentId": "复用的 agentId(续跑时填,可省)"}
-```
-调用示例（新建派发）：
-```json
-{"input": "统计 src/main/java 下 TODO 注释数量并按模块归类输出", "title": "TODO 清点"}
-```
-
-### wait_agents
-```json
-{"agentId": "要等待的 agentId(可省,省略=等全部)", "timeoutMs": 30000}
-```
-调用示例（等全部）：
-```json
-{"timeoutMs": 60000}
-```
-
-### list_agents
-```json
-{}
-```
-调用示例：
-```json
-{}
-```
-
-### stop_agent
-```json
-{"agentId": "要停止的 agentId(必填)"}
-```
-调用示例：
-```json
-{"agentId": "a_123"}
-```
+- `run_agent`：异步派发或续跑子 Agent，立即返回 `agentId`。
+- `wait_agents`：等待子 Agent 完成——传 `agentId` 等单个，省略等全部。
+- `list_agents`：列出当前任务全部子 Agent（**含之前轮次已结束的**），是 wait/stop 的 `agentId` 来源。
+- `stop_agent`：停止一个运行中的子 Agent。
 
 ## 派发方式
 - `run_agent` 始终异步，立即返回 `agentId`；彼此无依赖、不读写同一中间产物的多个子 Agent 可并行派发（同批多个 run_agent 调用），再统一 `wait_agents` 收集。

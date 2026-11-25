@@ -19,8 +19,8 @@ import java.util.List;
  *       递归运行工作流（workflow_run 阻塞语义在节点内会造成自等待死锁）。rerun 本体
  *       由后续步骤实现，名字先进防护表。</li>
  * </ul>
- * <p>与 {@code WorkflowToolProvider.appliesTo} 的域隔离互为双保险：hidden 应急回退开关
- * {@code worker.tools.hidden-enabled=false} 时这些工具会以常规形态出现，REMOVE 兜底剔除。
+ * <p>与 {@code WorkflowToolProvider.appliesTo} 的域隔离互为双保险：skill 工具自动暴露后
+ * 这些工具会以常规形态进请求，REMOVE 兜底剔除。
  */
 final class ExcludedTools {
 

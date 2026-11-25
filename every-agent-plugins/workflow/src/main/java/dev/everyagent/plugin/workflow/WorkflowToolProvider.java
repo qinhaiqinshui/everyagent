@@ -14,16 +14,17 @@ import dev.everyagent.plugin.workflow.store.WorkflowStore;
 /**
  * workflow 工具提供者：定义 CRUD 五件 + 运行/查询/重开六件（workflow_run +
  * workflow_rerun + instance_status/log/events/cancel）一律走 <b>hidden 池</b>（createHiddenTools）
- * ——不进请求 tool 定义，模型经「工作流编排」skill 文档的工具参考认知后按名调用。
+ * ——常驻可执行池，经「工作流编排」skill 知识包的 frontmatter {@code tools} 绑定，
+ * 模型读取该知识包后以完整定义自动进请求（自动暴露）；未读取前不在请求工具列表，
+ * 按文档硬调仍可执行。
  *
  * <p><b>零 per-run 捕获</b>：本 provider 只持 store/engine（插件级单例）；
  * per-run 的 ToolContext 在 {@link #createHiddenTools} 调用时传入工具 POJO
  * （随工具回调同生命周期，契约允许的直接持有，同 subagent 先例）。
  *
  * <p><b>域隔离</b>：{@link #appliesTo} 排除工作流执行主体（WorkflowRuntime）——
- * 工作流自己的 agent 不携带 workflow 工具，防自我编辑/递归运行。开关语义
- * （worker.tools.hidden-enabled=false 应急回退）在 worker 聚合层统一生效，
- * 本 provider 不感知。
+ * 工作流自己的 agent 不携带 workflow 工具，防自我编辑/递归运行。自动暴露链
+ * 在 worker 聚合层统一生效，本 provider 不感知。
  */
 public final class WorkflowToolProvider implements ToolProvider {
 

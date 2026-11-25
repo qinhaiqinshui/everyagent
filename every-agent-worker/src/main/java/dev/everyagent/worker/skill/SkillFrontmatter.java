@@ -1,5 +1,7 @@
 package dev.everyagent.worker.skill;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 import java.util.regex.Pattern;
 
@@ -18,9 +20,12 @@ import org.slf4j.LoggerFactory;
  *       (允许前置空白)视为注释跳过;未知键忽略(log.debug,绝不报错——第三方文件里
  *       历史遗留的暴露控制键之类外来键必须被静默忽略,暴露控制语义已迁至 worker 侧
  *       按工作区排除配置,frontmatter 无对应键);{@code key:} 空值 = 未提供。</li>
- *   <li>已知键仅两个:{@code name}(展示标题,不截断)、{@code description}
- *       (一句话「何时用」,截断 200 字符)。</li>
- *   <li><b>不支持</b>多行折叠 / 嵌套 / 列表。</li>
+ *   <li>已知键三个:{@code name}(展示标题,不截断)、{@code description}
+ *       (一句话「何时用」,截断 200 字符)、{@code tools}(知识包绑定的工具名列表,
+ *       字符串列表,读取知识包后将自动并入请求 tool 定义;缺省空列表,非法值 WARN 降级)。</li>
+ *   <li>列表语法<b>仅对 {@code tools}</b> 开放:流式 {@code tools: [a, b]} 与块式
+ *       ({@code tools:} 空值 + 后续 {@code - item} 行)两式;多行折叠 / 嵌套 /
+ *       其他键的列表不支持。</li>
  * </ul>
  *
  * <p>回落(API 由调用方注入 name 回落值——即 skill <b>目录名</b>;description 回落由本解析器完成):
@@ -55,10 +60,11 @@ public final class SkillFrontmatter {
     }
 
     /**
-     * 解析结果:仅含展示元数据(name/description),无暴露控制字段
-     * (暴露 = skill × 工作区的关系,存 worker 侧排除配置,不进 skill.md)。
+     * 解析结果:展示元数据(name/description)+ 工具绑定(boundTools = 知识包绑定的
+     * 工具名,读取知识包后自动并入请求 tool 定义;恒非 {@code null},缺省/非法降级为空列表)。
+     * 仍不含暴露控制字段(暴露 = skill × 工作区的关系,存 worker 侧排除配置,不进 skill.md)。
      */
-    public record Frontmatter(String name, String description) {
+    public record Frontmatter(String name, String description, List<String> boundTools) {
     }
 
     /**
@@ -67,7 +73,8 @@ public final class SkillFrontmatter {
      * @param content      skill.md 全文(允许 UTF-8 BOM;{@code null} 视为空串)
      * @param fallbackName name 缺省/空值时的回落值(skill 目录名,由调用方注入);
      *                     {@code null}/空白 → 空串
-     * @return name 与 description 恒非 {@code null}(无任何来源时 description 为空串)
+     * @return name 与 description 恒非 {@code null}(无任何来源时 description 为空串);
+     *         boundTools 恒非 {@code null}(缺省/非法降级时为空列表)
      */
     public static Frontmatter parse(String content, String fallbackName) {
         String text = content == null ? "" : content;
@@ -78,6 +85,10 @@ public final class SkillFrontmatter {
 
         String name = null;
         String description = null;
+        // tools 键累积的工具名(流式项与块式列表项统一进此表),缺省空列表
+        List<String> tools = new ArrayList<>();
+        // 块式列表待续状态:true = 上一个键是空值的 tools:,后续 - item 行归属该键
+        boolean pendingBlockList = false;
         // 正文起始行索引:无块/未闭合 = 0(整个文件即正文,回落照常工作)
         int bodyStart = 0;
 
@@ -93,8 +104,13 @@ public final class SkillFrontmatter {
                 for (int i = 1; i < close; i++) {
                     String line = lines[i].strip();
                     if (line.isEmpty() || line.startsWith("#")) {
-                        continue; // 空行 / 注释(前置空白已被 strip 消除)
+                        continue; // 空行 / 注释(前置空白已被 strip 消除;块式列表内穿插亦不断列表)
                     }
+                    if (pendingBlockList && (line.equals("-") || line.startsWith("- "))) {
+                        addToolItem(tools, line.substring(1)); // 块式列表项归属上一个 tools: 键
+                        continue;
+                    }
+                    pendingBlockList = false; // 任何非列表项行结束待续的块式列表
                     int colon = line.indexOf(':');
                     if (colon <= 0) { // 无冒号 / 冒号打头:畸形行,忽略
                         log.debug("skill.md frontmatter 忽略畸形行:{}", line);
@@ -105,13 +121,31 @@ public final class SkillFrontmatter {
                         log.debug("skill.md frontmatter 忽略非法键:{}", key);
                         continue;
                     }
-                    String value = unquote(line.substring(colon + 1).strip());
-                    if (value.isEmpty()) {
-                        continue; // key: 空值(含空引号对)= 未提供
-                    }
+                    String rawValue = line.substring(colon + 1).strip();
                     switch (key.toLowerCase(Locale.ROOT)) {
-                        case "name" -> name = value;
-                        case "description" -> description = truncate(value);
+                        case "name" -> {
+                            String value = unquote(rawValue);
+                            if (!value.isEmpty()) {
+                                name = value;
+                            }
+                        }
+                        case "description" -> {
+                            String value = unquote(rawValue);
+                            if (!value.isEmpty()) {
+                                description = truncate(value);
+                            }
+                        }
+                        case "tools" -> {
+                            tools.clear(); // 重复键 = 后值覆盖(与 name/description 同语义)
+                            if (rawValue.isEmpty()) {
+                                pendingBlockList = true; // 块式:tools: 空值,后续 - item 行归属本键
+                            } else if (rawValue.startsWith("[") && rawValue.endsWith("]")) {
+                                addFlowToolItems(rawValue.substring(1, rawValue.length() - 1), tools);
+                            } else {
+                                log.warn("skill.md frontmatter tools 值非字符串数组(须流式 [a, b] 或块式 - item),忽略: {}",
+                                        rawValue);
+                            }
+                        }
                         default -> log.debug("skill.md frontmatter 忽略未知键:{}(暴露控制等语义已迁至 worker 配置)", key);
                     }
                 }
@@ -127,7 +161,7 @@ public final class SkillFrontmatter {
         if (description == null || description.isBlank()) {
             description = fallbackDescription(lines, bodyStart);
         }
-        return new Frontmatter(name, description);
+        return new Frontmatter(name, description, List.copyOf(tools));
     }
 
     /**
@@ -151,14 +185,65 @@ public final class SkillFrontmatter {
 
     /** 剥离成对的单/双引号(仅当首尾成对;不成对或长度不足 2 则原样保留)。 */
     private static String unquote(String value) {
-        if (value.length() >= 2) {
-            char first = value.charAt(0);
-            char last = value.charAt(value.length() - 1);
-            if ((first == '"' && last == '"') || (first == '\'' && last == '\'')) {
-                return value.substring(1, value.length() - 1);
-            }
+        return pairedQuotes(value) ? value.substring(1, value.length() - 1) : value;
+    }
+
+    /** 是否被成对的单/双引号包裹(首尾成对;长度不足 2 即否)。 */
+    private static boolean pairedQuotes(String value) {
+        if (value.length() < 2) {
+            return false;
         }
-        return value;
+        char first = value.charAt(0);
+        char last = value.charAt(value.length() - 1);
+        return (first == '"' && last == '"') || (first == '\'' && last == '\'');
+    }
+
+    /**
+     * 收集流式数组内容(已剥离外侧 {@code []}):按逗号拆项逐个收集;整体为空({@code []})= 空列表。
+     */
+    private static void addFlowToolItems(String inner, List<String> tools) {
+        String content = inner.strip();
+        if (content.isEmpty()) {
+            return; // [] / [ ] 空数组 = 空列表,不算非法
+        }
+        for (String rawItem : content.split(",")) {
+            addToolItem(tools, rawItem);
+        }
+    }
+
+    /**
+     * 收集单个 tools 列表项:引号包裹 = 显式字符串(内容原样保留);裸项须为纯字符串——
+     * 嵌套结构({@code [x]}/{@code {x}})、数字/布尔/null 字面量、空项均视为非字符串项,
+     * WARN 跳过该项(整体降级保留其余合法项,绝不抛异常)。
+     */
+    private static void addToolItem(List<String> tools, String rawItem) {
+        String item = rawItem.strip();
+        boolean quoted = pairedQuotes(item);
+        String value = unquote(item);
+        if (!quoted && (item.startsWith("[") || item.startsWith("{"))) {
+            log.warn("skill.md frontmatter tools 列表项为嵌套结构,跳过: {}", item);
+            return;
+        }
+        if (value.isEmpty()) {
+            log.warn("skill.md frontmatter tools 列表项为空,跳过");
+            return;
+        }
+        if (!quoted && isNonStringScalar(value)) {
+            log.warn("skill.md frontmatter tools 列表项非字符串(数字/布尔/null 字面量),跳过: {}", item);
+            return;
+        }
+        tools.add(value);
+    }
+
+    /** 裸列表项是否为 YAML 非字符串标量:数字(整数/小数,允许负号)或 true/false/null 字面量。 */
+    private static boolean isNonStringScalar(String value) {
+        if (value.matches("-?\\d+(\\.\\d+)?")) {
+            return true;
+        }
+        return switch (value.toLowerCase(Locale.ROOT)) {
+            case "true", "false", "null" -> true;
+            default -> false;
+        };
     }
 
     private static String truncate(String s) {

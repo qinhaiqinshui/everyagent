@@ -150,8 +150,12 @@ public class AgentLedger {
         List<EventRecord> newRecords = eventLog.readFrom(cursor, 200);
         if (newRecords.isEmpty()) return;
 
-        for (EventRecord r : newRecords) {
-            processEvent(ledger, r);
+        // 台账条目(ObjectNode)非线程安全:事件投影与 skill 工具暴露写(recordExposedTools)
+        // 可能并发(同任务多 agent 并行工具执行),同以 per-subject 台账 map 为锁粒度串行化。
+        synchronized (ledger) {
+            for (EventRecord r : newRecords) {
+                processEvent(ledger, r);
+            }
         }
         taskCursors.put(subjectId, cursor + newRecords.size());
     }
@@ -355,6 +359,106 @@ public class AgentLedger {
         Map<String, ObjectNode> ledger = taskLedgers.get(subjectId);
         if (ledger == null) return null;
         return ledger.get(agentId);
+    }
+
+    // ── skill 工具自动暴露(exposedTools 字段读写,§7.14) ──
+
+    /**
+     * 记录 skill 工具自动暴露:条目合并(union 去重、保插入序)写入 {@code exposedTools}
+     * 数组字段。<b>不另起写文件</b>——落盘并入本写者既有两路径(30s 定时快照 +
+     * 收口 persistFinal),不与事件投影双写竞争。
+     *
+     * <p>条目尚不在场(本轮 {@code agent.started} 事件未被监听器处理)时建最小桩
+     * (agentId + createdAt);agent.started 合并分支只补齐 title/status 等字段,
+     * 不会整项替换,桩字段保留。
+     *
+     * <p>锁纪律:与事件投影(processNewEvents)同以 per-subject 台账 map 为锁粒度
+     * 串行化,防并发暴露/投影交错写坏条目。失败仅 warn 不抛(台账非真相源,
+     * 30s 定时/persistFinal 会重写)。
+     */
+    public void recordExposedTools(String subjectId, String agentId, List<String> toolNames) {
+        if (subjectId == null || subjectId.isEmpty() || agentId == null || agentId.isEmpty()
+                || toolNames == null || toolNames.isEmpty()) {
+            return;
+        }
+        Map<String, ObjectNode> ledger = taskLedgers.computeIfAbsent(subjectId, k -> new ConcurrentHashMap<>());
+        try {
+            synchronized (ledger) {
+                ObjectNode entry = ledger.get(agentId);
+                if (entry == null) {
+                    entry = Json.obj();
+                    entry.put("agentId", agentId);
+                    entry.put("createdAt", System.currentTimeMillis());
+                    ledger.put(agentId, entry);
+                }
+                entry.set("exposedTools", mergeTools(entry.get("exposedTools"), toolNames));
+            }
+        } catch (RuntimeException e) {
+            log.warn("exposedTools 台账记录失败 subject={} agent={}", subjectId, agentId, e);
+        }
+    }
+
+    /**
+     * 读某 agentId 已持久化的 skill 工具暴露集合(冷启动/续跑回灌用,§7.14):
+     * live 主体读内存台账(onTrack 已自 agents.json 恢复);主体未 track(测试桩/
+     * 未来 workflow 主体)且给出数据目录时回退直读磁盘。无记录返回空表。
+     */
+    public List<String> exposedToolsOf(String subjectId, java.nio.file.Path dataDir, String agentId) {
+        if (subjectId == null || subjectId.isEmpty() || agentId == null || agentId.isEmpty()) {
+            return List.of();
+        }
+        Map<String, ObjectNode> ledger = taskLedgers.get(subjectId);
+        ObjectNode entry = ledger == null ? null : ledger.get(agentId);
+        if (entry == null && ledger == null && dataDir != null) {
+            List<ObjectNode> disk = readAgents(dataDir);
+            if (disk != null) {
+                for (ObjectNode a : disk) {
+                    if (agentId.equals(a.path("agentId").asString(""))) {
+                        entry = a;
+                        break;
+                    }
+                }
+            }
+        }
+        return exposedListOf(entry);
+    }
+
+    /** 既有数组 + 新名单 union 去重(保插入序)产出新数组节点。 */
+    private static ArrayNode mergeTools(JsonNode existing, List<String> toolNames) {
+        java.util.LinkedHashSet<String> merged = new java.util.LinkedHashSet<>();
+        if (existing != null && existing.isArray()) {
+            for (JsonNode n : existing) {
+                if (n.isTextual() && !n.asString().isBlank()) {
+                    merged.add(n.asString());
+                }
+            }
+        }
+        for (String t : toolNames) {
+            if (t != null && !t.isBlank()) {
+                merged.add(t);
+            }
+        }
+        ArrayNode arr = Json.arr();
+        merged.forEach(arr::add);
+        return arr;
+    }
+
+    /** 条目 exposedTools 数组 → 不可变名单(缺字段/非数组返回空表)。 */
+    private static List<String> exposedListOf(ObjectNode entry) {
+        if (entry == null) {
+            return List.of();
+        }
+        JsonNode arr = entry.get("exposedTools");
+        if (arr == null || !arr.isArray()) {
+            return List.of();
+        }
+        List<String> out = new ArrayList<>();
+        for (JsonNode n : arr) {
+            if (n.isTextual() && !n.asString().isBlank()) {
+                out.add(n.asString());
+            }
+        }
+        return out;
     }
 
     // ── agents.json 读写 ──
