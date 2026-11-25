@@ -218,7 +218,7 @@ class AgentSessionsTest {
                 java.util.Map.of("v", "a$b\\c"), decls)).isEqualTo("a$b\\c");
     }
 
-    // ── 七种条件求值 ──
+    // ── 八种条件求值 ──
 
     @Test
     void conditionEvaluationSemantics() {
@@ -237,6 +237,12 @@ class AgentSessionsTest {
         assertThat(NodeRunners.evaluate(new ConditionDef("outputContains", null, "zzz", null), bad, output)).isFalse();
         assertThat(NodeRunners.evaluate(new ConditionDef("outputNotContains", null, "zzz", null), bad, output)).isTrue();
         assertThat(NodeRunners.evaluate(new ConditionDef("outputNotContains", null, "hello", null), bad, output)).isFalse();
+        // outputEquals：两侧各自 trim 后精确相等（命令输出常带尾随换行）
+        assertThat(NodeRunners.evaluate(new ConditionDef("outputEquals", null, "hello world", null), ok, "  hello world\r\n")).isTrue();
+        assertThat(NodeRunners.evaluate(new ConditionDef("outputEquals", null, " hello world ", null), bad, "\nhello world")).isTrue();
+        assertThat(NodeRunners.evaluate(new ConditionDef("outputEquals", null, "hello", null), ok, output)).isFalse();
+        assertThat(NodeRunners.evaluate(new ConditionDef("outputEquals", null, "hello world!", null), ok, output)).isFalse();
+        assertThat(NodeRunners.evaluate(new ConditionDef("outputEquals", null, null, null), ok, output)).isFalse();
         assertThat(NodeRunners.evaluate(new ConditionDef("outputMatches", null, null, "hello.*"), ok, output)).isTrue();
         assertThat(NodeRunners.evaluate(new ConditionDef("outputMatches", null, null, "^bye.*"), ok, output)).isFalse();
         assertThat(NodeRunners.evaluate(new ConditionDef("自创", null, null, null), ok, output)).isFalse();

@@ -224,7 +224,7 @@ public final class DefinitionValidator {
                     errors.add("exitCode 条件缺少 value: @" + e.id());
                 }
             }
-            case ConditionDef.OUTPUT_CONTAINS, ConditionDef.OUTPUT_NOT_CONTAINS -> {
+            case ConditionDef.OUTPUT_CONTAINS, ConditionDef.OUTPUT_NOT_CONTAINS, ConditionDef.OUTPUT_EQUALS -> {
                 if (c.text() == null || c.text().isEmpty()) {
                     errors.add(c.type() + " 条件缺少 text: @" + e.id());
                 }

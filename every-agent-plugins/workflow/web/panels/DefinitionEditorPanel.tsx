@@ -10,7 +10,7 @@
  *
  * 布局三栏：左 = palette（添加节点）+ 变量/onError+supervisor 折叠编辑区；
  * 中 = WorkflowCanvas(mode=edit)；右 = 属性面板（选中节点 → 类型特定字段；选中边 →
- * 七种出边条件编辑器）——与实例详情面板同款隐藏规则：仅在选中后挂载，空白点按
+ * 八种出边条件编辑器）——与实例详情面板同款隐藏规则：仅在选中后挂载，空白点按
  * 保留内容，× 关闭清选。顶部工具栏：定义名/描述 + 保存（def.save）+ 校验错误列表。
  *
  * AI 节点会话线（无 agents 总表）：agent 名候选 = 沿边反向可达的上游 AI 节点已用名
@@ -65,7 +65,7 @@ import {
 
 // ─── 常量 ─────────────────────────────────────────────────────────────────
 
-/** 七种出边条件（后端 ConditionDef.KNOWN_TYPES 一一对应；hint=求值语义速查）。 */
+/** 八种出边条件（后端 ConditionDef.KNOWN_TYPES 一一对应；hint=求值语义速查）。 */
 const CONDITION_TYPES: Array<{ value: WorkflowConditionType; label: string; hint: string }> = [
   { value: 'always', label: 'always · 恒激活', hint: '无论上游成败，该边总激活（缺省）。' },
   { value: 'onSuccess', label: 'onSuccess · 成功', hint: 'exitCode == 0（AI 节点正常完成视为 0）。' },
@@ -73,6 +73,7 @@ const CONDITION_TYPES: Array<{ value: WorkflowConditionType; label: string; hint
   { value: 'exitCode', label: 'exitCode · 指定退出码', hint: '退出码等于指定 value 时激活。' },
   { value: 'outputContains', label: 'outputContains · 输出包含', hint: '输出包含指定 text 时激活。' },
   { value: 'outputNotContains', label: 'outputNotContains · 输出不含', hint: '输出不包含指定 text 时激活。' },
+  { value: 'outputEquals', label: 'outputEquals · 输出等于', hint: '输出与期望文本各自去首尾空白（trim）后完全一致时激活；命令输出的尾随换行不影响。' },
   { value: 'outputMatches', label: 'outputMatches · 正则匹配', hint: '输出匹配指定 pattern；正则不可编译会在保存时被拒。' },
 ]
 
@@ -1128,7 +1129,7 @@ function NodePropertySection({
   )
 }
 
-// ─── 右栏：边条件编辑器（七种类型 + 参数按类型显隐） ───────────────────────
+// ─── 右栏：边条件编辑器（八种类型 + 参数按类型显隐） ───────────────────────
 
 function EdgePropertySection({
   edge,
@@ -1150,7 +1151,7 @@ function EdgePropertySection({
   const changeType = (nextType: WorkflowConditionType) => {
     const base: WorkflowCondition = { type: nextType }
     if (nextType === 'exitCode') base.value = condition.value ?? 0
-    if (nextType === 'outputContains' || nextType === 'outputNotContains') base.text = condition.text ?? ''
+    if (nextType === 'outputContains' || nextType === 'outputNotContains' || nextType === 'outputEquals') base.text = condition.text ?? ''
     if (nextType === 'outputMatches') base.pattern = condition.pattern ?? ''
     patchEdge(edge.id, { condition: base })
   }
@@ -1165,7 +1166,7 @@ function EdgePropertySection({
       <div className="wf-editor-field">
         <label>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-            <ConditionIcon size={12} /> 条件类型（七种）
+            <ConditionIcon size={12} /> 条件类型（八种）
           </span>
         </label>
         <select className="wf-editor-select" value={condition.type ?? 'always'} onChange={e => changeType(e.target.value as WorkflowConditionType)}>
@@ -1198,6 +1199,19 @@ function EdgePropertySection({
             placeholder="输出中包含/不包含的文本"
             onChange={e => patchEdge(edge.id, { condition: { ...condition, text: e.target.value } })}
           />
+        </div>
+      ) : null}
+
+      {condition.type === 'outputEquals' ? (
+        <div className="wf-editor-field">
+          <label>text（期望输出；比较时两侧忽略首尾空白）</label>
+          <input
+            className="wf-editor-input"
+            value={condition.text ?? ''}
+            placeholder="输出应精确等于的文本，如 PASS"
+            onChange={e => patchEdge(edge.id, { condition: { ...condition, text: e.target.value } })}
+          />
+          <p className="wf-editor-hint">输出与该文本各自 trim 后完全一致才激活——命令尾随换行、两侧空格均不影响。</p>
         </div>
       ) : null}
 
@@ -1234,7 +1248,8 @@ function EdgePropertySection({
  * 1. 侧边栏「工作流」→ 新建工作流定义 → 画布出现「开始」节点，右下角 dirty ●。
  * 2. palette 添加命令节点 + AI 节点（落画布中心附近，自动选中）。
  * 3. 拖动节点改位置；从「开始」右侧锚点拖到命令节点建立边；再连到 AI 节点。
- * 4. 选中边 → 条件类型切 onSuccess；选中命令节点 → 填 command/timeoutMs/maxRuns；
+ * 4. 选中边 → 条件类型切 onSuccess，再切 outputEquals 填期望文本（保存重开后画布
+ *    边标签显示「等于 …」）；选中命令节点 → 填 command/timeoutMs/maxRuns；
  *    选中 AI 节点 → 会话线下拉选「＋ 新建会话线…」→ 填名「writer」+ system prompt
  *    + 模型 + input 模板（本节点成为该会话线的定义节点）。
  * 4b. 再加一个下游 AI 节点并连线 → 其会话线下拉应出现「writer · 由「…」定义」；

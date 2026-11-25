@@ -295,9 +295,16 @@ class DefinitionValidatorTest {
         assertThat(DefinitionValidator.validate(def(node("n1", "start"),
                 edge("e1", "n1", "n1", new ConditionDef("outputContains", null, null, null)))))
                 .anyMatch(e -> e.contains("缺少 text"));
+        // outputEquals 缺 text
+        assertThat(DefinitionValidator.validate(def(node("n1", "start"),
+                edge("e1", "n1", "n1", new ConditionDef("outputEquals", null, null, null)))))
+                .anyMatch(e -> e.contains("缺少 text"));
         // 合法参数
         assertThat(DefinitionValidator.validate(def(node("n1", "start"),
                 edge("e1", "n1", "n1", new ConditionDef("outputContains", null, "成功", null)))))
+                .isEmpty();
+        assertThat(DefinitionValidator.validate(def(node("n1", "start"),
+                edge("e1", "n1", "n1", new ConditionDef("outputEquals", null, "PASS", null)))))
                 .isEmpty();
     }
 

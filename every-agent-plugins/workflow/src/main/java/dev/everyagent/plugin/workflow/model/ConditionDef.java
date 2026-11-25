@@ -17,6 +17,7 @@ import com.fasterxml.jackson.annotation.JsonInclude;
  *   <tr><td>exitCode</td><td>value</td><td>等于指定退出码</td></tr>
  *   <tr><td>outputContains</td><td>text</td><td>输出包含指定文本</td></tr>
  *   <tr><td>outputNotContains</td><td>text</td><td>输出不包含指定文本</td></tr>
+ *   <tr><td>outputEquals</td><td>text</td><td>输出与文本各自去首尾空白后相等（精确等于，忽略两侧空白）</td></tr>
  *   <tr><td>outputMatches</td><td>pattern</td><td>输出匹配正则（编译失败=定义校验错误）</td></tr>
  * </table>
  *
@@ -37,10 +38,11 @@ public record ConditionDef(
     public static final String EXIT_CODE = "exitCode";
     public static final String OUTPUT_CONTAINS = "outputContains";
     public static final String OUTPUT_NOT_CONTAINS = "outputNotContains";
+    public static final String OUTPUT_EQUALS = "outputEquals";
     public static final String OUTPUT_MATCHES = "outputMatches";
 
     /** 全部已知条件类型（校验器据此拒未知类型；求值在引擎，本层只存契约）。 */
     public static final Set<String> KNOWN_TYPES = Set.of(
             ALWAYS, ON_SUCCESS, ON_ERROR, EXIT_CODE,
-            OUTPUT_CONTAINS, OUTPUT_NOT_CONTAINS, OUTPUT_MATCHES);
+            OUTPUT_CONTAINS, OUTPUT_NOT_CONTAINS, OUTPUT_EQUALS, OUTPUT_MATCHES);
 }

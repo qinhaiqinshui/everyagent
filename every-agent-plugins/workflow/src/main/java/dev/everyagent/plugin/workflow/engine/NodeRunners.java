@@ -131,7 +131,7 @@ public final class NodeRunners {
     // ══════════════════════════ 出边条件求值 ══════════════════════════
 
     /**
-     * 七种出边条件求值（作用于节点完成态 {exitCode, output}；condition null = always）。
+     * 八种出边条件求值（作用于节点完成态 {exitCode, output}；condition null = always）。
      * 节点完成后所有满足条件的出边全部激活（全激活语义），由引擎逐边调用。
      */
     public static boolean evaluate(ConditionDef c, int exitCode, String output) {
@@ -150,6 +150,9 @@ public final class NodeRunners {
                 return c.text() != null && out.contains(c.text());
             case ConditionDef.OUTPUT_NOT_CONTAINS:
                 return c.text() != null && !out.contains(c.text());
+            case ConditionDef.OUTPUT_EQUALS:
+                // 两侧各自 trim：命令输出常带尾随换行，期望文本也可能混入首尾空白。
+                return c.text() != null && out.trim().equals(c.text().trim());
             case ConditionDef.OUTPUT_MATCHES:
                 return c.pattern() != null && out.matches(c.pattern());
             default:

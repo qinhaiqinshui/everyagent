@@ -19,7 +19,7 @@ import { getPluginContext, resolveWorkspaceRef } from './pluginRuntime'
 /** 节点类型（v1 仅三种，架构留扩展点）。 */
 export type WorkflowNodeType = 'start' | 'command' | 'ai'
 
-/** 出边条件七种类型（后端 ConditionDef.KNOWN_TYPES 一一对应）。 */
+/** 出边条件八种类型（后端 ConditionDef.KNOWN_TYPES 一一对应）。 */
 export type WorkflowConditionType =
   | 'always'
   | 'onSuccess'
@@ -27,9 +27,10 @@ export type WorkflowConditionType =
   | 'exitCode'
   | 'outputContains'
   | 'outputNotContains'
+  | 'outputEquals'
   | 'outputMatches'
 
-/** 出边条件（缺省 always；参数按类型显隐：exitCode→value、contains→text、matches→pattern）。 */
+/** 出边条件（缺省 always；参数按类型显隐：exitCode→value、contains/equals→text、matches→pattern）。 */
 export interface WorkflowCondition {
   type: WorkflowConditionType
   value?: number | null
@@ -287,6 +288,7 @@ export function conditionLabel(c?: WorkflowCondition | null): string {
     case 'exitCode': return `退出码=${c.value ?? '?'}`
     case 'outputContains': return `含 ${c.text ?? '?'}`
     case 'outputNotContains': return `不含 ${c.text ?? '?'}`
+    case 'outputEquals': return `等于 ${c.text ?? '?'}`
     case 'outputMatches': return `匹配 ${c.pattern ?? '?'}`
     default: return c.type
   }

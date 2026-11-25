@@ -35,7 +35,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.fail;
 
 /**
- * 引擎端到端：并行+同 agent 互斥（含锁排队读到上游完整事件流）、循环上限、七种条件路由
+ * 引擎端到端：并行+同 agent 互斥（含锁排队读到上游完整事件流）、循环上限、八种条件路由
  * （含多路激活/无匹配收束）、错误三策略、取消、匿名 vs 命名 agent、变量渲染、事件/记录留档。
  */
 class WorkflowEngineTest {
@@ -365,10 +365,10 @@ class WorkflowEngineTest {
         assertThat(aiRun.agent().usage().inputTokens()).isEqualTo(100L);
     }
 
-    // ══════════════════════════ 七种条件路由 ══════════════════════════
+    // ══════════════════════════ 八种条件路由 ══════════════════════════
 
     @Test
-    void conditionRoutingAllSevenTypes() throws Exception {
+    void conditionRoutingAllEightTypes() throws Exception {
         // 每条分支：start → cmd(特定产出) →(条件) sink；sink 起跑与否即路由结果
         Definition ok = route("cmd-ok", "echo hello", "sink-ok");
         Definition bad = route("cmd-bad", "exit 3", "sink-bad");
@@ -385,6 +385,10 @@ class WorkflowEngineTest {
         assertNotActivated(routeCond("cmd-ok", "echo hello", new ConditionDef("outputContains", null, "zzz", null), "sink"), "sink");
         assertActivated(routeCond("cmd-ok", "echo hello", new ConditionDef("outputNotContains", null, "zzz", null), "sink"), "sink");
         assertNotActivated(routeCond("cmd-ok", "echo hello", new ConditionDef("outputNotContains", null, "hello", null), "sink"), "sink");
+        // outputEquals：真执行 echo 输出带尾随换行/空白——trim 后精确相等才激活
+        assertActivated(routeCond("cmd-ok", "echo hello", new ConditionDef("outputEquals", null, "hello", null), "sink"), "sink");
+        assertActivated(routeCond("cmd-ok", "echo hello", new ConditionDef("outputEquals", null, " hello ", null), "sink"), "sink");
+        assertNotActivated(routeCond("cmd-ok", "echo hello", new ConditionDef("outputEquals", null, "hello world", null), "sink"), "sink");
         assertActivated(routeCond("cmd-ok", "echo hello",
                 new ConditionDef("outputMatches", null, null, "(?s).*hello.*"), "sink"), "sink");
         assertNotActivated(routeCond("cmd-ok", "echo hello",
