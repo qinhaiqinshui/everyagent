@@ -586,6 +586,7 @@ function DecisionBanner({
 
 function NodeDetail({
   node,
+  agentConfigId,
   proj,
   nodeRuns,
   edgeLabelById,
@@ -593,6 +594,8 @@ function NodeDetail({
   onSelectRun,
 }: {
   node: WorkflowNodeDef
+  /** 定义级主 agent 配置（AI 节点未配置模型时的回退显示）。 */
+  agentConfigId?: string | null
   proj: NodeProjection | null
   nodeRuns: WorkflowRunRecord[]
   edgeLabelById: Map<string, string>
@@ -637,7 +640,11 @@ function NodeDetail({
           <div style={{ fontSize: 11.5, color: 'var(--text-muted, #6f7a8b)', lineHeight: 1.7 }}>
             类型 {node.type}
             {node.agent ? ` · agent ${node.agent}` : ''}
-            {node.modelConfigId ? ` · 模型 ${node.modelConfigId}` : ''}
+            {node.modelConfigId
+              ? ` · 模型 ${node.modelConfigId}`
+              : isAi && agentConfigId
+                ? ` · 模型 ${agentConfigId}（主 agent）`
+                : ''}
             {node.maxRuns ? ` · maxRuns ${node.maxRuns}` : ''}
             {node.timeoutMs ? ` · 超时 ${formatDuration(node.timeoutMs)}` : ''}
           </div>
@@ -1296,6 +1303,7 @@ export default function InstancePanel({ instanceId, workspaceId }: InstancePanel
                 {selectedNode ? (
                   <NodeDetail
                     node={selectedNode}
+                    agentConfigId={definition?.agentConfigId ?? null}
                     proj={projection[selectedNode.id] ?? null}
                     nodeRuns={selectedNodeRuns}
                     edgeLabelById={edgeLabelById}

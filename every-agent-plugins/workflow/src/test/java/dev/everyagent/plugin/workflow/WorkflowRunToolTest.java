@@ -74,7 +74,7 @@ class WorkflowRunToolTest {
 
     private static Definition withOnError(Definition d, OnError onError) {
         return new Definition(d.schemaVersion(), d.id(), d.name(), d.description(), d.workspaceId(),
-                d.createdAt(), d.updatedAt(), d.variables(), onError, d.supervisor(), d.nodes(), d.edges());
+                d.createdAt(), d.updatedAt(), d.variables(), d.agentConfigId(), onError, d.supervisor(), d.nodes(), d.edges());
     }
 
     private void await(BooleanSupplier cond, String what) throws InterruptedException {

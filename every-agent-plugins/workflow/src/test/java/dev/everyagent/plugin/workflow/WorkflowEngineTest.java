@@ -76,7 +76,7 @@ class WorkflowEngineTest {
 
     private static Definition withOnError(Definition d, OnError onError) {
         return new Definition(d.schemaVersion(), d.id(), d.name(), d.description(), d.workspaceId(),
-                d.createdAt(), d.updatedAt(), d.variables(), onError, d.supervisor(),
+                d.createdAt(), d.updatedAt(), d.variables(), d.agentConfigId(), onError, d.supervisor(),
                 d.nodes(), d.edges());
     }
 
@@ -87,7 +87,7 @@ class WorkflowEngineTest {
             nodes.add(n.id().equals(replacement.id()) ? replacement : n);
         }
         return new Definition(d.schemaVersion(), d.id(), d.name(), d.description(), d.workspaceId(),
-                d.createdAt(), d.updatedAt(), d.variables(), d.onError(), d.supervisor(), nodes, d.edges());
+                d.createdAt(), d.updatedAt(), d.variables(), d.agentConfigId(), d.onError(), d.supervisor(), nodes, d.edges());
     }
 
     private InstanceMeta start(Definition d) {
@@ -184,7 +184,7 @@ class WorkflowEngineTest {
         InstanceMeta created = store.createInstance(
                 new Definition(orphan.schemaVersion(), orphan.id(), orphan.name(),
                         orphan.description(), "ws_missing", orphan.createdAt(), orphan.updatedAt(),
-                        orphan.variables(), orphan.onError(), orphan.supervisor(), orphan.nodes(), orphan.edges()), Map.of());
+                        orphan.variables(), orphan.agentConfigId(), orphan.onError(), orphan.supervisor(), orphan.nodes(), orphan.edges()), Map.of());
         assertThatThrownBy(() -> engine.start(created)).isInstanceOf(BadParamsException.class);
     }
 
@@ -363,6 +363,27 @@ class WorkflowEngineTest {
         assertThat(aiRun.agent().seedTurns()).isZero();
         assertThat(aiRun.agent().resultTurns()).isPositive();
         assertThat(aiRun.agent().usage().inputTokens()).isEqualTo(100L);
+    }
+
+    @Test
+    void aiNodeModelFallsBackToDefinitionAgentConfigId() throws Exception {
+        // 模型取值链：节点未配置 → 定义级主 agent 配置（agentConfigId）→ 系统默认（null）
+        Definition d = DefinitionValidatorTest.withAgentConfigId(DefinitionValidatorTest.def(
+                DefinitionValidatorTest.node("s", "start"),
+                DefinitionValidatorTest.node("ai1", "ai").agent("writer1").input("写一"),
+                DefinitionValidatorTest.node("ai2", "ai").agent("writer2").modelConfigId("node-model").input("写二"),
+                DefinitionValidatorTest.edge("e1", "s", "ai1"),
+                DefinitionValidatorTest.edge("e2", "s", "ai2")), "main-model");
+        Definition saved = store.saveDefinition("ws_run", d);
+        factory.script("writer1", key -> Fakes.Script.echo("完成一"));
+        factory.script("writer2", key -> Fakes.Script.echo("完成二"));
+        InstanceMeta m = start(saved);
+        awaitTerminal(m.id());
+        assertThat(meta(m.id()).status()).isEqualTo(InstanceStatus.DONE);
+        RunRecord r1 = runs(m.id()).stream().filter(r -> "ai1".equals(r.nodeId())).findFirst().orElseThrow();
+        assertThat(r1.agent().modelConfigId()).isEqualTo("main-model");
+        RunRecord r2 = runs(m.id()).stream().filter(r -> "ai2".equals(r.nodeId())).findFirst().orElseThrow();
+        assertThat(r2.agent().modelConfigId()).isEqualTo("node-model");
     }
 
     // ══════════════════════════ 八种条件路由 ══════════════════════════
@@ -852,7 +873,7 @@ class WorkflowEngineTest {
                 DefinitionValidatorTest.edge("e2", "s", "named"));
         // 旧结构兼容通道：匿名 AI 节点已过不了保存校验，直构绕过（挂注册工作区）
         Definition d = new Definition(base.schemaVersion(), null, base.name(), base.description(), "ws_run",
-                null, null, base.variables(), OnError.SUPERVISOR, base.supervisor(), base.nodes(), base.edges());
+                null, null, base.variables(), base.agentConfigId(), OnError.SUPERVISOR, base.supervisor(), base.nodes(), base.edges());
         InstanceMeta m = start(d);
         awaitTerminal(m.id());
         assertThat(meta(m.id()).status()).isEqualTo(InstanceStatus.DONE);

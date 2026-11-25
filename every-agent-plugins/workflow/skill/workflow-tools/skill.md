@@ -35,6 +35,7 @@ tools: [workflow_create, workflow_get, workflow_update, workflow_delete, workflo
 {
   "name": "小说生成", "description": "可选说明",
   "variables": [{"name": "novelName", "label": "小说名", "required": true, "defaultValue": null, "description": "可选"}],
+  "agentConfigId": "可选(主 agent 配置:AI 节点未配置 modelConfigId 时的统一回退,null=系统默认模型)",
   "onError": "fail | supervisor | askUser",
   "supervisor": {"modelConfigId": "可选", "systemPrompt": "可选(督导 agent)"},
   "nodes": [
@@ -98,7 +99,7 @@ tools: [workflow_create, workflow_get, workflow_update, workflow_delete, workflo
 - **定义节点** = 该 agent 名在**上游拓扑序最早的持有者**：沿边反向可达的 AI 节点里，拓扑序第一个用这个 agent 名的节点（判定与编辑器下拉候选、运行时 systemPrompt 解析同一实现；回指环上解析到自身=视为定义节点）。定义节点携带 `systemPrompt`（**允许为空**=这条会话线没有系统提示词）与可选 `modelConfigId`，即会话线的定义处。
 - **引用节点** = 上游已有同名持有者的下游节点：复用同名 `agent` 即延续同一会话线（跨节点共享上下文）；**不允许携带 systemPrompt**——create/update 校验直接拒绝引用节点带非空白 systemPrompt 的定义（错误信息带定义节点定位），`modelConfigId` 可各自另配。
 - **存量迁移口径**：磁盘加载与已存实例运行不受此校验影响（旧定义里引用节点带 systemPrompt 的仍按「节点自带值优先」运行）；但该定义想再 update/create 就必须先清空引用节点上的 systemPrompt，或把值挪到（或改）定义节点——校验只挡保存入口。
-- 模型取值优先级：节点 `modelConfigId` → 系统默认模型。
+- 模型取值优先级：节点 `modelConfigId` → 定义级 `agentConfigId`（主 agent 配置）→ 系统默认模型。
 
 ### 汇合与多入边语义（joinMode）
 节点有多条入边时的执行次数由节点级 `joinMode`（String 字段）决定：

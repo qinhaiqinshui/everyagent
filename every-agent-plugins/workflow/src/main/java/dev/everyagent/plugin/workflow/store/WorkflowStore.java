@@ -413,7 +413,8 @@ public final class WorkflowStore {
         Definition saved = new Definition(
                 Definition.SCHEMA_VERSION, id, normalized.name(), normalized.description(), workspaceId,
                 existing != null && existing.createdAt() != null ? existing.createdAt() : now, now,
-                normalized.variables(), normalized.onError(), normalized.supervisor(),
+                normalized.variables(), normalized.agentConfigId(), normalized.onError(),
+                normalized.supervisor(),
                 normalized.nodes(), normalized.edges());
         try {
             Files.createDirectories(defFile(workspaceId, id).getParent());
@@ -497,7 +498,8 @@ public final class WorkflowStore {
 
     private static Definition withId(Definition d, String id) {
         return new Definition(d.schemaVersion(), id, d.name(), d.description(), d.workspaceId(),
-                d.createdAt(), d.updatedAt(), d.variables(), d.onError(), d.supervisor(),
+                d.createdAt(), d.updatedAt(), d.variables(), d.agentConfigId(), d.onError(),
+                d.supervisor(),
                 d.nodes(), d.edges());
     }
 

@@ -401,7 +401,8 @@ class WorkflowStoreTest {
         Definition created = store.saveDefinition(WS_A, sampleDef());
         Definition updated = store.saveDefinition(WS_A,
                 new Definition(created.schemaVersion(), created.id(), created.name(), "改描述", created.workspaceId(),
-                        created.createdAt(), created.updatedAt(), created.variables(), created.onError(),
+                        created.createdAt(), created.updatedAt(), created.variables(), created.agentConfigId(),
+                        created.onError(),
                         created.supervisor(), created.nodes(), created.edges()));
         assertThat(events).containsExactly(
                 "DEFINITION:CREATED:" + WS_A + ":" + created.id(),

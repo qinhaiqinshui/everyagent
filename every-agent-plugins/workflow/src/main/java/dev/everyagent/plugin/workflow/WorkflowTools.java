@@ -430,7 +430,7 @@ public final class WorkflowTools {
         if (idOverride != null) {
             draft = new Definition(draft.schemaVersion(), idOverride, draft.name(), draft.description(),
                     draft.workspaceId(), draft.createdAt(), draft.updatedAt(), draft.variables(),
-                    draft.onError(), draft.supervisor(), draft.nodes(), draft.edges());
+                    draft.agentConfigId(), draft.onError(), draft.supervisor(), draft.nodes(), draft.edges());
         }
         // 先跑一遍校验拿逐项错误(供模型自纠),再落盘(store 内会再校验一次,双保险)
         List<String> errors = DefinitionValidator.validate(draft);

@@ -103,6 +103,8 @@ export interface WorkflowDefinition {
   createdAt?: number | null
   updatedAt?: number | null
   variables?: WorkflowVariableDef[] | null
+  /** 主 agent 配置 id：AI 节点未配置 modelConfigId 时统一使用（null=系统默认模型）。 */
+  agentConfigId?: string | null
   onError?: WorkflowOnError | null
   supervisor?: { modelConfigId?: string | null; systemPrompt?: string | null } | null
   nodes?: WorkflowNodeDef[] | null

@@ -365,7 +365,7 @@ class DefinitionValidatorTest {
     @Test
     void blankNameIsError() {
         Definition d = new Definition(null, null, " ", null, null, null, null,
-                null, null, null, List.of(node("n1", "start").def), null);
+                null, null, null, null, List.of(node("n1", "start").def), null);
         assertThat(DefinitionValidator.validate(d)).anyMatch(e -> e.contains("name 不能为空"));
     }
 
@@ -451,12 +451,18 @@ class DefinitionValidatorTest {
             }
         }
         return new Definition(null, null, "测试定义", null, "w_test", null, null,
-                null, null, null, nodes, edges);
+                null, null, null, null, nodes, edges);
     }
 
     static Definition withVariables(Definition d, VariableDef... vars) {
         return new Definition(d.schemaVersion(), d.id(), d.name(), d.description(), d.workspaceId(),
-                d.createdAt(), d.updatedAt(), List.of(vars), d.onError(), d.supervisor(),
+                d.createdAt(), d.updatedAt(), List.of(vars), d.agentConfigId(), d.onError(), d.supervisor(),
+                d.nodes(), d.edges());
+    }
+
+    static Definition withAgentConfigId(Definition d, String agentConfigId) {
+        return new Definition(d.schemaVersion(), d.id(), d.name(), d.description(), d.workspaceId(),
+                d.createdAt(), d.updatedAt(), d.variables(), agentConfigId, d.onError(), d.supervisor(),
                 d.nodes(), d.edges());
     }
 }

@@ -41,6 +41,7 @@ class ModelJsonRoundTripTest {
         assertThat(json).contains("\"id\":\"wf_a1b2c\"");
         assertThat(json).contains("\"workspaceId\":\"w_x1\"");
         assertThat(json).contains("\"onError\":\"askUser\"");
+        assertThat(json).contains("\"agentConfigId\":\"main-agent-model\"");
         // 命令节点字段 + AI 节点字段
         assertThat(json).contains("\"command\":\"mkdir -p out/{{novelName}}\"");
         assertThat(json).contains("\"timeoutMs\":60000");
@@ -200,6 +201,7 @@ class ModelJsonRoundTripTest {
                 Definition.SCHEMA_VERSION, "wf_a1b2c", "小说生成", "三步生成", "w_x1",
                 1730000000000L, 1730000000500L,
                 List.of(new VariableDef("novelName", "小说名", true, null, "要生成的小说标题")),
+                "main-agent-model",
                 OnError.ASK_USER,
                 new Definition.Supervisor("gpt5", "你是工作流督导"),
                 List.of(

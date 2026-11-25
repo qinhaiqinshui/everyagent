@@ -11,7 +11,8 @@ import com.fasterxml.jackson.annotation.JsonInclude;
  *   <li>{@code command}：命令节点——{@code command} 经 shell 执行（Windows cmd.exe /c、
  *       Unix /bin/sh -c），{@code timeoutMs} 仅命令节点有效，超时 destroyForcibly；</li>
  *   <li>{@code ai}：AI 节点——{@code agent} 指定命名会话线（缺省=一次性会话），
- *       {@code modelConfigId} 指定本节点的模型配置（null=系统默认模型），
+ *       {@code modelConfigId} 指定本节点的模型配置（null=回退定义级主 agent 配置
+ *       {@code Definition.agentConfigId}，仍空=系统默认模型），
  *       {@code systemPrompt} 为本节点装配 AI 的系统提示（可空；同会话线的各节点
  *       各自生效，编辑器候选名扫描自上游 AI 节点），
  *       {@code input} 为输入模板（{@code {{var}}} 渲染）；</li>

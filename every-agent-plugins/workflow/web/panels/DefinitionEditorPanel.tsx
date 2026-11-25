@@ -7,7 +7,7 @@
  *     workerId?: string     定向 worker（config.get；缺省经注册表解析）
  *   }
  *
- * 布局三栏：左 = palette（添加节点）+ 变量/onError+supervisor 折叠编辑区；
+ * 布局三栏：左 = palette（添加节点）+ 变量/主 agent 配置/onError+supervisor 折叠编辑区；
  * 中 = WorkflowCanvas(mode=edit)；右 = 属性面板（选中节点 → 类型特定字段；选中边 →
  * 八种出边条件编辑器）——与实例详情面板同款隐藏规则：仅在选中后挂载，空白点按
  * 保留内容，× 关闭清选。顶部工具栏：定义名/描述 + 保存（def.save）+ 校验错误列表。
@@ -55,6 +55,7 @@ import {
 } from '../workflowGateway'
 import { modelConfigOptionLabel, refreshModelConfigs, type WorkflowModelConfig } from '../modelConfigStore'
 import {
+  AgentIcon,
   AiNodeIcon,
   AutoLayoutIcon,
   CloseIcon,
@@ -197,7 +198,7 @@ const SHOW_NODE_SYSTEM_PROMPT = false
 
 // ─── 纯逻辑（往返自测的最小核：new→mutate→save payload 组装） ─────────────
 
-/** 新建空白定义（一个 start 节点 + 默认 supervisor 策略）。 */
+/** 新建空白定义（一个 start 节点 + 默认 supervisor 策略；主 agent 配置缺省系统默认）。 */
 export function blankDefinition(workspaceId: string): WorkflowDefinition {
   return {
     schemaVersion: 1,
@@ -206,6 +207,7 @@ export function blankDefinition(workspaceId: string): WorkflowDefinition {
     description: '',
     workspaceId,
     variables: [],
+    agentConfigId: null,
     onError: 'supervisor',
     supervisor: { modelConfigId: null, systemPrompt: '' },
     nodes: [{ id: localShortId('wn'), type: 'start', name: '开始', x: 120, y: 280 }],
@@ -687,6 +689,7 @@ export default function DefinitionEditorPanel({
           </div>
 
           <VariablesSection def={def} updateDef={updateDef} />
+          <AgentConfigSection def={def} modelConfigs={modelConfigs} updateDef={updateDef} />
           <PolicySection def={def} onErrorValue={onErrorValue} modelConfigs={modelConfigs} updateDef={updateDef} />
         </div>
 
@@ -871,6 +874,41 @@ function VariablesSection({
       <button className="wf-editor-btn" onClick={add}>
         <PlusIcon size={12} /> 添加变量
       </button>
+    </Section>
+  )
+}
+
+// ─── 左栏折叠区：主 agent 配置（AI 节点未配置时的统一 fallback） ──────────
+
+/** 主 agent 模型配置（定义级 agentConfigId）：AI 节点取值链 节点 → 本配置 → 系统默认。 */
+function AgentConfigSection({
+  def,
+  modelConfigs,
+  updateDef,
+}: {
+  def: WorkflowDefinition
+  modelConfigs: WorkflowModelConfig[]
+  updateDef: (updater: (d: WorkflowDefinition) => WorkflowDefinition) => void
+}) {
+  return (
+    <Section icon={<AgentIcon size={14} />} title="主 agent 配置">
+      <div className="wf-editor-field">
+        <FieldLabel name="agentConfigId" note="AI 节点未配置模型时统一使用" />
+        <select
+          className="wf-editor-select"
+          value={def.agentConfigId ?? ''}
+          onChange={e => updateDef(d => ({ ...d, agentConfigId: e.target.value || null }))}
+        >
+          <option value="">（系统默认模型）</option>
+          {modelConfigs.map(c => (
+            <option key={c.configId} value={c.configId}>{modelConfigOptionLabel(c)}</option>
+          ))}
+          {def.agentConfigId && !modelConfigs.some(c => c.configId === def.agentConfigId) ? (
+            <option value={def.agentConfigId}>{def.agentConfigId}（缺失）</option>
+          ) : null}
+        </select>
+      </div>
+      <p className="wf-editor-hint">AI 节点模型取值优先级：节点「模型配置」→ 此处 → 系统默认。</p>
     </Section>
   )
 }
@@ -1111,7 +1149,7 @@ function NodePropertySection({
             </>
           )}
           <div className="wf-editor-field">
-            <FieldLabel name="模型配置" note="本节点生效；空 = 系统默认模型" />
+            <FieldLabel name="模型配置" note="本节点生效；空 = 跟随「主 agent 配置」" />
             <select
               className="wf-editor-select"
               value={node.modelConfigId ?? ''}
@@ -1312,11 +1350,14 @@ function EdgePropertySection({
  *    （none）」→ 角标消失；start 节点不显示该控件。保存 → 重开同一定义 → 下拉回显
  *    「等齐全部入边」（无 joinMode 字段/为 none 的旧定义回显「每次到达即执行」）；
  *    实例运行图（readonly）上带角标节点与运行态徽点并排不遮挡。
- * 5. 左栏「运行变量」默认展开，加一个 required 变量、「出错策略」确认默认 supervisor +
- *    选督导模型。
+ * 5. 左栏「运行变量」默认展开，加一个 required 变量、「主 agent 配置」选一个非默认
+ *    模型、「出错策略」确认默认 supervisor + 选督导模型。
+ * 5b. 主 agent 配置回退链：AI 节点「模型配置」留空 + 定义选了主 agent 配置 → 运行
+ *     时该节点用主 agent 配置（runs 记录 agent.modelConfigId）；节点另选模型则节点
+ *     值优先；定义留空（系统默认模型）则未配置节点走系统默认。重开定义回显一致。
  * 6. 保存 → toast「工作流已创建：wf_…」，dirty ● 消失，标题处显示定义 id。
  * 7. 关闭标签页 → 重新从侧边栏/定义列表打开同一定义 → 节点位置/连线/条件/命令/
- *    会话线/input/变量/onError/supervisor 全部还原（def.get 原样回读）。
+ *    会话线/input/变量/主 agent 配置/onError/supervisor 全部还原（def.get 原样回读）。
  * 8. 反向校验：删掉 command 内容保存 → 出现红色逐项错误列表（后端校验器返回）；
  *    AI 节点清空会话线名保存 → 「AI 节点必须指定 agent 名」逐项报错。
  * 8b. 画布容量：连续添加/拖动节点到 3200×2400 固定画布边界之外（右/下）→ 画布随

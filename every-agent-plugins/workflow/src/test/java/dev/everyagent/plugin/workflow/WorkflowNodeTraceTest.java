@@ -67,7 +67,7 @@ class WorkflowNodeTraceTest {
         Definition d = DefinitionValidatorTest.def(parts);
         return store.saveDefinition("ws_run", new Definition(d.schemaVersion(), d.id(), d.name(),
                 d.description(), d.workspaceId(), d.createdAt(), d.updatedAt(), d.variables(),
-                onError, d.supervisor(), d.nodes(), d.edges()));
+                d.agentConfigId(), onError, d.supervisor(), d.nodes(), d.edges()));
     }
 
     /** 绑定任务桩启动并等终态（每实例一个 origin 任务，任务 ID 全局递增）。 */
@@ -107,7 +107,7 @@ class WorkflowNodeTraceTest {
             nodes.add(n.id().equals(replacement.id()) ? replacement : n);
         }
         return new Definition(d.schemaVersion(), d.id(), d.name(), d.description(), d.workspaceId(),
-                d.createdAt(), d.updatedAt(), d.variables(), d.onError(), d.supervisor(), nodes, d.edges());
+                d.createdAt(), d.updatedAt(), d.variables(), d.agentConfigId(), d.onError(), d.supervisor(), nodes, d.edges());
     }
 
     // ══════════════════════════ 契约断言 ══════════════════════════

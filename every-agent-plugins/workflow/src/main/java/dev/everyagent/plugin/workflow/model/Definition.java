@@ -18,6 +18,11 @@ import com.fasterxml.jackson.annotation.JsonInclude;
  * {@link DefinitionJson#migrateLegacyAgents} 就地迁移（声明值复制到引用节点），不落盘
  * ——重新保存时自然转新形态。
  *
+ * <p><b>主 agent 配置（{@code agentConfigId}）</b>：工作流级模型配置，AI 节点未配置
+ * {@code modelConfigId} 时统一用它（取值链：节点 → 主 agent 配置 → 系统默认模型，
+ * 见 {@code NodeRunners.AiNodeRunner}）。缺省 null=系统默认模型（编辑器「运行变量」
+ * 区块下方可配置）。
+ *
  * <p>列表排序约定：定义列表按 updatedAt 倒序。
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
@@ -31,6 +36,7 @@ public record Definition(
         Long createdAt,
         Long updatedAt,
         List<VariableDef> variables,
+        String agentConfigId,
         OnError onError,
         Supervisor supervisor,
         List<NodeDef> nodes,
@@ -65,6 +71,6 @@ public record Definition(
     /** 同构换 id（导入重赋 id / 测试构造用；其余字段逐项保留）。 */
     public Definition withId(String newId) {
         return new Definition(schemaVersion, newId, name, description, workspaceId,
-                createdAt, updatedAt, variables, onError, supervisor, nodes, edges);
+                createdAt, updatedAt, variables, agentConfigId, onError, supervisor, nodes, edges);
     }
 }

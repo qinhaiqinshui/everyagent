@@ -324,7 +324,7 @@ public final class DefinitionValidator {
 
     /**
      * 保存前规范化（校验通过后调用）：onError 缺省 supervisor；schemaVersion 归一为
-     * 当前版本；null 列表归空表。不改动 id/时间戳/工作区。
+     * 当前版本；null 列表归空表；agentConfigId 空白归 null。不改动 id/时间戳/工作区。
      */
     public static Definition normalize(Definition d) {
         OnError onError = d.onError() == null ? OnError.SUPERVISOR : d.onError();
@@ -337,6 +337,7 @@ public final class DefinitionValidator {
                 d.createdAt(),
                 d.updatedAt(),
                 d.variables() == null ? List.of() : List.copyOf(d.variables()),
+                d.agentConfigId() == null || d.agentConfigId().isBlank() ? null : d.agentConfigId().trim(),
                 onError,
                 d.supervisor(),
                 d.nodes() == null ? List.of() : List.copyOf(d.nodes()),

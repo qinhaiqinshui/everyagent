@@ -94,7 +94,7 @@ class WorkflowRuntimeEmitTest {
         store.refreshWorkspaceRegistry();
         var def = new dev.everyagent.plugin.workflow.model.Definition(
                 dev.everyagent.plugin.workflow.model.Definition.SCHEMA_VERSION,
-                "wf_emit", "emit", null, "ws_emit", 0L, 0L, null, null, null,
+                "wf_emit", "emit", null, "ws_emit", 0L, 0L, null, null, null, null,
                 List.of(new dev.everyagent.plugin.workflow.model.NodeDef("s", "start", "s", null, null,
                         null, null, null, null, null, null, null, null)),
                 List.of());
@@ -222,7 +222,7 @@ class WorkflowRuntimeEmitTest {
         store.refreshWorkspaceRegistry();
         var def = new dev.everyagent.plugin.workflow.model.Definition(
                 dev.everyagent.plugin.workflow.model.Definition.SCHEMA_VERSION,
-                "wf_emit2", "emit2", null, "ws_emit", 0L, 0L, null, null, null,
+                "wf_emit2", "emit2", null, "ws_emit", 0L, 0L, null, null, null, null,
                 List.of(new dev.everyagent.plugin.workflow.model.NodeDef("s", "start", "s", null, null,
                         null, null, null, null, null, null, null, null)),
                 List.of());

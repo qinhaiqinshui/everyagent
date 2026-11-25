@@ -396,9 +396,12 @@ public final class NodeRunners {
             try {
                 String agentName = node.agent() == null || node.agent().isBlank()
                         ? null : node.agent();
-                // 模型是节点自带配置；系统提示节点自带优先、引用节点沿上游解析定义节点值
-                //（agents 总表已删除，旧定义声明值在解析口迁移到节点，见 DefinitionJson）
-                String configId = node.modelConfigId();
+                // 模型取值链：节点自带配置 → 主 agent 配置（定义级 agentConfigId）→ 系统默认模型
+                //（null 交给 AgentFactory 走默认）；系统提示节点自带优先、引用节点沿上游解析
+                // 定义节点值（agents 总表已删除，旧定义声明值在解析口迁移到节点，见 DefinitionJson）
+                String configId = node.modelConfigId() != null && !node.modelConfigId().isBlank()
+                        ? node.modelConfigId()
+                        : snapshot.agentConfigId();
                 String systemPrompt = effectiveSystemPrompt(snapshot, node);
                 String agentKey = agentName != null
                         ? agentName + "#" + instanceId

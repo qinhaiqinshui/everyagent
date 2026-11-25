@@ -301,7 +301,8 @@ class WorkflowRpcTest {
         // upsert：同 id 再保存改名
         Thread.sleep(5);
         Definition renamed = new Definition(saved.schemaVersion(), id, "改名后的定义", saved.description(),
-                "w_elsewhere", saved.createdAt(), saved.updatedAt(), saved.variables(), saved.onError(),
+                "w_elsewhere", saved.createdAt(), saved.updatedAt(), saved.variables(), saved.agentConfigId(),
+                saved.onError(),
                 saved.supervisor(), saved.nodes(), saved.edges());
         Call c2 = call(p().put("workspace", "ws_run").set("definition", Json.toJson(renamed)));
         rpc.defSave(c2);
@@ -499,7 +500,7 @@ class WorkflowRpcTest {
                 .hasMessageContaining("gpt4-nope");
         // 节点级覆盖同样校验
         Definition badNode = store.saveDefinition("ws_run", new Definition(null, null, "测试定义",
-                null, "ws_run", null, null, null, null, null,
+                null, "ws_run", null, null, null, null, null, null,
                 List.of(DefinitionValidatorTest.node("s", "start").def,
                         new NodeDef("a", "ai", "a", 0.0, 0.0, null, null, null, "b",
                                 "missing-cfg", null, null, null)),
@@ -508,6 +509,17 @@ class WorkflowRpcTest {
                 .put("definitionId", badNode.id()))))
                 .isInstanceOf(BadParamsException.class)
                 .hasMessageContaining("missing-cfg");
+        // 定义级主 agent 配置（agentConfigId）同样校验
+        Definition badMain = store.saveDefinition("ws_run", DefinitionValidatorTest.withAgentConfigId(
+                DefinitionValidatorTest.def(
+                        DefinitionValidatorTest.node("s", "start"),
+                        DefinitionValidatorTest.node("a", "ai").agent("writer"),
+                        DefinitionValidatorTest.edge("e1", "s", "a")), "main-nope"));
+        assertThatThrownBy(() -> rpc.run(call(p().put("workspace", "ws_run")
+                .put("definitionId", badMain.id()))))
+                .isInstanceOf(BadParamsException.class)
+                .hasMessageContaining("主 agent")
+                .hasMessageContaining("main-nope");
         // 定义不存在 → NOT_FOUND
         assertThatThrownBy(() -> rpc.run(call(p().put("workspace", "ws_run")
                 .put("definitionId", "wf_nope"))))
@@ -838,7 +850,7 @@ class WorkflowRpcTest {
                 ? Fakes.Script.failing(new RuntimeException("第一次失败"))
                 : Fakes.Script.echo("重试成功"));
         Definition d = store.saveDefinition("ws_run", new Definition(null, null, "测试定义", null,
-                "ws_run", null, null, null, OnError.ASK_USER, null,
+                "ws_run", null, null, null, null, OnError.ASK_USER, null,
                 List.of(DefinitionValidatorTest.node("s", "start").def,
                         DefinitionValidatorTest.node("n", "ai").agent("writer").maxRuns(10).def,
                         DefinitionValidatorTest.node("t", "ai").agent("tail").maxRuns(10).def),
@@ -866,7 +878,7 @@ class WorkflowRpcTest {
                 ? Fakes.Script.failing(new RuntimeException("失败"))
                 : Fakes.Script.echo("ok"));
         Definition d = store.saveDefinition("ws_run", new Definition(null, null, "测试定义", null,
-                "ws_run", null, null, null, OnError.ASK_USER, null,
+                "ws_run", null, null, null, null, OnError.ASK_USER, null,
                 List.of(DefinitionValidatorTest.node("s", "start").def,
                         DefinitionValidatorTest.node("n", "ai").agent("writer").maxRuns(10).def),
                 List.of(DefinitionValidatorTest.edge("e1", "s", "n"))));

@@ -500,8 +500,8 @@ public final class WorkflowEngine {
 
     /**
      * 定义引用的模型配置存在性（经 {@code services.modelConfigs()}）：AI 节点的
-     * modelConfigId 与督导模型全查。configId=null=用系统默认模型，不在校验范围。
-     * 引用处带定位（「节点名 → configId」逐项列出）。
+     * modelConfigId、主 agent 配置与督导模型全查。configId=null=用系统默认模型，
+     * 不在校验范围。引用处带定位（「节点名 → configId」逐项列出）。
      */
     private List<String> unknownModelConfigs(Definition def) {
         LinkedHashSet<String> known = new LinkedHashSet<>();
@@ -512,6 +512,10 @@ public final class WorkflowEngine {
         }
         List<String> unknown = new ArrayList<>();
         LinkedHashSet<String> reported = new LinkedHashSet<>();
+        if (def.agentConfigId() != null && !known.contains(def.agentConfigId())
+                && reported.add(def.agentConfigId())) {
+            unknown.add("主 agent → " + def.agentConfigId());
+        }
         for (NodeDef n : def.nodesOrEmpty()) {
             if (n != null && n.modelConfigId() != null && !known.contains(n.modelConfigId())
                     && reported.add(n.modelConfigId())) {
@@ -1305,7 +1309,8 @@ public final class WorkflowEngine {
         }
         Definition old = r.snapshot;
         r.snapshot = new Definition(old.schemaVersion(), old.id(), old.name(), old.description(),
-                old.workspaceId(), old.createdAt(), old.updatedAt(), old.variables(), old.onError(),
+                old.workspaceId(), old.createdAt(), old.updatedAt(), old.variables(),
+                old.agentConfigId(), old.onError(),
                 old.supervisor(), nodes, old.edges());
     }
 
