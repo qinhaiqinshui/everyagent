@@ -6,6 +6,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -52,12 +53,20 @@ import dev.everyagent.plugin.workflow.store.WorkflowStore;
  * 全激活语义（所有满足条件的出边全部激活；存在条件出边但无一满足=节点走到尽头，不报错）；
  * 并行节点各自虚拟线程；<b>同 agent 名节点全局互斥</b>（fair 锁，锁粒度=整个 run——
  * 读种子→发指令→run→事件追加，保证后跑节点读到上游完整事件流）。
+ * <b>节点级汇合屏障（joinMode=all）</b>：等齐全部入边各激活一次才触发一次执行（到达记账
+ * 按<b>边 id 去重</b>——环内同一条边重复到达记一条；触发后记账清零，回指循环每轮重新
+ * 等齐）；maxRuns 按<b>触发执行次数</b>计——并行分支→汇总节点不再需要按入边数手算
+ * maxRuns。joinMode=none（缺省）语义不变：每条激活入边到达即触发一次。
  *
  * <p><b>循环上限</b>：调度时 {@code runCount+1 > maxRuns} 触发错误策略（fail/askUser）；
- * 错误策略的 retry 决策绕过上限（否则一次失败即永锁）。
+ * 错误策略的 retry 决策绕过上限（否则一次失败即永锁）。runCount 在 {@code startNodeRun}
+ * 开跑时计入（<b>执行即消耗</b>——被中断的尝试同样占额度），与拒绝判定、终态投影及
+ * {@code node.started}/{@code node.output} 事件的 runCount/maxRuns 水位（A3 可观测性）
+ * 同一口径。
  *
- * <p><b>完成判定</b>：无运行中节点、无挂起决策、无未消费激活（此时剩余 pending 节点均为
- * 不可达死分支——不再阻塞实例收束）。
+ * <p><b>完成判定</b>：无运行中节点、无挂起决策、无<b>非 join 滞留</b>的未消费激活（此时
+ * 剩余 pending 节点均为不可达死分支——不再阻塞实例收束；joinMode=all 未等齐的滞留激活
+ * 同样不阻塞——整图静默时未齐 join 节点静默跳过，与死分支同语义）。
  *
  * <p><b>状态机</b>：created/running/waiting-user/done/failed/cancelled；迁移点原子重写
  * meta.json（终态投影 nodeStates）。worker 重启扫描标 failed 已在 store 层（步骤 4）。
@@ -286,8 +295,8 @@ public final class WorkflowEngine {
     /**
      * 失败实例的节点状态重建（rerun 专用，schedLock 内调用）：runCount 从终态投影延续
      * （maxRuns 预算跨 rerun 不重置——防无限循环；目标节点经决策级授权绕上限重开）；
-     * done/skipped 保持终态不重跑；cancelled（实例失败时被中断的并行节点——终态收口扫描
-     * 落盘，runCount 未计入中断尝试，预算完整）与 failed 重置 pending 但<b>不激活</b>
+     * done/skipped 保持终态不重跑；cancelled（实例失败时被中断的并行节点——中断尝试已在
+     * startNodeRun 计入 runCount，执行即消耗）与 failed 重置 pending 但<b>不激活</b>
      * （不在失败路径上，等待未来激活）。投影缺失（worker 重启中断实例 nodeStates=null）
      * 回退按磁盘 runs 记录数恢复 runCount。
      */
@@ -531,6 +540,8 @@ public final class WorkflowEngine {
         /** 定义快照（retryWithInput 会替换节点输入——整快照换引用）。 */
         volatile Definition snapshot;
         final Map<String, List<EdgeDef>> outEdges = new LinkedHashMap<>();
+        /** 入边表（nodeId → 该节点的全部入边；joinMode=all 的等齐判定依据）。 */
+        final Map<String, List<EdgeDef>> inEdges = new LinkedHashMap<>();
         final Map<String, EdgeDef> edgeById = new LinkedHashMap<>();
         final ConcurrentHashMap<String, NodeState> nodeStates = new ConcurrentHashMap<>();
         /** 节点未消费激活数（就绪=有激活；调度时全量消费）。 */
@@ -571,10 +582,12 @@ public final class WorkflowEngine {
             for (NodeDef n : snapshot.nodesOrEmpty()) {
                 nodeStates.put(n.id(), new NodeState());
                 outEdges.put(n.id(), new ArrayList<>());
+                inEdges.put(n.id(), new ArrayList<>());
             }
             for (EdgeDef e : snapshot.edgesOrEmpty()) {
                 edgeById.put(e.id(), e);
                 outEdges.get(e.from()).add(e);
+                inEdges.get(e.to()).add(e);
             }
         }
 
@@ -597,10 +610,19 @@ public final class WorkflowEngine {
      *  cancelled = 实例终态收口时被中断的在飞运行（非节点自身失败）。 */
     private static final class NodeState {
         volatile String status = "pending";
+        /** 已消耗的执行次数（startNodeRun 开跑时 ++——执行即消耗，被中断的尝试同样计入；
+         * schedLock 临界区内读写，拒绝判定/终态投影/事件水位共用此口径，完成路径不重复计）。 */
         int runCount;
         volatile int lastRunNo;
         /** 在飞真实运行的 runNo（0=无）——终态收口扫描判据；区别于「拒绝调度」置 running 的伪在飞。 */
         volatile int activeRunNo;
+        /**
+         * joinMode=all 的到达记账：本轮已激活到达的入边 id 集合（Set 天然对环内同一条边
+         * 重复到达去重）。纯内存调度态，仅在 schedLock 临界区内读写（无需并发结构），
+         * 与 {@link InstanceRun#pendingActivations} 同生命周期——restoreNodeStates
+         * 不恢复（rerun 走快照重建，等齐从零开始）。
+         */
+        final Set<String> arrivedEdges = new LinkedHashSet<>();
     }
 
     // ══════════════════════════ 调度 ══════════════════════════
@@ -622,6 +644,16 @@ public final class WorkflowEngine {
             return; // 无已激活入边,不就绪
         }
         NodeDef node = r.node(nodeId);
+        if (node != null && node.isJoinAll()) {
+            // 汇合屏障：到达记账未覆盖全部入边 → 不消费、不启动（滞留等待其余分支；
+            // 滞留计数留待完成判定按 join 滞留口径豁免）。无入边=恒等齐（等价 none）。
+            if (!joinArrivedAll(r, nodeId, st)) {
+                return;
+            }
+            // 等齐 → 清空到达记账触发本轮执行：回指循环下一轮（边重新激活）重新等齐；
+            // 消耗的激活与 maxRuns 预算均按「触发执行一次」计（等齐一轮=1 次）
+            st.arrivedEdges.clear();
+        }
         int maxRuns = node != null && node.maxRuns() != null ? node.maxRuns() : 1;
         if (st.runCount + 1 > maxRuns) {
             // 循环上限：拒绝第 N 次调度,按节点失败走错误策略
@@ -656,13 +688,21 @@ public final class WorkflowEngine {
         startNodeRun(r, nodeId, st);
     }
 
-    /** 开跑一次节点执行（schedLock 内调用；消费激活与状态迁移在此完成）。 */
+    /**
+     * 开跑一次节点执行（schedLock 内调用；消费激活、状态迁移与 runCount 计入在此完成）。
+     * runCount 在此 <b>++</b>（执行即消耗）：拒绝判定 {@code runCount+1&gt;maxRuns} 与本计入
+     * 同处 schedLock 临界区（先判后计，无竞态）；完成路径（completeNode/onNodeFailed）
+     * 不再重复计入。计入值随 runNo 一并带出临界区，供 node.started/node.output 事件
+     * 携带同值水位（同一运行 started 与 output 的 runCount 恒同值）。
+     */
     private void startNodeRun(InstanceRun r, String nodeId, NodeState st) {
         st.status = "running";
+        st.runCount++;
         int runNo = r.runCounter.incrementAndGet();
         st.lastRunNo = runNo;
         st.activeRunNo = runNo;
-        r.vt.execute(() -> executeNodeRun(r, nodeId, runNo));
+        int runCount = st.runCount;
+        r.vt.execute(() -> executeNodeRun(r, nodeId, runNo, runCount));
     }
 
     /** 错误策略 retry 的再调度：绕过 maxRuns 上限与激活判定（决策即授权）。 */
@@ -676,12 +716,15 @@ public final class WorkflowEngine {
                 return;
             }
             r.pendingActivations.put(node.id(), 0);
+            // 决策级授权重跑：到达记账同步清零（重跑后回指到达按新一轮等齐计）
+            st.arrivedEdges.clear();
             startNodeRun(r, node.id(), st);
         }
     }
 
-    /** 节点执行体（虚拟线程）。 */
-    private void executeNodeRun(InstanceRun r, String nodeId, int runNo) {
+    /** 节点执行体（虚拟线程；runCount=本次运行开始后已消耗的执行次数，含本次——随
+     * startNodeRun 的计入值带出，事件水位用）。 */
+    private void executeNodeRun(InstanceRun r, String nodeId, int runNo, int runCount) {
         r.nodeThreads.put(nodeId, Thread.currentThread());
         long startedAt = System.currentTimeMillis();
         NodeDef node = r.node(nodeId);
@@ -698,7 +741,7 @@ public final class WorkflowEngine {
                 return;
             }
             in = renderInput(r, node);
-            emitNodeStarted(r, node, runNo, in);
+            emitNodeStarted(r, node, runNo, runCount, in);
             emitNodeTrace(r, node, runNo, TRACE_RUNNING, in, null, null, List.of(), 0L, null);
             NodeResult result;
             switch (node.type() == null ? "" : node.type()) {
@@ -715,7 +758,7 @@ public final class WorkflowEngine {
                 }
                 default -> throw new IllegalStateException("未知节点类型: " + node.type());
             }
-            completeNode(r, node, runNo, result, in, startedAt);
+            completeNode(r, node, runNo, runCount, result, in, startedAt);
         } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
             onNodeInterrupted(r, node != null ? node.id() : nodeId, runNo);
@@ -729,18 +772,21 @@ public final class WorkflowEngine {
     }
 
     /**
-     * 成功收口：写 runs 记录 + node.output 事件 + 出边一次性求值激活 + 下游调度 + 完成判定。
+     * 成功收口：写 runs 记录 + node.output 事件 + 出边一次性求值激活 + 下游调度 + 完成判定
+     * （runCount 已在 startNodeRun 计入，收口不重复计——事件水位随 runCount 参数携带）。
      *
      * <p><b>命令节点非零退出码 = 节点失败</b>（BUG-01 修复）：节点状态置 failed、发
      * {@code node.error} 事件（失败上报/介入决策/rerun 的锚点——旧实现仅边路由按
-     * exitCode 求值，状态与事件按成功口径，失败全链路静默）。失败后的三段分派：
-     * ①未达 maxRuns 自动重试（node.retry 事件 + 强制重开，不激活出边——重试可能成功，
-     * 失败不得提前泄漏到 onError 分支）；②重试耗尽且有条件出边（onError/exitCode/always）
-     * 激活 → 分支接管（实例可正常收束，终态投影与 workflow_run 返回体携带 failed 告警）；
-     * ③无人接住 → 定义级错误策略（fail/askUser，在锁外执行）。
+     * exitCode 求值，状态与事件按成功口径，失败全链路静默）。失败后的两段分派
+     * （A2 行为变更：<b>首败即分流，不做自动重试</b>——确定性失败重复到耗尽毫无意义，
+     * 且 maxRuns 是节点终身额度，回指循环每轮消耗会让探针形同虚设；要重试要么经
+     * onError/exitCode 出边显式建模，要么经错误策略的 retry 决策授权）：
+     * ①有满足条件的出边（onError/exitCode/always）激活 → 分支接管（实例可正常收束，
+     * 终态投影与 workflow_run 返回体携带 failed 告警）；②无人接住 → 定义级错误策略
+     * （fail/askUser，在锁外执行）。
      */
-    private void completeNode(InstanceRun r, NodeDef node, int runNo, NodeResult result,
-            RenderedInput in, long startedAt) {
+    private void completeNode(InstanceRun r, NodeDef node, int runNo, int runCount,
+            NodeResult result, RenderedInput in, long startedAt) {
         List<String> activated = new ArrayList<>();
         boolean failed = result.exitCode() != 0;
         boolean errorPolicy = false;
@@ -749,10 +795,9 @@ public final class WorkflowEngine {
                 return;
             }
             NodeState st = r.nodeStates.get(node.id());
-            int maxRuns = node.maxRuns() != null ? node.maxRuns() : 1;
             st.status = failed ? "failed" : "done";
             st.activeRunNo = 0;
-            st.runCount++;
+            // runCount 已在 startNodeRun 开跑时计入（执行即消耗），收口不重复计
             for (EdgeDef e : r.outEdges.getOrDefault(node.id(), List.of())) {
                 if (NodeRunners.evaluate(e.condition(), result.exitCode(), result.conditionOutput())) {
                     activated.add(e.id());
@@ -761,7 +806,7 @@ public final class WorkflowEngine {
             RunRecord rec = buildRecord(r, node, runNo, startedAt, in, result, null, activated);
             r.runRecords.put(runNo, rec);
             store.saveRunRecord(r.wsId, r.instanceId, rec);
-            emitNodeOutput(r, node, runNo, result, activated);
+            emitNodeOutput(r, node, runNo, runCount, result, activated);
             if (failed) {
                 emitNodeError(r, node.id(), display(node), runNo,
                         "命令退出码非零: " + result.exitCode(), result.exitCode());
@@ -774,23 +819,14 @@ public final class WorkflowEngine {
                 // 自查重调：本节点运行期间新到的激活（环/多前驱）
                 tryScheduleLocked(r, node.id());
                 checkCompletionLocked(r);
-            } else if (st.runCount < maxRuns) {
-                // ① 自动重试：非零退出码消耗 maxRuns 预算（与 CI 重试同直觉；旧实现
-                // 不重试，maxRuns=2 的失败节点只跑一次）
-                store.appendEvent(r.wsId, r.instanceId, "node.retry", Json.obj()
-                        .put("nodeId", node.id())
-                        .put("failedRunNo", runNo)
-                        .put("attempt", st.runCount)
-                        .put("maxRuns", maxRuns)
-                        .put("exitCode", result.exitCode()));
-                forceSchedule(r, node);
             } else if (!activated.isEmpty()) {
-                // ② 分支接管：失败沿条件分支继续（节点保持 failed）
+                // ① 分支接管：失败沿条件分支继续（节点保持 failed）——首败即分流，
+                // maxRuns 不作失败重试预算（仅约束调度次数：环内重跑仍受上限保护）
                 activateTargetsLocked(r, activated);
                 tryScheduleLocked(r, node.id());
                 checkCompletionLocked(r);
             } else {
-                // ③ 无人接住：错误策略（askAndWait 含 park 等待，须在锁外执行）
+                // ② 无人接住：错误策略（askAndWait 含 park 等待，须在锁外执行）
                 errorPolicy = true;
             }
         }
@@ -799,7 +835,11 @@ public final class WorkflowEngine {
         }
     }
 
-    /** 激活目标节点（schedLock 内调用；全激活语义=逐边独立判定后全部激活）。 */
+    /**
+     * 激活目标节点（schedLock 内调用；全激活语义=逐边独立判定后全部激活）。
+     * joinMode=all 的目标：激活边 id 记入其到达记账（{@code arrivedEdges}，Set 对环内
+     * 同一条边重复到达天然去重；pendingActivations 计数照旧——供完成判定的滞留检测）。
+     */
     private void activateTargetsLocked(InstanceRun r, List<String> activatedEdgeIds) {
         LinkedHashSet<String> targets = new LinkedHashSet<>();
         for (String edgeId : activatedEdgeIds) {
@@ -812,11 +852,52 @@ public final class WorkflowEngine {
             r.pendingActivations.merge(target, 1, Integer::sum);
         }
         for (String target : targets) {
+            NodeDef t = r.node(target);
+            if (t == null || !t.isJoinAll()) {
+                continue;
+            }
+            NodeState ts = r.nodeStates.get(target);
+            if (ts == null) {
+                continue;
+            }
+            for (String edgeId : activatedEdgeIds) {
+                EdgeDef e = r.edgeById.get(edgeId);
+                if (e != null && target.equals(e.to())) {
+                    ts.arrivedEdges.add(edgeId);
+                }
+            }
+        }
+        for (String target : targets) {
             tryScheduleLocked(r, target);
         }
     }
 
-    /** 完成判定：无运行中节点 + 无挂起决策 + 无未消费激活 → done。 */
+    /** joinMode=all 的等齐判定：到达记账覆盖全部入边 id（无入边=恒等齐，等价 none）。 */
+    private static boolean joinArrivedAll(InstanceRun r, String nodeId, NodeState st) {
+        List<EdgeDef> ins = r.inEdges.get(nodeId);
+        if (ins == null || ins.isEmpty()) {
+            return true;
+        }
+        for (EdgeDef e : ins) {
+            if (!st.arrivedEdges.contains(e.id())) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * 完成判定：无运行中节点 + 无挂起决策 + 无<b>非 join 滞留</b>的未消费激活 → done。
+     *
+     * <p><b>join 滞留不阻断收束（死分支语义对齐）</b>：joinMode=all 的节点等不齐入边
+     * （部分分支失败被 onError 接走、或条件不达、或回指循环第二轮对端未重跑）时，其滞留
+     * 激活与「不可达死分支」同性质——不应让实例永久悬挂。判定改为整图静默（无 running、
+     * 无挂起决策、无非 join 滞留的未消费激活）即收束：未齐的 join 节点置 skipped 终态
+     * （node.skipped 事件留痕）并清空滞留计数，然后继续收束为 done。仅从未执行过的
+     * （pending）节点落 skipped——已执行过的（done/failed）保留原终态与 runCount 投影
+     * （分支接管的 failed 告警语义不因滞留清理被覆盖），只清滞留计数。skipped 非
+     * running，与 finish 的收口扫描（running→cancelled）不冲突。
+     */
     private void checkCompletionLocked(InstanceRun r) {
         if (r.stopping || r.status.get().terminal() || r.pendingDecision != null) {
             return;
@@ -826,9 +907,40 @@ public final class WorkflowEngine {
                 return;
             }
         }
-        for (int p : r.pendingActivations.values()) {
-            if (p > 0) {
-                return;
+        List<String> stranded = null; // 整图静默后仍未等齐的 join 节点
+        for (Map.Entry<String, Integer> en : r.pendingActivations.entrySet()) {
+            int pending = en.getValue() == null ? 0 : en.getValue();
+            if (pending <= 0) {
+                continue;
+            }
+            String nodeId = en.getKey();
+            NodeDef node = r.node(nodeId);
+            NodeState st = r.nodeStates.get(nodeId);
+            if (node != null && node.isJoinAll() && st != null && !joinArrivedAll(r, nodeId, st)) {
+                if (stranded == null) {
+                    stranded = new ArrayList<>();
+                }
+                stranded.add(nodeId);
+                continue;
+            }
+            return; // 真实未消费激活：图未静默
+        }
+        if (stranded != null) {
+            for (String nodeId : stranded) {
+                NodeState st = r.nodeStates.get(nodeId);
+                NodeDef node = r.node(nodeId);
+                // 滞留清理对一切未齐 join 生效；skipped 终态与留痕事件只落在从未执行过的节点
+                st.arrivedEdges.clear();
+                r.pendingActivations.put(nodeId, 0);
+                if (!"pending".equals(st.status)) {
+                    continue;
+                }
+                st.status = "skipped";
+                store.appendEvent(r.wsId, r.instanceId, "node.skipped", Json.obj()
+                        .put("nodeId", nodeId)
+                        .put("nodeName", node == null ? nodeId : display(node))
+                        .put("runNo", st.lastRunNo)
+                        .put("message", "join 汇合未等齐(部分入边未到达),整图静默,节点静默跳过"));
             }
         }
         finish(r, InstanceStatus.DONE, null, null);
@@ -857,7 +969,7 @@ public final class WorkflowEngine {
             }
             NodeState st = r.nodeStates.get(node.id());
             if (st != null) {
-                st.runCount++;
+                // runCount 已在 startNodeRun 开跑时计入（执行即消耗），失败收口不重复计
                 st.activeRunNo = 0;
             }
             rec = buildRecord(r, node, runNo, startedAt, in, null,
@@ -1188,7 +1300,7 @@ public final class WorkflowEngine {
             nodes.add(n.id().equals(node.id())
                     ? new NodeDef(n.id(), n.type(), n.name(), n.x(), n.y(), n.command(),
                             n.timeoutMs(), n.maxRuns(), n.agent(), n.modelConfigId(), newInput,
-                            n.systemPrompt())
+                            n.systemPrompt(), n.joinMode())
                     : n);
         }
         Definition old = r.snapshot;
@@ -1199,11 +1311,19 @@ public final class WorkflowEngine {
 
     // ══════════════════════════ 事件发射 ══════════════════════════
 
-    private void emitNodeStarted(InstanceRun r, NodeDef node, int runNo, RenderedInput in) {
+    /**
+     * node.started 事件：基础字段 + <b>运行水位</b>（A3 可观测性）——runCount=本次运行
+     * 开始后该节点已消耗的执行次数（含本次，执行即消耗口径），maxRuns=节点额度（缺省 1）。
+     * 循环预算从此运行时可观测（第几次/还剩几次），不再全靠试错。
+     */
+    private void emitNodeStarted(InstanceRun r, NodeDef node, int runNo, int runCount,
+            RenderedInput in) {
         var payload = Json.obj()
                 .put("nodeId", node.id())
                 .put("nodeName", display(node))
-                .put("runNo", runNo);
+                .put("runNo", runNo)
+                .put("runCount", runCount)
+                .put("maxRuns", node.maxRuns() == null ? 1 : node.maxRuns());
         if (node.agent() != null && !node.agent().isBlank()) {
             payload.put("agent", node.agent());
         }
@@ -1213,11 +1333,18 @@ public final class WorkflowEngine {
         store.appendEvent(r.wsId, r.instanceId, "node.started", payload);
     }
 
-    private void emitNodeOutput(InstanceRun r, NodeDef node, int runNo, NodeResult result,
-            List<String> activated) {
+    /**
+     * node.output 事件：基础字段 + <b>运行水位</b>——runCount 与本次 node.started 同值
+     * （同一次运行的收口），maxRuns=节点额度（缺省 1）：失败后仅凭末条事件即可诊断
+     * 「这是第几次/还剩几次」（node.error 本身不带水位，水位由收口前的 started/output 携带）。
+     */
+    private void emitNodeOutput(InstanceRun r, NodeDef node, int runNo, int runCount,
+            NodeResult result, List<String> activated) {
         var payload = Json.obj()
                 .put("nodeId", node.id())
                 .put("runNo", runNo)
+                .put("runCount", runCount)
+                .put("maxRuns", node.maxRuns() == null ? 1 : node.maxRuns())
                 .put("exitCode", result.exitCode())
                 .put("outputPreview", truncate(result.conditionOutput(), 1024))
                 .set("activatedEdges", Json.toJson(activated));
@@ -1354,7 +1481,7 @@ public final class WorkflowEngine {
     }
 
     private static NodeDef unknownNode(String nodeId) {
-        return new NodeDef(nodeId, "unknown", nodeId, null, null, null, null, null, null, null, null, null);
+        return new NodeDef(nodeId, "unknown", nodeId, null, null, null, null, null, null, null, null, null, null);
     }
 
     /** 状态 → wire 名（与 InstanceStatus @JsonProperty 序列化值一致）。 */

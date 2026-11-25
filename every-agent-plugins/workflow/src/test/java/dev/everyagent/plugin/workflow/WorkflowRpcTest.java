@@ -502,7 +502,7 @@ class WorkflowRpcTest {
                 null, "ws_run", null, null, null, null, null,
                 List.of(DefinitionValidatorTest.node("s", "start").def,
                         new NodeDef("a", "ai", "a", 0.0, 0.0, null, null, null, "b",
-                                "missing-cfg", null, null)),
+                                "missing-cfg", null, null, null)),
                 List.of(DefinitionValidatorTest.edge("e1", "s", "a"))));
         assertThatThrownBy(() -> rpc.run(call(p().put("workspace", "ws_run")
                 .put("definitionId", badNode.id()))))

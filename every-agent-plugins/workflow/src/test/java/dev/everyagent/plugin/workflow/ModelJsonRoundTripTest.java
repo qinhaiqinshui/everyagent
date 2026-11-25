@@ -45,6 +45,7 @@ class ModelJsonRoundTripTest {
         assertThat(json).contains("\"command\":\"mkdir -p out/{{novelName}}\"");
         assertThat(json).contains("\"timeoutMs\":60000");
         assertThat(json).contains("\"maxRuns\":2");
+        assertThat(json).contains("\"joinMode\":\"all\"");
         assertThat(json).contains("\"agent\":\"writer\"");
         assertThat(json).contains("\"input\":\"请为《{{novelName}}》拟一份章节大纲\"");
         // 条件边
@@ -203,12 +204,13 @@ class ModelJsonRoundTripTest {
                 new Definition.Supervisor("gpt5", "你是工作流督导"),
                 List.of(
                         new NodeDef("wn_st0", NodeDef.TYPE_START, "开始", 40.0, 200.0,
-                                null, null, null, null, null, null, null),
+                                null, null, null, null, null, null, null, null),
                         new NodeDef("wn_b7", NodeDef.TYPE_COMMAND, "初始化目录", 240.0, 200.0,
-                                "mkdir -p out/{{novelName}}", 60000L, 2, null, null, null, null),
+                                "mkdir -p out/{{novelName}}", 60000L, 2, null, null, null, null,
+                                NodeDef.JOIN_ALL),
                         new NodeDef("wn_c3", NodeDef.TYPE_AI, "生成大纲", 440.0, 200.0,
                                 null, null, 2, "writer", null, "请为《{{novelName}}》拟一份章节大纲",
-                                "你是资深小说作者")),
+                                "你是资深小说作者", null)),
                 List.of(
                         new EdgeDef("we_01", "wn_st0", "wn_b7", null),
                         new EdgeDef("we_02", "wn_b7", "wn_c3",

@@ -12,8 +12,8 @@ import tools.jackson.databind.JsonNode;
  * 防 JS 精度丢失——同 task seq 纪律）。事件全集（wire 契约）：
  * {@code wf.created{instanceId,definitionId,name,variables}} /
  * {@code wf.status{status,error?}} /
- * {@code node.started{nodeId,nodeName,runNo,agent?,inputPreview}} /
- * {@code node.output{nodeId,runNo,exitCode?,outputPreview,activatedEdges[]}} /
+ * {@code node.started{nodeId,nodeName,runNo,runCount,maxRuns,agent?,inputPreview}} /
+ * {@code node.output{nodeId,runNo,runCount,maxRuns,exitCode?,outputPreview,activatedEdges[]}} /
  * {@code node.error{nodeId,runNo,message,exitCode?}} /
  * {@code node.skipped{nodeId,runNo}} /
  * {@code supervisor.decision{nodeId,runNo,decision(action,input?),reason?}} /

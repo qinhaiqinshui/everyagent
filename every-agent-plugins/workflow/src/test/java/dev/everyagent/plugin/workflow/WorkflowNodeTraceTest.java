@@ -180,11 +180,11 @@ class WorkflowNodeTraceTest {
 
     @Test
     void commandFailureUpdatesTraceInPlaceWithFailedAndError() throws Exception {
-        // 超时触发节点失败：Windows 用 cmd 内建死循环（无外部子进程，destroyForcibly 即净，
-        // 不留孤儿进程锁 @TempDir）；Unix 用 sleep
+        // 超时触发节点失败：Windows 命令节点默认经 PowerShell——用 PS 内建死循环（无外部
+        // 子进程，destroyForcibly 即净，不留孤儿进程锁 @TempDir）；Unix 用 sleep
         boolean win = System.getProperty("os.name", "").toLowerCase().contains("win");
         NodeDef slow = new NodeDef("cmd", "command", "慢命令", 0.0, 0.0,
-                win ? "for /l %i in (0,0,1) do rem" : "sleep 30", 400L, null, null, null, null, null);
+                win ? "for (;;) { }" : "sleep 30", 400L, null, null, null, null, null, null);
         Definition d = withNode(saveOnError(OnError.FAIL,
                 DefinitionValidatorTest.node("s", "start"),
                 DefinitionValidatorTest.node("cmd", "command").command("echo placeholder"),
@@ -204,7 +204,7 @@ class WorkflowNodeTraceTest {
 
         var fd = dataOf(failed);
         assertThat(fd.path("nodeName").asString()).isEqualTo("慢命令");
-        assertThat(fd.path("input").asString()).contains(win ? "for /l" : "sleep");
+        assertThat(fd.path("input").asString()).contains(win ? "for (;;)" : "sleep");
         assertThat(fd.path("error").asString()).contains("超时"); // error 全量
         assertThat(fd.path("output").asString()).isEmpty();
         assertThat(fd.path("exitCode").isMissingNode()).isTrue();
@@ -277,10 +277,10 @@ class WorkflowNodeTraceTest {
         // 收口扫描将 started(running) 的 trace 同 id 原地翻转为 cancelled（interrupted 标记），
         // 不残留永远「运行中」的 trace 行
         boolean win = System.getProperty("os.name", "").toLowerCase().contains("win");
-        // 慢命令：Windows 用 cmd 内建死循环（无外部子进程，销毁即净不留孤儿锁 @TempDir——
-        // fake 的 nativeExec 只杀直接子进程）；Unix 用 sleep
+        // 慢命令：Windows 命令节点默认经 PowerShell——用 PS 内建死循环（无外部子进程，销毁
+        // 即净不留孤儿锁 @TempDir——fake 的 nativeExec 只杀直接子进程）；Unix 用 sleep
         NodeDef slow = new NodeDef("slow", "command", "慢命令", 0.0, 0.0,
-                win ? "for /l %i in (0,0,1) do rem" : "sleep 30", null, null, null, null, null, null);
+                win ? "for (;;) { }" : "sleep 30", null, null, null, null, null, null, null);
         Definition base = saveOnError(OnError.FAIL,
                 DefinitionValidatorTest.node("s", "start"),
                 DefinitionValidatorTest.node("slow", "command").command("echo placeholder"),

@@ -7,6 +7,7 @@ import java.util.Set;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
 
+import dev.everyagent.plugin.workflow.engine.NodeRunners;
 import dev.everyagent.plugin.workflow.model.ConditionDef;
 import dev.everyagent.plugin.workflow.model.Definition;
 import dev.everyagent.plugin.workflow.model.EdgeDef;
@@ -23,9 +24,15 @@ import dev.everyagent.plugin.workflow.model.VariableDef;
  *   <li>start 节点唯一且必须存在；</li>
  *   <li>边引用的节点（from/to）必须存在；</li>
  *   <li>maxRuns ∈ [1,10]（缺省合法，引擎按 1 处理）；timeoutMs &gt; 0；命令节点 command 非空；</li>
+ *   <li>joinMode ∈ {null, "", "none", "all"}（未知取值逐项报错带节点定位；start 节点携带
+ *       all 宽松忽略——无入边等价 none，入边数≤1 时 all 亦等价 none，均不报错）；</li>
  *   <li>command / input 中 {@code {{var}}} 引用的变量必须已声明（渲染范围仅此两字段）；</li>
  *   <li>AI 节点引用的 agent 名安全（文件名安全字符集）且不撞保留名
  *       meta/events/runs/agents/supervisor——supervisor 保留给督导会话线；</li>
+ *   <li>AI 引用节点（上游已有同名会话线持有者）不允许携带 systemPrompt——定义节点
+ *       （拓扑序最早持有者）是唯一事实源，逐项报错并给出定义节点定位；判定复用运行时
+ *       同一实现 {@link NodeRunners#upstreamAgentDefinitions}（环上解析到自身时视为
+ *       定义节点，携带合法）；</li>
  *   <li>循环允许（不校验环——maxRuns 是运行期兜底）；</li>
  *   <li>outputMatches 正则可编译；exitCode/outputContains 等条件带齐各自参数；</li>
  *   <li>变量名唯一且为 [A-Za-z0-9_-]+（渲染替换的键安全）。</li>
@@ -121,6 +128,11 @@ public final class DefinitionValidator {
             if (n.maxRuns() != null && (n.maxRuns() < MIN_MAX_RUNS || n.maxRuns() > MAX_MAX_RUNS)) {
                 errors.add("maxRuns 必须在 [1,10]: " + n.maxRuns() + " @" + where);
             }
+            // joinMode 取值白名单；start/单入边节点携带 all 等价 none（宽松不报错——见类 javadoc）
+            if (n.joinMode() != null && !n.joinMode().isEmpty()
+                    && !NodeDef.JOIN_NONE.equals(n.joinMode()) && !NodeDef.JOIN_ALL.equals(n.joinMode())) {
+                errors.add("joinMode 取值未知(允许 none/all): " + n.joinMode() + " @" + where);
+            }
             if (n.timeoutMs() != null && n.timeoutMs() <= 0) {
                 errors.add("timeoutMs 必须 > 0: " + n.timeoutMs() + " @" + where);
             }
@@ -132,6 +144,19 @@ public final class DefinitionValidator {
                 // 要么选择上游已有的会话线名（编辑器下拉候选）
                 if (n.agent() == null || n.agent().isBlank()) {
                     errors.add("AI 节点必须指定 agent 名(新建或选择上游已有会话线): " + where);
+                } else if (n.systemPrompt() != null && !n.systemPrompt().isBlank()) {
+                    // 引用节点不得携带 systemPrompt：运行时 effectiveSystemPrompt 是节点自带值
+                    // 优先，API 直改 JSON 塞进来的副本会覆盖定义节点（与「定义节点是唯一事实源」
+                    // 契约相悖），故创建/更新期直接拒绝该形态。判定与运行时同一实现
+                    // （upstreamAgentDefinitions），环近似下回边会把节点自身带回其上游集合，
+                    // 此时解析出的定义节点即本节点——视为定义节点，携带合法，不误报。
+                    NodeDef defining = NodeRunners.upstreamAgentDefinitions(d, n.id()).get(n.agent());
+                    if (defining != null && !n.id().equals(defining.id())) {
+                        errors.add("节点「" + nodeLabel(n) + "」是会话线「" + n.agent()
+                                + "」的引用节点,不允许携带 systemPrompt(定义节点是唯一事实源;"
+                                + "请改上游定义节点「" + nodeLabel(defining)
+                                + "」或清空本节点 systemPrompt) @" + where);
+                    }
                 }
             }
             if (n.agent() != null && !n.agent().isBlank()) {
@@ -256,6 +281,12 @@ public final class DefinitionValidator {
             errors.add(field + " 含未配对的 {{ (变量引用须写全 {{name}};不配对会按字面量输出)"
                     + " @" + nodeId);
         }
+    }
+
+    /** 节点显示名（错误定位用）：name 缺省回退 id；name 与 id 不同时并注 id。 */
+    private static String nodeLabel(NodeDef n) {
+        String name = n.name() == null || n.name().isBlank() ? n.id() : n.name();
+        return name.equals(n.id()) ? name : name + "(" + n.id() + ")";
     }
 
     /** 大小写不敏感判保留名（Windows 文件系统大小写不敏感，同名异体同样有冲突风险）。 */

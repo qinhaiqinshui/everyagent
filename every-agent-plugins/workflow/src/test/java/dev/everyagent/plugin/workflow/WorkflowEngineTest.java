@@ -16,6 +16,8 @@ import org.springframework.ai.chat.messages.Message;
 
 import dev.everyagent.plugin.api.exception.BadParamsException;
 import dev.everyagent.plugin.api.model.ModelConfig;
+import dev.everyagent.plugin.api.spi.ExecResult;
+import dev.everyagent.plugin.api.spi.NativeExec;
 import dev.everyagent.plugin.workflow.engine.WorkflowEngine;
 import dev.everyagent.plugin.workflow.model.ConditionDef;
 import dev.everyagent.plugin.workflow.model.Definition;
@@ -253,7 +255,7 @@ class WorkflowEngineTest {
     void commandNodeExecutesWithRenderedVariable() throws Exception {
         Definition base = DefinitionValidatorTest.def(
                 DefinitionValidatorTest.node("s", "start"),
-                DefinitionValidatorTest.node("cmd", "command").command("echo hello {{name}}"),
+                DefinitionValidatorTest.node("cmd", "command").command("echo hello-{{name}}"),
                 DefinitionValidatorTest.edge("e1", "s", "cmd"));
         Definition withVars = DefinitionValidatorTest.withVariables(base,
                 new VariableDef("name", null, true, null, null));
@@ -265,11 +267,64 @@ class WorkflowEngineTest {
 
         RunRecord cmdRun = runs(m.id()).stream()
                 .filter(r -> "cmd".equals(r.nodeId())).findFirst().orElseThrow();
-        assertThat(cmdRun.output().stdout()).contains("hello starship");
+        // 连字符单 token:cmd 与 PowerShell 均输出单行(PS 下多参数 echo 会按参数分行)
+        assertThat(cmdRun.output().stdout()).contains("hello-starship");
         assertThat(cmdRun.output().exitCode()).isZero();
-        assertThat(cmdRun.input().rendered()).isEqualTo("echo hello starship");
-        assertThat(cmdRun.input().raw()).isEqualTo("echo hello {{name}}");
+        assertThat(cmdRun.input().rendered()).isEqualTo("echo hello-starship");
+        assertThat(cmdRun.input().raw()).isEqualTo("echo hello-{{name}}");
         assertThat(cmdRun.input().visibleToAi()).isNull(); // 命令节点无 token 拍平视图
+    }
+
+    @Test
+    void windowsCommandNodeFallsBackToCmdWhenPowerShellUnresolvable() throws Exception {
+        // Windows 默认经 PowerShell（spawnPowerShell）；宿主无法解析 PowerShell 可执行文件
+        // （共享实现抛 IllegalStateException）→ 回退 cmd.exe /c 旧路径（argv/cwd/timeout 语义不变）
+        org.junit.jupiter.api.Assumptions.assumeTrue(
+                System.getProperty("os.name").toLowerCase().contains("win"),
+                "仅 Windows 走 PowerShell 路径");
+        NoPowerShellExec exec = new NoPowerShellExec();
+        services = new Fakes.FakeWorkerServices(workspaces, exec, factory, List.of());
+        engine = new WorkflowEngine(store, services);
+        Definition d = save(
+                DefinitionValidatorTest.node("s", "start"),
+                DefinitionValidatorTest.node("c", "command").command("echo ok"),
+                DefinitionValidatorTest.edge("e1", "s", "c"));
+        InstanceMeta m = start(d);
+        awaitTerminal(m.id());
+        assertThat(meta(m.id()).status()).isEqualTo(InstanceStatus.DONE);
+        assertThat(exec.psCalls).isEqualTo(1); // 先尝试 PowerShell
+        assertThat(exec.fallbackArgv).containsExactly("cmd.exe", "/c", "echo ok");
+        assertThat(exec.fallbackCwd).isEqualTo(home.resolve("proj")); // cwd=工作区根
+        assertThat(exec.fallbackTimeoutMs)
+                .isEqualTo(dev.everyagent.plugin.workflow.engine.NodeRunners.DEFAULT_COMMAND_TIMEOUT_MS);
+        RunRecord rec = runs(m.id()).stream().filter(r -> "c".equals(r.nodeId()))
+                .findFirst().orElseThrow();
+        assertThat(rec.output().exitCode()).isZero();
+    }
+
+    /** spawnPowerShell 恒抛 IllegalStateException 的桩：记录回退 spawnNative 的入参。 */
+    private static final class NoPowerShellExec implements NativeExec {
+
+        int psCalls;
+        String[] fallbackArgv;
+        Path fallbackCwd;
+        long fallbackTimeoutMs;
+
+        @Override
+        public ExecResult spawnNative(String[] argv, Path cwd, Map<String, String> env,
+                long timeoutMs) {
+            this.fallbackArgv = argv;
+            this.fallbackCwd = cwd;
+            this.fallbackTimeoutMs = timeoutMs;
+            return new ExecResult("ok", "", 0, false);
+        }
+
+        @Override
+        public ExecResult spawnPowerShell(String command, Path cwd, Map<String, String> env,
+                long timeoutMs) {
+            psCalls++;
+            throw new IllegalStateException("宿主无法解析 PowerShell 可执行文件");
+        }
     }
 
     @Test
@@ -497,6 +552,51 @@ class WorkflowEngineTest {
         assertThat(runs(m.id()).stream().filter(r -> "a".equals(r.nodeId()))).hasSize(2);
     }
 
+    @Test
+    void nodeEventsCarryRunCountAndMaxRunsWatermarks() throws Exception {
+        // A3 可观测性：命令节点回指自环跑 2 次（maxRuns=2，第 3 次调度被拒）——
+        // 两条 node.started/node.output 事件各带水位：runCount 含本次（1、2，
+        // 执行即消耗口径），maxRuns=定义值；started 与 output 同值（同一次运行的收口）。
+        // 缺省 maxRuns 节点（s）的事件 maxRuns=1。
+        Definition d = saveOnError(OnError.FAIL,
+                DefinitionValidatorTest.node("s", "start"),
+                DefinitionValidatorTest.node("c", "command").command("echo tick").maxRuns(2),
+                DefinitionValidatorTest.edge("e1", "s", "c"),
+                DefinitionValidatorTest.edge("e2", "c", "c"));
+        InstanceMeta m = start(d);
+        awaitTerminal(m.id());
+        assertThat(meta(m.id()).status()).isEqualTo(InstanceStatus.FAILED);
+        // 第 3 次调度被拒（已消耗 2 次）——实例失败、节点 runCount 终值 2
+        assertThat(meta(m.id()).error().nodeId()).isEqualTo("c");
+        assertThat(meta(m.id()).error().message()).contains("最大运行次数");
+        assertThat(meta(m.id()).nodeStates().get("c").runCount()).isEqualTo(2);
+
+        List<EventLine> starts = events(m.id()).stream()
+                .filter(e -> "node.started".equals(e.event())
+                        && "c".equals(e.payload().path("nodeId").asString())).toList();
+        List<EventLine> outputs = events(m.id()).stream()
+                .filter(e -> "node.output".equals(e.event())
+                        && "c".equals(e.payload().path("nodeId").asString())).toList();
+        assertThat(starts).hasSize(2);
+        assertThat(outputs).hasSize(2);
+        for (int i = 0; i < 2; i++) {
+            assertThat(starts.get(i).payload().path("runCount").asInt()).isEqualTo(i + 1);
+            assertThat(starts.get(i).payload().path("maxRuns").asInt()).isEqualTo(2);
+            assertThat(outputs.get(i).payload().path("runCount").asInt()).isEqualTo(i + 1);
+            assertThat(outputs.get(i).payload().path("maxRuns").asInt()).isEqualTo(2);
+            // started 与 output 同值（同一运行的收口——seq 顺序即运行顺序）
+            assertThat(outputs.get(i).payload().path("runCount").asInt())
+                    .isEqualTo(starts.get(i).payload().path("runCount").asInt());
+        }
+        // maxRuns 缺省（未配置）：s 节点事件 maxRuns=1、runCount=1
+        EventLine sStart = events(m.id()).stream()
+                .filter(e -> "node.started".equals(e.event())
+                        && "s".equals(e.payload().path("nodeId").asString()))
+                .findFirst().orElseThrow();
+        assertThat(sStart.payload().path("runCount").asInt()).isEqualTo(1);
+        assertThat(sStart.payload().path("maxRuns").asInt()).isEqualTo(1);
+    }
+
     // ══════════════════════════ 错误策略三态 ══════════════════════════
 
     @Test
@@ -645,7 +745,8 @@ class WorkflowEngineTest {
         // 收口扫描：在飞节点置 cancelled + node.interrupted 关闭事件——终态投影零 running
         InstanceMeta.NodeState n = meta(m.id()).nodeStates().get("n");
         assertThat(n.status()).isEqualTo("cancelled");
-        assertThat(n.runCount()).isZero();
+        // 执行即消耗：被中断的尝试已在开跑时计入 runCount（A3 水位口径，rerun 预算相应减一）
+        assertThat(n.runCount()).isEqualTo(1);
         assertThat(meta(m.id()).nodeStates().values())
                 .noneMatch(st -> "running".equals(st.status()));
         var interruptedEv = events(m.id()).stream()
@@ -674,7 +775,8 @@ class WorkflowEngineTest {
         assertThat(meta(m.id()).error().nodeId()).isEqualTo("b");
         InstanceMeta.NodeState a = meta(m.id()).nodeStates().get("a");
         assertThat(a.status()).isEqualTo("cancelled");
-        assertThat(a.runCount()).isZero(); // 中断尝试不计 runCount：rerun 预算完整
+        // 执行即消耗：中断尝试开跑时已计入（rerun 恢复投影按此口径延续，预算相应减一）
+        assertThat(a.runCount()).isEqualTo(1);
         assertThat(meta(m.id()).nodeStates().get("b").status()).isEqualTo("failed");
         assertThat(meta(m.id()).nodeStates().values())
                 .noneMatch(st -> "running".equals(st.status()));
@@ -692,8 +794,10 @@ class WorkflowEngineTest {
         // 一次），fin maxRuns=1 在第二条分支汇入时拒绝调度 → fail-fast 收口，此时最慢
         // 分支 p1 仍在跑——收口扫描置 cancelled，终态投影零 running
         boolean win = System.getProperty("os.name", "").toLowerCase().contains("win");
+        // 慢命令：Windows 命令节点默认经 PowerShell——用 PS 内建死循环（无外部子进程，
+        // 销毁即净不留孤儿锁 @TempDir——fake 的 nativeExec 只杀直接子进程）；Unix 用 sleep
         NodeDef p1 = new NodeDef("p1", "command", "并行1慢", 0.0, 0.0,
-                win ? "for /l %i in (0,0,1) do rem" : "sleep 30", null, null, null, null, null, null);
+                win ? "for (;;) { }" : "sleep 30", null, null, null, null, null, null, null);
         Definition base = saveOnError(OnError.FAIL,
                 DefinitionValidatorTest.node("s", "start"),
                 DefinitionValidatorTest.node("p1", "command").command("echo placeholder").maxRuns(1),
@@ -718,10 +822,10 @@ class WorkflowEngineTest {
         assertThat(meta(m.id()).nodeStates().get("j").runCount()).isGreaterThanOrEqualTo(2);
         assertThat(meta(m.id()).nodeStates().get("fin").status()).isEqualTo("failed");
         assertThat(meta(m.id()).nodeStates().get("fin").runCount()).isEqualTo(1);
-        // 最慢分支在飞被收口：cancelled + 关闭事件 + runCount 不计中断尝试
+        // 最慢分支在飞被收口：cancelled + 关闭事件；执行即消耗——开跑已计入 runCount
         InstanceMeta.NodeState slow = meta(m.id()).nodeStates().get("p1");
         assertThat(slow.status()).isEqualTo("cancelled");
-        assertThat(slow.runCount()).isZero();
+        assertThat(slow.runCount()).isEqualTo(1);
         assertThat(meta(m.id()).nodeStates().values())
                 .noneMatch(st -> "running".equals(st.status()));
         var interruptedEv = events(m.id()).stream()
@@ -877,16 +981,16 @@ class WorkflowEngineTest {
 
     // ══════════════════════════ 命令节点非零退出码（BUG-01 回归） ══════════════════════════
 
-    private static final boolean WIN = System.getProperty("os.name").toLowerCase().contains("win");
-
-    /** 跨平台失败命令（指定退出码）。 */
+    /** 跨平台失败命令（指定退出码）——`exit N` 在 cmd / PowerShell / sh 语义一致。 */
     private static String failCmd(int code) {
-        return WIN ? "exit /b " + code : "exit " + code;
+        return "exit " + code;
     }
 
     @Test
-    void nonZeroExitCodeFailsNodeAndInstanceAfterRetries() throws Exception {
-        // 无人接住（onSuccess 边不激活）→ maxRuns=2 自动重试两次仍失败 → 实例 failed + 上报链路全量
+    void nonZeroExitCodeFailsNodeAndInstanceWithoutAutoRetry() throws Exception {
+        // A2 行为变更：exit≠0 首败即分流——无人接住（onSuccess 边不激活）→ 直接实例
+        // failed + 上报链路全量；maxRuns=2 不再作失败重试预算（确定性失败重复到耗尽
+        // 毫无意义），只跑一次（runCount=1、单次 runs/node.error、无 node.retry）
         Definition d = saveOnError(OnError.FAIL,
                 DefinitionValidatorTest.node("s", "start"),
                 DefinitionValidatorTest.node("boom", "command").command(failCmd(3)).maxRuns(2),
@@ -899,28 +1003,32 @@ class WorkflowEngineTest {
         assertThat(meta(m.id()).status()).isEqualTo(InstanceStatus.FAILED);
         assertThat(meta(m.id()).error().nodeId()).isEqualTo("boom");
         assertThat(meta(m.id()).error().message()).contains("退出码非零");
-        // 节点 failed（非 done 假象）+ 重试满预算；下游保持 pending
+        assertThat(meta(m.id()).error().runNo()).isEqualTo(2); // s=1、boom=2（单次运行即失败收口）
+        // 节点 failed（非 done 假象）+ 单次执行已计入 runCount（执行即消耗,首败即分流
+        // 不再排空预算）；下游保持 pending
         assertThat(meta(m.id()).nodeStates().get("boom").status()).isEqualTo("failed");
-        assertThat(meta(m.id()).nodeStates().get("boom").runCount()).isEqualTo(2);
+        assertThat(meta(m.id()).nodeStates().get("boom").runCount()).isEqualTo(1);
         assertThat(meta(m.id()).nodeStates().get("down").runCount()).isZero();
         assertThat(startedNodes(m.id())).doesNotContain("down");
-        // 失败可观测：node.error 带 exitCode + node.retry 留痕；两次 runs 均 exitCode=3
+        // 失败可观测：单次 node.error 带 exitCode；自动重试通道已删（无 node.retry 事件）
         var errEvents = events(m.id()).stream()
                 .filter(e -> "node.error".equals(e.event())).toList();
-        assertThat(errEvents).hasSize(2);
+        assertThat(errEvents).hasSize(1);
         assertThat(errEvents.get(0).payload().path("exitCode").asInt()).isEqualTo(3);
-        assertThat(eventNames(m.id())).contains("node.retry");
+        assertThat(eventNames(m.id())).doesNotContain("node.retry");
         assertThat(runs(m.id()).stream().filter(r -> "boom".equals(r.nodeId())))
-                .hasSize(2)
+                .hasSize(1)
                 .allSatisfy(r -> assertThat(r.output().exitCode()).isEqualTo(3));
     }
 
     @Test
     void nonZeroExitCodeTakenOverByOnErrorBranchKeepsNodeFailed() throws Exception {
-        // 分支接管：失败沿 onError 边继续,实例可收束 done,但失败节点状态不得=done(BUG-01 期望)
+        // 分支接管：失败沿 onError 边继续,实例可收束 done,但失败节点状态不得=done(BUG-01 期望)。
+        // A2 行为变更：init 配 maxRuns=3 仍有充足「重试预算」——首败即走 onError 分支
+        // （不自动重试：runCount=1、单次 runs/node.error、无 node.retry 事件）
         Definition d = save(
                 DefinitionValidatorTest.node("s", "start"),
-                DefinitionValidatorTest.node("init", "command").command(failCmd(3)),
+                DefinitionValidatorTest.node("init", "command").command(failCmd(3)).maxRuns(3),
                 DefinitionValidatorTest.node("rescue", "command").command("echo rescued"),
                 DefinitionValidatorTest.node("after", "command").command("echo after"),
                 DefinitionValidatorTest.edge("e1", "s", "init"),
@@ -931,11 +1039,42 @@ class WorkflowEngineTest {
         awaitTerminal(m.id());
         assertThat(meta(m.id()).status()).isEqualTo(InstanceStatus.DONE);
         assertThat(meta(m.id()).nodeStates().get("init").status()).isEqualTo("failed");
+        assertThat(meta(m.id()).nodeStates().get("init").runCount()).isEqualTo(1);
         assertThat(meta(m.id()).nodeStates().get("rescue").status()).isEqualTo("done");
         assertThat(meta(m.id()).nodeStates().get("after").status()).isEqualTo("done");
         assertThat(eventNames(m.id())).contains("node.error");
+        assertThat(eventNames(m.id())).doesNotContain("node.retry");
+        assertThat(events(m.id()).stream()
+                .filter(e -> "node.error".equals(e.event())).toList()).hasSize(1);
+        assertThat(runs(m.id()).stream().filter(r -> "init".equals(r.nodeId()))).hasSize(1);
         assertThat(runs(m.id()).stream().filter(r -> "rescue".equals(r.nodeId()))
                 .findFirst().orElseThrow().output().stdout()).contains("rescued");
+    }
+
+    @Test
+    void nonZeroExitCodeTakenOverByExitCodeBranchOnFirstFailure() throws Exception {
+        // exitCode 条件出边匹配：首败即沿 exitCode=3 分支接管（确定性失败按退出码
+        // 精确分流——探针/验证节点的典型建模方式），单次执行计入 runCount 后不再自动
+        // 排空 maxRuns 预算（首败即分流）
+        Definition d = save(
+                DefinitionValidatorTest.node("s", "start"),
+                DefinitionValidatorTest.node("init", "command").command(failCmd(3)).maxRuns(3),
+                DefinitionValidatorTest.node("retry", "command").command("echo redo"),
+                DefinitionValidatorTest.node("ok", "command").command("echo wrong-path"),
+                DefinitionValidatorTest.edge("e1", "s", "init"),
+                DefinitionValidatorTest.edge("e2", "init", "retry",
+                        new ConditionDef(ConditionDef.EXIT_CODE, 3L, null, null)),
+                DefinitionValidatorTest.edge("e3", "init", "ok",
+                        new ConditionDef(ConditionDef.EXIT_CODE, 0L, null, null)));
+        InstanceMeta m = start(d);
+        awaitTerminal(m.id());
+        assertThat(meta(m.id()).status()).isEqualTo(InstanceStatus.DONE);
+        assertThat(meta(m.id()).nodeStates().get("init").status()).isEqualTo("failed");
+        assertThat(meta(m.id()).nodeStates().get("init").runCount()).isEqualTo(1);
+        assertThat(meta(m.id()).nodeStates().get("retry").status()).isEqualTo("done");
+        assertThat(startedNodes(m.id())).contains("retry").doesNotContain("ok");
+        assertThat(eventNames(m.id())).doesNotContain("node.retry");
+        assertThat(runs(m.id()).stream().filter(r -> "init".equals(r.nodeId()))).hasSize(1);
     }
 
     @Test

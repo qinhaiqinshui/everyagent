@@ -64,6 +64,38 @@ class DefinitionValidatorTest {
         assertThat(DefinitionValidator.validate(def(node("n1", "start")))).isEmpty();
     }
 
+    // ── joinMode 汇合屏障 ──
+
+    @Test
+    void joinModeValuesAreValidated() {
+        // 未知取值报错（带节点定位）；null/""/none/all 全部合法
+        assertThat(DefinitionValidator.validate(def(
+                node("n1", "start"),
+                node("n2", "command").command("echo hi").joinMode("sometimes"),
+                edge("e1", "n1", "n2"))))
+                .anyMatch(e -> e.contains("joinMode") && e.contains("n2"));
+        for (String ok : new String[]{null, "", "none", "all"}) {
+            Definition d = def(
+                    node("n1", "start"),
+                    node("n2", "command").command("echo hi").joinMode(ok),
+                    edge("e1", "n1", "n2"));
+            assertThat(DefinitionValidator.validate(d))
+                    .as("joinMode=%s 应合法", ok).isEmpty();
+        }
+    }
+
+    @Test
+    void joinModeAllOnStartAndSingleInEdgeIsLenient() {
+        // start 节点携带 all 宽松忽略（无入边，引擎等价 none）；入边数≤1 时 all 等价 none，不报错
+        assertThat(DefinitionValidator.validate(def(node("n1", "start").joinMode("all"))))
+                .isEmpty();
+        assertThat(DefinitionValidator.validate(def(
+                node("n1", "start"),
+                node("n2", "command").command("echo hi").joinMode("all"),
+                edge("e1", "n1", "n2"))))
+                .isEmpty();
+    }
+
     // ── 变量引用 ──
 
     @Test
@@ -130,6 +162,96 @@ class DefinitionValidatorTest {
         assertThat(normalized.onError()).isEqualTo(OnError.SUPERVISOR);
         assertThat(normalized.schemaVersion()).isEqualTo(1);
         assertThat(normalized.variablesOrEmpty()).isEmpty();
+    }
+
+    // ── 引用节点不得携带 systemPrompt（B3：定义节点是唯一事实源） ──
+
+    @Test
+    void referenceNodeWithSystemPromptIsError() {
+        // 上游已有同名会话线（引用节点）携带 systemPrompt → 逐项报错，文案含定义节点定位
+        Definition d = def(
+                node("s1", "start"),
+                node("d1", "ai").agent("writer").systemPrompt("你是作者"),
+                node("r1", "ai").agent("writer").systemPrompt("API 直改塞进来的副本"),
+                edge("e1", "s1", "d1"), edge("e2", "d1", "r1"));
+        List<String> errors = DefinitionValidator.validate(d);
+        assertThat(errors).hasSize(1);
+        assertThat(errors.get(0)).contains("引用节点");
+        assertThat(errors.get(0)).contains("systemPrompt");
+        assertThat(errors.get(0)).contains("writer");
+        assertThat(errors.get(0)).contains("d1"); // 定义节点定位
+        assertThat(errors.get(0)).contains("r1"); // 引用节点定位
+    }
+
+    @Test
+    void definingNodeWithSystemPromptIsValid() {
+        // 定义节点（上游无同名持有者=首次使用）携带 systemPrompt 合法；下游另一条线的定义节点同理
+        Definition d = def(
+                node("s1", "start"),
+                node("d1", "ai").agent("writer").systemPrompt("你是作者"),
+                node("r1", "ai").agent("reviewer").systemPrompt("你是评审"),
+                edge("e1", "s1", "d1"), edge("e2", "d1", "r1"));
+        assertThat(DefinitionValidator.validate(d)).isEmpty();
+    }
+
+    @Test
+    void blankDefiningPromptWithCleanReferencesIsValid() {
+        // 反馈实测形态：定义节点 systemPrompt 为空（=该会话线无系统提示词）+ 全部引用节点不带
+        Definition d = def(
+                node("s1", "start"),
+                node("d1", "ai").agent("reviewer"),
+                node("r1", "ai").agent("reviewer"),
+                node("r2", "ai").agent("reviewer"),
+                edge("e1", "s1", "d1"), edge("e2", "d1", "r1"), edge("e3", "r1", "r2"));
+        assertThat(DefinitionValidator.validate(d)).isEmpty();
+    }
+
+    @Test
+    void referenceNodeBlankPromptIsTreatedAsAbsent() {
+        // 空白 systemPrompt 视同未携带（非空非空白才触发）
+        Definition d = def(
+                node("s1", "start"),
+                node("d1", "ai").agent("writer").systemPrompt("你是作者"),
+                node("r1", "ai").agent("writer").systemPrompt("   "),
+                edge("e1", "s1", "d1"), edge("e2", "d1", "r1"));
+        assertThat(DefinitionValidator.validate(d)).isEmpty();
+    }
+
+    @Test
+    void cycleReferenceNodeWithSystemPromptIsError() {
+        // 环：近似拓扑序（visited 截断 + 列表序平局）下 d1 仍是「a」的定义节点，r1 是引用节点
+        Definition d = def(
+                node("s1", "start"),
+                node("d1", "ai").agent("a").maxRuns(3),
+                node("r1", "ai").agent("a").systemPrompt("环上引用自带").maxRuns(3),
+                edge("e1", "s1", "d1"), edge("e2", "d1", "r1"), edge("e3", "r1", "d1"));
+        List<String> errors = DefinitionValidator.validate(d);
+        assertThat(errors).hasSize(1);
+        assertThat(errors.get(0)).contains("引用节点");
+        assertThat(errors.get(0)).contains("d1");
+        assertThat(errors.get(0)).contains("r1");
+    }
+
+    @Test
+    void cycleNodeThatIsItsOwnDefinitionMayCarryPrompt() {
+        // 环近似：回边把定义节点自身带回它的上游集合，解析出的定义节点=本节点 → 仍是定义节点，
+        // 携带 systemPrompt 合法（不误报、不要求清空）
+        Definition d = def(
+                node("s1", "start"),
+                node("d1", "ai").agent("a").systemPrompt("唯一事实源").maxRuns(3),
+                node("r1", "ai").agent("a").maxRuns(3),
+                edge("e1", "s1", "d1"), edge("e2", "d1", "r1"), edge("e3", "r1", "d1"));
+        assertThat(DefinitionValidator.validate(d)).isEmpty();
+    }
+
+    @Test
+    void commandNodeSystemPromptIsIgnored() {
+        // 现状保持：非 AI 节点携带 systemPrompt 无会话线语义，校验忽略（不改现状）
+        Definition d = def(
+                node("s1", "start"),
+                node("c1", "command").command("echo hi").systemPrompt("被忽略"),
+                edge("e1", "s1", "c1"));
+        assertThat(DefinitionValidator.validate(d)).isEmpty();
     }
 
     // ── 循环允许 ──
@@ -253,48 +375,54 @@ class DefinitionValidatorTest {
         N command(String c) {
             return new N(new NodeDef(def.id(), def.type(), def.name(), def.x(), def.y(),
                     c, def.timeoutMs(), def.maxRuns(), def.agent(), def.modelConfigId(), def.input(),
-                    def.systemPrompt()));
+                    def.systemPrompt(), def.joinMode()));
         }
 
         N timeoutMs(Long t) {
             return new N(new NodeDef(def.id(), def.type(), def.name(), def.x(), def.y(),
                     def.command(), t, def.maxRuns(), def.agent(), def.modelConfigId(), def.input(),
-                    def.systemPrompt()));
+                    def.systemPrompt(), def.joinMode()));
         }
 
         N input(String i) {
             return new N(new NodeDef(def.id(), def.type(), def.name(), def.x(), def.y(),
                     def.command(), def.timeoutMs(), def.maxRuns(), def.agent(), def.modelConfigId(), i,
-                    def.systemPrompt()));
+                    def.systemPrompt(), def.joinMode()));
         }
 
         N agent(String a) {
             return new N(new NodeDef(def.id(), def.type(), def.name(), def.x(), def.y(),
                     def.command(), def.timeoutMs(), def.maxRuns(), a, def.modelConfigId(), def.input(),
-                    def.systemPrompt()));
+                    def.systemPrompt(), def.joinMode()));
         }
 
         N modelConfigId(String m) {
             return new N(new NodeDef(def.id(), def.type(), def.name(), def.x(), def.y(),
                     def.command(), def.timeoutMs(), def.maxRuns(), def.agent(), m, def.input(),
-                    def.systemPrompt()));
+                    def.systemPrompt(), def.joinMode()));
         }
 
         N systemPrompt(String s) {
             return new N(new NodeDef(def.id(), def.type(), def.name(), def.x(), def.y(),
                     def.command(), def.timeoutMs(), def.maxRuns(), def.agent(), def.modelConfigId(),
-                    def.input(), s));
+                    def.input(), s, def.joinMode()));
         }
 
         N maxRuns(Integer m) {
             return new N(new NodeDef(def.id(), def.type(), def.name(), def.x(), def.y(),
                     def.command(), def.timeoutMs(), m, def.agent(), def.modelConfigId(), def.input(),
-                    def.systemPrompt()));
+                    def.systemPrompt(), def.joinMode()));
+        }
+
+        N joinMode(String j) {
+            return new N(new NodeDef(def.id(), def.type(), def.name(), def.x(), def.y(),
+                    def.command(), def.timeoutMs(), def.maxRuns(), def.agent(), def.modelConfigId(),
+                    def.input(), def.systemPrompt(), j));
         }
     }
 
     static N node(String id, String type) {
-        return new N(new NodeDef(id, type, id, 0.0, 0.0, null, null, null, null, null, null, null));
+        return new N(new NodeDef(id, type, id, 0.0, 0.0, null, null, null, null, null, null, null, null));
     }
 
     static EdgeDef edge(String id, String from, String to) {

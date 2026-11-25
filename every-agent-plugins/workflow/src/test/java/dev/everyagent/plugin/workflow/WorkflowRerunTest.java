@@ -341,12 +341,12 @@ class WorkflowRerunTest {
     @Test
     void rerunWithoutOriginTaskIdWorksUnbound() throws Exception {
         // RPC 直启的纯命令流（无 AI 节点）：无绑定 rerun 可用；
-        // 命令首次超时失败（pause 无子进程，超时销毁不残留孤儿占用工作区目录）
-        // → 放 marker 后重跑成功
+        // 命令首次超时失败（Start-Sleep 无子进程，超时销毁不残留孤儿占用工作区目录）
+        // → 放 marker 后重跑成功（Windows 命令节点默认经 PowerShell，用 PS 方言）
         Definition d = save(
                 DefinitionValidatorTest.node("s", "start"),
                 DefinitionValidatorTest.node("c2", "command")
-                        .command("if exist go.marker (echo fixed) else (pause)")
+                        .command("if (Test-Path go.marker) { echo fixed } else { Start-Sleep -Seconds 30 }")
                         .timeoutMs(800L),
                 DefinitionValidatorTest.edge("e1", "s", "c2"));
         InstanceMeta m = store.createInstance(d, null);
@@ -437,12 +437,10 @@ class WorkflowRerunTest {
     @Test
     void rerunRejectsInputReplacementForCommandNode() throws Exception {
         // BUG-02：命令节点输入=command 本体,传 input 替换须显式报错——旧实现静默丢弃,
-        // 调用方白等一次注定失败的续跑
-        boolean win = System.getProperty("os.name").toLowerCase().contains("win");
-        String fail = win ? "exit /b 3" : "exit 3";
+        // 调用方白等一次注定失败的续跑（exit N 在 cmd / PowerShell / sh 语义一致）
         Definition d = save(
                 DefinitionValidatorTest.node("s", "start"),
-                DefinitionValidatorTest.node("c1", "command").command(fail),
+                DefinitionValidatorTest.node("c1", "command").command("exit 3"),
                 DefinitionValidatorTest.edge("e1", "s", "c1"));
         JsonNode r = Json.parse(tools.workflow_run(d.id(), null, null));
         assertThat(r.path("status").asString()).isEqualTo("failed");

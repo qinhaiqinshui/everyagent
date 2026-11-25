@@ -135,7 +135,7 @@ class WorkflowRunTokenTest {
         return new Definition(Definition.SCHEMA_VERSION, null, name, null, WS, null, null,
                 null, null, null,
                 List.of(new NodeDef("n1", NodeDef.TYPE_START, "开始", 0.0, 0.0,
-                null, null, null, null, null, null, null)),
+                null, null, null, null, null, null, null, null)),
                 List.of());
     }
 }
