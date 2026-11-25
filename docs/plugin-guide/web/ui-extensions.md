@@ -896,7 +896,7 @@ export default plugin
 - **select 可异步、且已在菜单关闭后执行**：宿主先 `setSlashOpen(false)` 再 `await`——`select` 里可以弹自己的浮层等用户操作（task-wait 经 §6 `ui.composer_above_panel` 承载任务选择浮层），也可以 `await ctx.sdk.rpc` 定向取数；但 select 挂起期间用户可能已在别处输入，返回的 inline 结果仍插在原 `/` 触发位置。
 - **内置范例**：task-wait（`every-agent-plugins/task-wait/web/index.ts`——唯一使用者：`/等待任务` 本地条目，select 内拉 `tasks.list` 过滤进行中任务、弹浮层选择、`buildComposerToken` 构造内联胶囊；配套 §6 选择浮层 + §17 胶囊点击回跳 + §20 等待 trace 视图）。
 
-## 22. UiRegistry 动作方法（8 个）
+## 22. UiRegistry 动作方法（9 个）
 
 动作方法不注册 UI，而是**驱动宿主**。实现链统一：`pluginDispatcher` 同步委托模块级 holder 桥（`pluginRuntimeBridge.ts`），宿主组件挂载时注入、未注入时静默降级（`pluginRuntimeBridge.ts:1-10` 注释）。
 
@@ -910,6 +910,7 @@ export default plugin
 | `setComposerRawContent` | `(raw) => void` | `PluginDispatcher.ts:398-400` → `TaskChat.tsx:697-703` | 用 rawContent（可含 opaque token 串）**整体替换**草稿（编辑重发回填用） |
 | `appendComposerToken` | `(input: {kind, label, summary?, payload?, spaced?, atCaret?}) => void` | `PluginDispatcher.ts`（`appendComposerToken`）→ `buildOpaqueTokenText`（`composerToken/composerOpaqueToken.ts:46`）→ `appendComposerTextQueued`（`pluginRuntimeBridge.ts`） | 结构化插入一枚胶囊（宿主单点负责 opaque token 编码，插件不碰线格式）；`spaced ?? true` 时补两侧空格；`atCaret: true` 时改为在输入框**光标处**插入原样 opaque 串（不补空格、聚焦编辑器，编辑器未挂载退化为末尾追加）；`kind`/`label` 为空由 `buildOpaqueTokenText` **抛错**（`composerOpaqueToken.ts:52-56`）；未绑定草稿时进宿主待写队列（目标任务页挂载注入草稿桥即 flush，不再静默丢弃）；自身不做 kind 业务分支 |
 | `buildComposerToken` | `(input: { kind: string; label: string; summary?: string; payload?: Record<string, unknown> }) => string` | `PluginDispatcher.ts`（`buildComposerToken`）→ `buildOpaqueTokenText`（`composerToken/composerOpaqueToken.ts`，**不经 holder 桥**） | 与 `appendComposerToken` 同源单点编码（`buildOpaqueTokenText`），**只返回 opaque 串、不追加草稿**（不走草稿桥，未绑定草稿也照常编码）；供本地 slash provider（§21）的 `select` 构造内联胶囊 token——插入时机与位置由 select 结果的 `position` 决定，不能用「追加到当前激活草稿」语义；`kind`/`label` 为空同样由 `buildOpaqueTokenText` 抛错 |
+| `startNewTask` | `(input: { rawContent: string; modelConfigId?: string; workspace?: string; title?: string }) => void` | `PluginDispatcher.startNewTask` → `ShellBridge.openTab`（开/复用唯一新任务草稿标签，`workspace` 进草稿预设、`title` 作标签标题）+ `taskDraftLaunchIntent.requestTaskDraftLaunch`（预填+自动发送意图，双通道 pending 槽/订阅）→ `TaskChat` 草稿态消费 → 模拟点发送按钮（`handleSubmit` 原有建立路径） | 以「新任务草稿」启动一次任务提交：宿主打开（复用）唯一新任务草稿标签页，在输入框预填 `rawContent`（可含 opaque token 串，未登记提交 resolver 的 kind 原串上行、worker 侧按 kind 解析）与模型配置选择（`modelConfigId` 只覆盖本次草稿的选中项，**不改写**全局默认模型偏好；用户手动切换即让位），再模拟用户点击发送——任务经**宿主原有建立路径**创建（`task.run` 新建 + 任务级默认 token 逐个 apply，如默认启用的 AI 审议），插件无需也不应自行发 `task.run` RPC（程序化 RPC 绕过这条链，模型选择与任务级开关都带不进去——workflow 插件「运行工作流」曾因此丢主 agent 模型配置）；自动发送等草稿底部 token 默认预置收束后才提交（默认启用的 token 不漏 apply）；`task.run` 失败错误显示在草稿页输入区、预填内容保留供重发。**既有草稿内容会被预填整体替换**（启动是显式动作）。内置范例：workflow `RunDialog.tsx`（`launchWorkflowRun`） |
 
 ```ts
 // 典型组合：点击工具视图里的文件名打开文件标签（update-file-view 同款，UpdateFileToolView.tsx:85）
@@ -929,9 +930,18 @@ ctx.ui.appendComposerToken({ kind: 'file.selection', label: 'foo.ts:3-5', payloa
 const waitToken = ctx.ui.buildComposerToken({ kind: 'task.wait', label: '等待「B 任务」', payload: { targetTaskId } })
 // 打开设置页并直达某段（sectionId 即段锚点 id，见 §18；输入框模型空态引导直达 'models' 同款）
 ctx.ui.openSettingsPage('models')
+// 以「新任务草稿」启动一次任务提交（workflow「运行工作流」同款）：宿主开新任务页、
+// 预填内容与模型选择、模拟用户点发送——任务走原有建立路径，模型配置与默认启用
+// 的任务级 token（AI 审议等）一并生效；失败错误留在草稿页输入区，预填可重发。
+ctx.ui.startNewTask({
+  rawContent: `请运行工作流《发布》：${ctx.ui.buildComposerToken({ kind: 'workflow.run', label: '运行「发布」', payload: { definitionId } })} `,
+  modelConfigId: 'gpt-4o-high',
+  workspace: 'C:\\projects\\my-app',
+  title: '运行工作流：发布',
+})
 ```
 
-注意两个时序坑：① 页面刚加载、`Layout`/`TaskChat` 尚未挂载时桥为 null，动作**静默丢失**（不抛错）；② 草稿桥只在**激活标签页**持有写权（`TaskChat.tsx:703-713` 注释解释竞态），多任务标签并存时写入的是当前激活的那个。
+注意两个时序坑：① 页面刚加载、`Layout`/`TaskChat` 尚未挂载时桥为 null，动作**静默丢失**（不抛错）；② 草稿桥只在**激活标签页**持有写权（`TaskChat.tsx:703-713` 注释解释竞态），多任务标签并存时写入的是当前激活的那个。`startNewTask` 不受这两个坑影响——它把「开标签 → 预填 → 发送」整体收进宿主单次调用（pending 槽兜底未挂载时序），插件侧无需自己组合 `openTab` + `appendComposerToken` 再想办法触发发送。
 
 ## 23. Disposable 与刷新
 

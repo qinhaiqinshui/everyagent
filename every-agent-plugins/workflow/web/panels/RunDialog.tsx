@@ -1,30 +1,33 @@
 /**
- * 工作流运行对话框（步骤 9 → 步骤 5 任务化改造）：收集运行变量 → 组装
- * 「引导语 + workflow.run token 原串」的用户消息 → task.run 新建任务 → 打开任务页。
+ * 工作流运行对话框：收集运行变量 → 组装「引导语 + workflow.run token 原串」的
+ * 初始内容 → ctx.ui.startNewTask 经宿主新任务草稿页启动任务（预填初始内容 +
+ * 定义的主 agent 模型配置，模拟用户点发送按钮）。
  *
  * 承载方式：ctx.ui.showDialog（宿主出模态壳——遮罩/居中/Esc/点遮罩取消/焦点管理，
  * task-wait WaitTaskPickerContent 同款范式）；宿主缺席 showDialog（极旧版本）时降级
  * toast 提示。本文件不引宿主 web 模块、不依赖 antd。
  *
- * 数据流：def.get 拉完整定义 → 解析 variables 声明渲染输入（required 标 *，
- * label/description/defaultValue 提示）→ 前端先本地校验 required（与后端
- * missingRequiredVariables 同口径：有 defaultValue 的 required 允许留空）→
+ * 数据流：def.get 拉完整定义（变量声明 + 主 agent 配置 agentConfigId）→ 渲染输入
+ * （required 标 *，label/description/defaultValue 提示）→ 前端先本地校验 required
+ * （与后端 missingRequiredVariables 同口径：有 defaultValue 的 required 允许留空）→
  * resolveWorkspaceRef 解析 {root, workerId} → ctx.ui.buildComposerToken 构造
  * kind=workflow.run 的 opaque token（payload {definitionId, definitionName, variables}，
- * 字段名/编码与 worker 侧 WorkflowRunToken 逐字对齐）→ input = 引导语 + ' ' + token + ' '
- * （rawContent 同 input——程序化发送不经前端 handleSubmit，未登记 kind 的 token
- * 原串上行，任务页胶囊回放由 rawContent 还原）→ ctx.sdk.rpc(workerId, 'task.run',
- * {input, rawContent, workspace: root, title}) 新建任务 → close({taskId})；
- * openRunDialog 拿到结果后 openTab 任务页（内置 'task' 标签，data.taskId）。
+ * 字段名/编码与 worker 侧 WorkflowRunToken 逐字对齐）→ rawContent = 引导语 + ' ' +
+ * token + ' ' → ctx.ui.startNewTask({rawContent, modelConfigId: agentConfigId,
+ * workspace: root, title})：宿主打开新任务草稿标签页、预填输入框与模型选择、模拟
+ * 用户点发送——任务走宿主原有建立路径创建（task.run 新建 + 任务级默认 token 逐个
+ * apply），主 agent 即用定义的主 agent 配置模型、AI 审议等默认启用能力自动生效
+ * （§7.20 运行入口统一走任务）。token 原串上行（程序化预填不经前端提交替换，
+ * 未登记 kind 的 token 原样进 input，任务页胶囊回放由 rawContent 还原）。
  * worker 侧 SlashTokenResolveAdvisor + WorkflowRunSlashResolver 把 token 替换为
  * 「工作流名+参数+workflow_run 引导」文本，主 agent 调 workflow_run 工具执行——
- * AI 节点过程/wf.node 卡片都在任务页呈现（§7.20 运行入口统一走任务）。
- * task.run RPC 错误按 rpcErrorMessage 原样展示（变量校验等已移到主 agent 工具侧）。
+ * AI 节点过程/wf.node 卡片都在任务页呈现。task.run 的失败错误（worker 掉线等）
+ * 显示在新任务草稿页输入区，预填内容保留供用户重发（本对话框只承载解析/组装错误）。
  *
- * 两级入口：定义级（openRunDialog，侧栏行菜单「运行」直入变量表单）与工作区级
+ * 两级入口：定义级（openRunDialog，管理页行尾「▶ 运行」直入变量表单）与工作区级
  * （openWorkspaceRunDialog，侧栏组头 ▶——先选定义〔默认=最近一次实例的定义，由
  * SidebarPanel.lastRunDefinitionId 从实例列表算出〕，选中后内嵌同一变量表单；
- * 切换定义即重挂载表单重置输入）。成功后都 openTab 任务聊天页。
+ * 切换定义即重挂载表单重置输入）。启动成功后宿主已切到新任务页，这里不再开标签。
  *
  * 纯逻辑可测核（无插件 web 测试基建，导出保持可测，人工清单见文件尾注释）：
  * missingRequiredVariables / buildVariablesPayload /
@@ -162,21 +165,29 @@ export function buildWorkflowRunSubmission(definitionName: string, tokenText: st
 }
 
 /**
- * 「运行工作流」→ 新建任务并返回 taskId（对话框提交与两个入口共用）。
+ * 「运行工作流」→ 经宿主新任务草稿页启动任务（对话框提交与两个入口共用）。
  *
  * 链路：resolveWorkspaceRef(workspace 稳定 id) → {root, workerId}（注册表解析不到
- * 根路径时报可读错误——task.run 的 workspace 参数是工作区根绝对路径）→
- * ctx.ui.buildComposerToken 构造 opaque token → input=rawContent=引导语+token →
- * ctx.sdk.rpc(workerId, 'task.run', {input, rawContent, workspace: root, title})。
- * worker 立即返回 {taskId} 并开始执行（与宿主 taskQueryService.runTask 同契约）。
+ * 根路径时报可读错误——新任务挂靠的 workspace 参数是工作区根绝对路径）→
+ * ctx.ui.buildComposerToken 构造 opaque token → rawContent = 引导语 + token →
+ * ctx.ui.startNewTask({rawContent, modelConfigId, workspace, title})。
+ *
+ * 为何走宿主草稿启动而不是插件直发 task.run RPC：程序化 RPC 建任务绕过了宿主
+ * 任务建立路径——定义的主 agent 模型配置（agentConfigId）传不进去（主 agent 按
+ * 系统默认模型跑，即本 bug），AI 审议等「默认启用的任务级 slash token」也不会
+ * 随常规提交链 apply。经宿主草稿页（预填 + 模拟用户点发送）两者都自动生效。
  */
-export async function runWorkflowTask(
+export async function launchWorkflowRun(
   workspace: string,
   definitionId: string,
   definitionName: string,
   variables: Record<string, string>,
-): Promise<string> {
+  modelConfigId: string | null,
+): Promise<void> {
   const ctx = getPluginContext()
+  if (typeof ctx.ui.startNewTask !== 'function') {
+    throw new Error('当前宿主不支持任务草稿启动（startNewTask），请升级宿主前端')
+  }
   const ref = await resolveWorkspaceRef(workspace)
   if (!ref) {
     throw new Error('无法解析工作区根路径（工作区注册表无此工作区），无法创建运行任务')
@@ -184,31 +195,27 @@ export async function runWorkflowTask(
   const tokenText = ctx.ui.buildComposerToken(
     buildWorkflowRunTokenInput(definitionId, definitionName, variables),
   )
-  const input = buildWorkflowRunSubmission(definitionName, tokenText)
-  const result = (await ctx.sdk.rpc(ref.workerId, 'task.run', {
-    input,
-    rawContent: input,
+  const rawContent = buildWorkflowRunSubmission(definitionName, tokenText)
+  ctx.ui.startNewTask({
+    rawContent,
+    modelConfigId: modelConfigId || undefined,
     workspace: ref.root,
     title: `运行工作流：${definitionName}`,
-  })) as { taskId?: unknown }
-  const taskId = String(result?.taskId ?? '')
-  if (!taskId) {
-    throw new Error('worker 未返回 taskId')
-  }
-  return taskId
+  })
 }
 
 // ─── 对话框主体 ────────────────────────────────────────────────────────────
 
-/** close 的收口值：{taskId}=任务已创建（主 agent 将调 workflow_run 执行）；close(null)=取消。 */
+/** close 的收口值：{launched:true}=已启动（宿主新任务页已预填并自动发送）；close(null)=取消。 */
 export interface RunDialogResult {
-  taskId: string
-  /** 任务将运行的工作流定义名（openTab 标题用）。 */
+  /** 已启动（宿主新任务草稿页已预填并自动发送，任务页自动打开）。 */
+  launched: boolean
+  /** 任务将运行的工作流定义名（启动方回执/侧栏刷新判定用）。 */
   definitionName?: string
 }
 
 export interface RunDialogContentProps extends PluginDialogProps<RunDialogResult> {
-  /** 定义归属工作区（稳定 id；def.get / resolveWorkspaceRef / task.run workspace 解析用）。 */
+  /** 定义归属工作区（稳定 id；def.get / resolveWorkspaceRef / 新任务挂靠解析用）。 */
   workspace: string
   /** 定义 id（wf_…）。 */
   definitionId: string
@@ -223,6 +230,8 @@ export function RunDialogContent({ close, workspace, definitionId }: RunDialogCo
   const [decls, setDecls] = React.useState<WorkflowVariableDef[] | null>(null)
   const [defName, setDefName] = React.useState('')
   const [defDesc, setDefDesc] = React.useState('')
+  /** 主 agent 模型配置（定义级 agentConfigId；空 = 跟随宿主输入框当前选中）。 */
+  const [agentConfigId, setAgentConfigId] = React.useState('')
   const [loadError, setLoadError] = React.useState<string | null>(null)
   const [values, setValues] = React.useState<Record<string, string>>({})
   const [running, setRunning] = React.useState(false)
@@ -230,7 +239,7 @@ export function RunDialogContent({ close, workspace, definitionId }: RunDialogCo
   const [missing, setMissing] = React.useState<string[]>([])
   const [wsRoot, setWsRoot] = React.useState('')
 
-  // def.get 拉完整定义（每次打开真拉——定义可能在编辑器里刚改过变量声明）。
+  // def.get 拉完整定义（每次打开真拉——定义可能在编辑器里刚改过变量声明/主 agent 配置）。
   React.useEffect(() => {
     let cancelled = false
     workflowGateway
@@ -239,6 +248,7 @@ export function RunDialogContent({ close, workspace, definitionId }: RunDialogCo
         if (cancelled) return
         setDefName(def.name ?? '')
         setDefDesc(def.description ?? '')
+        setAgentConfigId(def.agentConfigId ?? '')
         const vars = (Array.isArray(def.variables) ? def.variables : []).filter(
           v => v && typeof v.name === 'string' && v.name !== '',
         )
@@ -278,15 +288,17 @@ export function RunDialogContent({ close, workspace, definitionId }: RunDialogCo
     setRunning(true)
     setRunError(null)
     try {
-      // 运行入口统一走任务（§7.20）：组装「引导语 + workflow.run token 原串」发
-      // task.run 新建任务，主 agent 调 workflow_run 工具执行（阻塞至终态）。
-      const taskId = await runWorkflowTask(
+      // 运行入口统一走任务（§7.20）：经宿主新任务草稿页启动（预填「引导语 +
+      // workflow.run token 原串」+ 主 agent 模型配置，模拟用户点发送按钮），
+      // 主 agent 调 workflow_run 工具执行（阻塞至终态）。
+      await launchWorkflowRun(
         workspace,
         definitionId,
         defName || definitionId,
         buildVariablesPayload(decls, values),
+        agentConfigId,
       )
-      close({ taskId, definitionName: defName || definitionId })
+      close({ launched: true, definitionName: defName || definitionId })
     } catch (err) {
       setRunError(rpcErrorMessage(err))
       setRunning(false)
@@ -322,6 +334,11 @@ export function RunDialogContent({ close, workspace, definitionId }: RunDialogCo
         <div className="wf-run-meta-line">
           工作区：<b title={wsRoot || workspace}>{wsRoot || workspace}</b>
         </div>
+        {agentConfigId ? (
+          <div className="wf-run-meta-line">
+            主 agent 模型：<b title={agentConfigId}>{agentConfigId}</b>
+          </div>
+        ) : null}
       </div>
 
       {decls === null ? (
@@ -371,40 +388,32 @@ export function RunDialogContent({ close, workspace, definitionId }: RunDialogCo
 }
 
 /**
- * 打开运行对话框；确认成功后 openTab 任务聊天页（内置 'task' 标签，data.taskId——
- * 标题缺省回退任务标题/`任务 <id>` 由宿主 createTab 兜底，这里显式传标题保持
- * 「运行工作流：<名>」形态）。返回任务 id；取消/失败启动返回 null。
+ * 打开运行对话框；确认后经宿主新任务草稿页启动（宿主自动切到新任务页并发送，
+ * 本插件不再开标签）。返回是否已启动；取消/失败启动返回 false。
  */
 export async function openRunDialog(
   workspace: string,
   definitionId: string,
   definitionName?: string,
-): Promise<string | null> {
+): Promise<boolean> {
   const ctx = getPluginContext()
   if (typeof ctx.ui.showDialog !== 'function') {
     ctx.ui.showToast('当前宿主不支持插件对话框，无法打开运行窗口', 'error')
-    return null
+    return false
   }
   const result = await ctx.ui.showDialog<RunDialogResult>({
     title: `运行工作流${definitionName ? `：${definitionName}` : ''}`,
-    description: '确认运行变量后创建任务执行；主 agent 将调用 workflow_run 运行该工作流，过程与结果在任务页查看。',
+    description:
+      '确认运行变量后启动：宿主将打开新任务页，预填初始内容与主 agent 模型配置并自动发送；主 agent 调用 workflow_run 运行该工作流，过程与结果在任务页查看。',
     Content: props => <RunDialogContent {...props} workspace={workspace} definitionId={definitionId} />,
   })
-  if (result?.taskId) {
-    ctx.ui.openTab(
-      'task',
-      { taskId: result.taskId },
-      `运行工作流：${result.definitionName ?? definitionName ?? '工作流'}`,
-    )
-    return result.taskId
-  }
-  return null
+  return Boolean(result?.launched)
 }
 
 // ─── 工作区级运行（组头 ▶ 入口：先选定义，再填变量） ────────────────────────
 
 export interface WorkspaceRunDialogProps extends PluginDialogProps<RunDialogResult> {
-  /** 定义归属工作区（稳定 id；workflow.run 的 workspace 参数）。 */
+  /** 定义归属工作区（稳定 id；def.get / resolveWorkspaceRef / 新任务挂靠解析用）。 */
   workspace: string
   /** 本工作区定义摘要列表（下拉数据源；调用方保证非空再开窗）。 */
   defs: WorkflowDefSummary[]
@@ -485,22 +494,23 @@ export function WorkspaceRunDialogContent({
 }
 
 /**
- * 打开工作区级运行窗（侧栏组头 ▶）；成功后 openTab 任务聊天页（内置 'task' 标签）。
- * 返回任务 id；取消/失败启动返回 null。
+ * 打开工作区级运行窗（侧栏组头 ▶）；确认后经宿主新任务草稿页启动（宿主自动切到
+ * 新任务页并发送）。返回是否已启动；取消/失败启动返回 false。
  */
 export async function openWorkspaceRunDialog(
   workspace: string,
   defs: WorkflowDefSummary[],
   lastRunDefinitionId?: string,
-): Promise<string | null> {
+): Promise<boolean> {
   const ctx = getPluginContext()
   if (typeof ctx.ui.showDialog !== 'function') {
     ctx.ui.showToast('当前宿主不支持插件对话框，无法打开运行窗口', 'error')
-    return null
+    return false
   }
   const result = await ctx.ui.showDialog<RunDialogResult>({
     title: '运行工作流',
-    description: '选择工作流定义并确认运行变量；确认后创建任务执行，过程与结果在任务页查看。',
+    description:
+      '选择工作流定义并确认运行变量；确认后宿主将打开新任务页，预填初始内容与主 agent 模型配置并自动发送，过程与结果在任务页查看。',
     Content: props => (
       <WorkspaceRunDialogContent
         {...props}
@@ -510,41 +520,42 @@ export async function openWorkspaceRunDialog(
       />
     ),
   })
-  if (result?.taskId) {
-    ctx.ui.openTab(
-      'task',
-      { taskId: result.taskId },
-      `运行工作流：${result.definitionName ?? '工作流'}`,
-    )
-    return result.taskId
-  }
-  return null
+  return Boolean(result?.launched)
 }
 
 /*
- * ── 人工验证清单（步骤 5 任务化改造；步骤 9 表单部分沿用）──────────────────
- * 1. 侧边栏定义列表 →「运行」→ 对话框列出全部变量声明；required 标 *、
- *    label/description/defaultValue（placeholder「默认：…」）正确显示。
- * 2. required 留空点「开始运行」→ 黄字「缺少必填变量：…」，不发 RPC。
- * 3. 填齐后运行 → 对话框关闭，任务聊天页标签打开（内置 'task' 标签，标题=
- *    「运行工作流：<定义名>」）；任务首条用户消息渲染为「引导语 + 运行胶囊」
+ * ── 人工验证清单（草稿启动改造：宿主新任务页预填 + 自动发送）──────────────
+ * 1. 管理页定义行行尾「▶ 运行」→ 对话框列出全部变量声明；required 标 *、
+ *    label/description/defaultValue（placeholder「默认：…」）正确显示；定义配了
+ *    「主 agent 配置」时 meta 区显示「主 agent 模型：<configId>」。
+ * 2. required 留空点「开始运行」→ 黄字「缺少必填变量：…」，不发请求。
+ * 3. 填齐后运行 → 对话框关闭，宿主新任务草稿页打开（标题=「运行工作流：<定义名>」）
+ *    并自动发送：草稿页先短暂可见「引导语 + 运行胶囊 + 底部 AI 审议胶囊」，随后
+ *    草稿页替换为真实任务页；任务首条用户消息渲染为「引导语 + 运行胶囊」
  *    （workflow.run token 原串经 rawContent 还原胶囊，非明文乱码）。
- * 4. 主 agent 收到的替换文本（worker WorkflowRunSlashResolver 产物）含
+ * 4. 模型链路（本修复的核心）：定义「主 agent 配置」选了非默认模型 → 运行任务的
+ *    主 agent（及未配节点级模型的 AI 节点）用该模型；新任务页输入区下拉选中项
+ *    = 该模型配置；未配置时跟随宿主输入框当前选中。
+ * 5. 任务级默认能力随常规提交链生效：任务创建后底部「AI 审议」胶囊在任务页
+ *    回显（slash.taskTokens 已 apply，✕ 可取消）。
+ * 6. 主 agent 收到的替换文本（worker WorkflowRunSlashResolver 产物）含
  *    《定义名》/definitionId/参数摘要/「调用 workflow_run」引导；随后调用
  *    workflow_run 工具，工作流在任务页流式可见（wf.node 卡片 + AI 节点会话）。
- * 5. task.run RPC 失败（如 worker 掉线）→ 错误 message 原样展示在对话框红框内。
- * 6. Esc / 点遮罩 / 取消 → 对话框关闭，无任务创建。
+ * 7. 启动阶段错误（工作区解析失败 / 宿主过旧无 startNewTask）→ 错误展示在对话框
+ *    红框内；task.run 阶段失败（worker 掉线）→ 错误展示在新任务草稿页输入区，
+ *    预填内容保留，连上后手动点发送即可重试。
+ * 8. Esc / 点遮罩 / 取消 → 对话框关闭，无任务创建（草稿页不动）。
  *
  * ── 人工验证清单（工作区级入口 · 组头 ▶）────────────────────────────────
- * 7. 组头 ▶（无定义时禁用）→ 弹窗顶部下拉列出本工作区全部定义；默认选中
+ * 9. 组头 ▶（无定义时禁用）→ 弹窗顶部下拉列出本工作区全部定义；默认选中
  *    「最近一次实例的定义」（SidebarPanel.lastRunDefinitionId：实例 createdAt
  *    降序首个且定义仍存在；无实例/定义已删 → 首个定义）。
- * 8. 切换下拉定义 → 下方变量表单整体重挂载：变量声明、默认值、已填输入全部
+ * 10. 切换下拉定义 → 下方变量表单整体重挂载：变量声明、默认值、已填输入全部
  *    重置为该定义的最新声明（编辑器里刚改过变量也能反映）。
- * 9. 底部「取消/开始运行」：取消关闭无任务；运行成功 → 关闭弹窗并 openTab
- *    任务聊天页（标题=「运行工作流：<定义名>」），任务列表出现新任务。
+ * 11. 底部「取消/开始运行」：取消关闭无任务；运行成功 → 关闭弹窗，宿主新任务页
+ *    自动发送并转正为任务页，任务列表出现新任务。
  *
  * ── 人工验证清单（移动端，视口 ≤768px）──────────────────────────────────
- * 10. 对话框宽度收窄至 92vw 不溢出；变量输入聚焦不触发 iOS 视口自动放大（16px）；
+ * 12. 对话框宽度收窄至 92vw 不溢出；变量输入聚焦不触发 iOS 视口自动放大（16px）；
  *    底部「取消/开始运行」按钮触控目标加大，可单手点达；定义下拉触控可点。
  */

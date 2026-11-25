@@ -726,9 +726,9 @@ export default function SidebarPanel() {
     const wsId = group.entry?.id as string | undefined
     if (!wsId || group.defs.length === 0) return
     void openWorkspaceRunDialog(wsId, group.defs, lastRunDefinitionId(group.defs, group.instances)).then(
-      id => {
+      launched => {
         // 本地立即重拉一次（推送帧到达时再校准）。
-        if (id) reloadInstances()
+        if (launched) reloadInstances()
       },
     )
   }

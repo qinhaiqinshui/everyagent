@@ -1095,6 +1095,26 @@ export interface UiRegistry {
   /** 用 rawContent（可能含 opaque token 串）替换整个草稿（编辑重发回填用）。 */
   setComposerRawContent(rawContent: string): void
   /**
+   * 以「新任务草稿」启动一次任务提交：打开（复用）唯一的新任务草稿标签页，
+   * 在输入框中预填初始内容与模型配置，然后模拟用户点击发送按钮——任务经宿主
+   * 原有建立路径创建（草稿提交 → `task.run` 新建 + 任务级默认 token 逐个 apply，
+   * 如默认启用的 AI 审议），插件无需自行发 `task.run` RPC。
+   *
+   * 时序由宿主保证：草稿页尚未挂载时预填请求先入 pending 槽，草稿页挂载后
+   * 原子应用并自动发送；创建失败（worker 离线等）错误显示在草稿页输入区，
+   * 预填内容保留供用户检查后重发。
+   */
+  startNewTask(input: {
+    /** 初始输入内容（=rawContent，可含 opaque token 串；未登记提交 resolver 的 kind 原串上行，由 worker 侧按 kind 解析）。 */
+    rawContent: string
+    /** 预选的模型配置 id（如工作流定义的主 agent 配置）；缺省沿用输入框当前选中。 */
+    modelConfigId?: string
+    /** 新任务挂靠的工作区根（worker 机器绝对路径）；缺省沿用草稿预设/注册表首选根。 */
+    workspace?: string
+    /** 任务标题；缺省由初始内容派生。 */
+    title?: string
+  }): void
+  /**
    * 全局轻提示（对标宿主 showToast / antd message）。
    *
    * 供插件在非 React 上下文（如 slash select 回调）向用户反馈操作结果——

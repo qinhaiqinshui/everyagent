@@ -51,6 +51,11 @@ import { modelConfigs, type ModelConfigInfo } from '@/hub/modelConfigs'
 import { useHub } from '@/hub/HubProvider'
 import { hubSession } from '@/hub/session'
 import { DRAFT_TASK_ID, getDraftPreset, subscribeDraftPreset } from './taskChatDraft'
+import {
+  consumePendingTaskDraftLaunch,
+  subscribeTaskDraftLaunch,
+  type TaskDraftLaunchInput,
+} from '@/components/taskComposer/taskDraftLaunchIntent'
 import '@/components/task/chatPanel.css'
 
 /** 草稿任务 ID 再导出(定义见 ./taskChatDraft,常量消费方从那里导入)。 */
@@ -220,6 +225,19 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
   // 任务级底部 token（胶囊）：草稿态本地持有；真实任务从 slash.taskTokens.list
   // 拉取 + apply/cancel RPC 返回值 + slash.tokens.changed stream 事件更新。
   const [scopeTokens, setScopeTokens] = React.useState<ChatComposerToken[]>([])
+  // ── ctx.ui.startNewTask 草稿启动（预填 + 自动发送）专用态 ──────────────
+  // 模型选择覆盖（空 = 沿用全局记忆的选中配置）：启动预填的模型配置只作用于本次
+  // 草稿，不改写用户的全局默认（modelConfigs.selectConfig 是全局 localStorage 偏好）；
+  // 用户在下拉里手动选择时清空覆盖（显式选择优先）。
+  const [draftModelOverride, setDraftModelOverride] = React.useState('')
+  // 任务标题覆盖（空 = 沿用「首条输入原文」派生标题）：启动方（如 workflow「运行
+  // 工作流」）指定的任务标题；提交成功后随草稿清理一起复位。
+  const [draftTitleOverride, setDraftTitleOverride] = React.useState('')
+  // 待自动发送标记：启动预填落盘（state 提交）后由 effect 模拟点发送按钮。
+  const [draftLaunchSubmit, setDraftLaunchSubmit] = React.useState(false)
+  // 草稿底部 token 默认预置（defaultSelected）是否已收束：启动自动发送须等它收束——
+  // 否则 task.run 抢在预置完成前建任务，AI 审议等默认启用的任务级 token 会漏 apply。
+  const [scopeSeedSettled, setScopeSeedSettled] = React.useState(false)
   // 队列面板「编辑」的回填不走这里:插件经自己的 ctx.ui.appendComposerText /
   // setComposerRawContent 回填(宿主已实现该 ui 契约,与 task-edit-resend 同一条路)。
   // 曾在此留一个 handleEditQueuedDraft 纯文本回调,但从未接线到 ComposerPanelCtx——
@@ -302,11 +320,16 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
    * 按 slash 候选的该字段预置任务级底部 token（bottom 结果进 scopeTokens，用户仍可 ✕ 取消）。
    * 走与用户点击相同的 item.select(item)（草稿态无 taskId → 不触发业务 onSelect 置位），
    * 提交时随 task.run 建后逐个 apply（slash 层自管存储）。
+   *
+   * 收束信号 scopeSeedSettled：预置是异步 RPC（list + select），启动自动发送
+   * （ctx.ui.startNewTask）须等它收束再提交，否则默认启用的任务级 token
+   * （AI 审议等）会因提交抢跑而漏 apply。失败也收束（finally），不阻塞发送。
    */
   React.useEffect(() => {
     if (!isDraft || !draftWorkerId) {
       return
     }
+    setScopeSeedSettled(false)
     let cancelled = false
     void (async () => {
       try {
@@ -332,6 +355,10 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
         }
       } catch (error) {
         console.warn('[slash] 默认选中项预置失败', error)
+      } finally {
+        if (!cancelled) {
+          setScopeSeedSettled(true)
+        }
       }
     })()
     return () => {
@@ -403,9 +430,16 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
     () => modelConfigs.currentFor(activeWorkerId).map(toModelProfile),
     [modelsVersion, activeWorkerId],
   )
-  const selectedLlmConfigId = isDraft ? modelConfigs.selectedConfigIdFor(draftWorkerId) : ''
+  // 草稿选中模型：启动预填覆盖（ctx.ui.startNewTask 的 modelConfigId，只作用于本次
+  // 草稿）> 全局记忆选中。用户手动选择时清空覆盖（见 handleSelectLlmConfig）。
+  const selectedLlmConfigId = isDraft
+    ? (draftModelOverride || modelConfigs.selectedConfigIdFor(draftWorkerId))
+    : ''
 
   const handleSelectLlmConfig = React.useCallback((configId: string) => {
+    // 用户显式选择优先：清空启动预填的草稿级覆盖，回落全局记忆选中（selectConfig 落
+    // localStorage，是「新建任务的默认模型」全局偏好，不为一次启动预填而改写）。
+    setDraftModelOverride('')
     modelConfigs.selectConfig(configId)
   }, [])
 
@@ -612,8 +646,11 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
           // workspace 必填:草稿选择器的有效值(显式选择/预设 > 注册表首选根)。
           // 任务级底部 token 在任务创建后通过 slash.taskTokens.apply 逐个写入
           // (slash 层自管 slash-tokens.json,不走 task.run 参数)。
+          // 标题：启动预填覆盖（ctx.ui.startNewTask 的 title，如「运行工作流：<名>」）
+          // > 首条输入原文。
+          const taskTitle = draftTitleOverride || rawContent || aiText
           const newTaskId = await taskQueryService.runTask(aiText, {
-            title: rawContent || aiText,
+            title: taskTitle,
             configId: selectedLlmConfigId || undefined,
             workspace: effectiveDraftWorkspace || undefined,
             workerId: draftWorkerId,
@@ -630,13 +667,16 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
             }
           }
           setDraft({ text: '', rawContent: '', tokens: [], activeTokenId: undefined })
+          // 启动预填的草稿级覆盖随提交收束复位（模型/标题只作用于本次任务）。
+          setDraftModelOverride('')
+          setDraftTitleOverride('')
           // 新任务页回显由其任务页的 listTaskTokens / slash.tokens.changed 负责。
           setScopeTokens([])
           // 先关草稿标签、再打开真实任务标签并激活:顺序不能反——若先 openTaskChatTab,
           // 紧接着 closeWorkspaceTab 关闭草稿时,内部按旧闭包 activeWorkspaceTabId(草稿)
           // 重算 next-active 并覆盖激活,新任务标签刚被激活就被切走。
           shell.closeWorkspaceTab(`task:${DRAFT_TASK_ID}` as const)
-          shell.openTaskChatTab({ taskId: newTaskId, title: rawContent || aiText })
+          shell.openTaskChatTab({ taskId: newTaskId, title: taskTitle })
           return
         }
         if (isTaskRunning) {
@@ -668,7 +708,64 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
         setSubmitting(false)
       }
     })()
-  }, [draft, isDraft, draftWorkerId, selectedLlmConfigId, submitting, stream, shell, effectiveDraftWorkspace, isTaskRunning, effectiveTaskId, selectedForTask, scopeTokens])
+  }, [draft, isDraft, draftWorkerId, selectedLlmConfigId, draftTitleOverride, submitting, stream, shell, effectiveDraftWorkspace, isTaskRunning, effectiveTaskId, selectedForTask, scopeTokens])
+
+  /**
+   * ctx.ui.startNewTask 草稿启动消费（宿主动作方法）：把预填意图原子应用到本草稿
+   * ——输入内容（含胶囊原串）、模型选择覆盖、工作区、标题覆盖，随后置自动发送标记。
+   * 双通道（pending 槽 + 订阅）见 taskDraftLaunchIntent 模块头注释；本组件是唯一订阅方。
+   */
+  const applyDraftLaunch = React.useCallback((launch: TaskDraftLaunchInput) => {
+    if (launch.rawContent) {
+      // 整体替换草稿（与草稿桥 setRawContent 同口径）：既有草稿内容让位于启动预填。
+      setDraft({ text: launch.rawContent, rawContent: launch.rawContent, tokens: [], activeTokenId: undefined })
+    }
+    if (launch.modelConfigId) {
+      setDraftModelOverride(launch.modelConfigId)
+    }
+    if (launch.workspace) {
+      setDraftWorkspaceOverride(launch.workspace)
+    }
+    if (launch.title) {
+      setDraftTitleOverride(launch.title)
+    }
+    setDraftLaunchSubmit(true)
+  }, [])
+
+  React.useEffect(() => {
+    if (!isDraft) {
+      return
+    }
+    // 首挂消费 pending：startNewTask 先 openTab 再 request，草稿页此前未挂载时
+    // 意图留在槽位，React commit 挂载本组件后才在此兑现（读后清空）。
+    const pendingLaunch = consumePendingTaskDraftLaunch()
+    if (pendingLaunch) {
+      applyDraftLaunch(pendingLaunch)
+    }
+    return subscribeTaskDraftLaunch((launch) => {
+      // 订阅即时兑现：草稿页本就挂载（激活或隐藏）时的通知路径；兑现同时清空
+      // pending（防草稿页关闭重开后陈旧 pending 二次启动）。
+      const consumed = consumePendingTaskDraftLaunch() ?? launch
+      applyDraftLaunch(consumed)
+    })
+  }, [isDraft, applyDraftLaunch])
+
+  /**
+   * 启动自动发送：预填落盘（state 提交）后模拟用户点发送按钮——走 handleSubmit
+   * 同一入口，任务经原有建立路径创建（task.run + 任务级默认 token apply）。
+   * 等待底部 token 默认预置收束（scopeSeedSettled）再发：AI 审议等默认启用的
+   * 任务级 token 才不会漏 apply；预填内容为空（异常防御）不发送。
+   */
+  React.useEffect(() => {
+    if (!isDraft || !draftLaunchSubmit || !scopeSeedSettled) {
+      return
+    }
+    setDraftLaunchSubmit(false)
+    if (!draft.rawContent.trim()) {
+      return
+    }
+    handleSubmit()
+  }, [isDraft, draftLaunchSubmit, scopeSeedSettled, draft.rawContent, handleSubmit])
 
   /**
    * 停止当前 Task。
