@@ -1,22 +1,23 @@
 /**
  * 工作流定义「自动布局」算法核（编辑器工具栏「自动布局」按钮）。
  *
- * Sugiyama 分层布局的简化实现，纯函数、零 React/画布依赖（几何常量除外），
- * 便于脱离 DOM 自测。流程四步：
+ * Sugiyama 分层布局的简化实现（主流沿 y 轴自上而下展开），纯函数、零
+ * React/画布依赖（几何常量除外），便于脱离 DOM 自测。流程四步：
  *   ① 回边识别——DFS（灰→灰 = 指向栈上祖先）把有环图的「回指边」标为逆向边，
- *      分层只看前向边、逆向边留作绘制时的回线（从右下层弯回左上层）；
+ *      分层只看前向边、逆向边留作绘制时的回线（从下层弯回上层）；
  *      指向 start 的边一律先标回边（start 是执行入口，入边语义上是「回到起点
  *      重跑」），这同时保证 start 无前向入边、分层必落第 0 层（需求：start 固定
- *      第 0 层）。
+ *      第 0 层，即最顶行）。
  *   ② 最长路分层——去回边后必为 DAG（任一有向环至少含一条 DFS 回边），
  *      layer(v) = max(layer(前向前驱)) + 1，前向入度 0 的根层为 0；Kahn 按
  *      定义序取队，结果确定。
- *   ③ 层内排序——初序 = 定义列表序（start 置顶）；再做若干轮重心（barycenter）
+ *   ③ 层内排序——初序 = 定义列表序（start 置最左）；再做若干轮重心（barycenter）
  *      微调：按前驱/后继在邻层的行号均值重排，减少连线交叉；无邻接的节点锚在
  *      当前行不被推走；稳定排序 + 平局保持现序，结果确定。
- *   ④ 网格坐标——x = 层深×列距、y = 层内序×行距；间距取节点尺寸的合理倍数
- *      （NODE_W / NODE_H，见常量注释），60 节点规模不重叠。孤立节点（无边，
- *      自环除外）集中排在主流最深列右侧的独立列，不与主流重叠。
+ *   ④ 网格坐标——y = 层深×层距、x = 层内序×行距（层深沿垂直方向、层内沿水平
+ *      方向）；间距取节点尺寸的合理倍数（NODE_W / NODE_H，见常量注释），60 节点
+ *      规模不重叠。孤立节点（无边，自环除外）集中排在主流最深层下方的独立行，
+ *      不与主流重叠。
  *
  * 调用方（DefinitionEditorPanel）经 updateDef 一次性写回全部节点 x/y——与
  * 手工拖拽同一条定义更新链（dirty / 保存语义一致），其余字段一律不动。
@@ -26,10 +27,10 @@ import { NODE_H, NODE_W } from './geometry'
 
 // ─── 间距常量（节点尺寸的合理倍数；60 节点规模不重叠） ─────────────────────
 
-/** 列间距（层深方向）：NODE_W 的 ~1.7 倍——给左右向贝塞尔连线留出弧度空间。 */
-export const LAYOUT_COL_GAP = 300
-/** 行间距（层内方向）：NODE_H 的 ~1.9 倍——层内节点互不重叠且留出选中余量。 */
-export const LAYOUT_ROW_GAP = 120
+/** 层间距（层深方向，y 轴）：NODE_H 的 ~2.8 倍——给上下向贝塞尔连线留出弧度空间。 */
+export const LAYOUT_LAYER_GAP = 180
+/** 行间距（层内方向，x 轴）：NODE_W 的 ~1.3 倍——层内节点互不重叠且留出选中余量。 */
+export const LAYOUT_ROW_GAP = 240
 /** 网格左/上留白（第 0 列/行的起点）。 */
 const LAYOUT_MARGIN = 40
 /** 重心排序轮数（前向贴前驱 + 后向贴后继各算一轮；两轮后收益递减）。 */
@@ -49,7 +50,7 @@ export interface AutoLayoutResult {
   layerCount: number
   /** 识别为逆向的回边条数（含自环；不参与分层，绘制时为回线）。 */
   backEdgeCount: number
-  /** 孤立节点（无边，自环除外）个数——集中排在右侧独立列。 */
+  /** 孤立节点（无边，自环除外）个数——集中排在下方独立行。 */
   orphanCount: number
 }
 
@@ -177,7 +178,7 @@ export function computeAutoLayout(def: WorkflowDefinition): AutoLayoutResult {
     if (gridNodes.has(n.id) && !layerOf.has(n.id)) layerOf.set(n.id, 0)
   }
 
-  // ── ③ 层内排序：初序 = 定义序（start 置顶）→ 重心微调（减少连线交叉）。 ──
+  // ── ③ 层内排序：初序 = 定义序（start 置最左）→ 重心微调（减少连线交叉）。 ──
   // -1 初值：grid 为空（无 start 且全部孤立）时不产生空层，layerCount=0。
   const maxLayer = Array.from(layerOf.values()).reduce((m, l) => Math.max(m, l), -1)
   const layers: string[][] = Array.from({ length: maxLayer + 1 }, () => [])
@@ -233,16 +234,16 @@ export function computeAutoLayout(def: WorkflowDefinition): AutoLayoutResult {
     for (let k = layers.length - 2; k >= 0; k--) resort(k, 'out') // 后向：贴后继
   }
 
-  // ── ④ 网格坐标：x = 层深×列距、y = 层内序×行距；孤立区在主流右侧独立列。 ──
+  // ── ④ 网格坐标：y = 层深×层距、x = 层内序×行距；孤立区在主流下方独立行。 ──
   layers.forEach((list, k) => {
     list.forEach((id, r) => {
-      positions.set(id, { x: LAYOUT_MARGIN + k * LAYOUT_COL_GAP, y: LAYOUT_MARGIN + r * LAYOUT_ROW_GAP })
+      positions.set(id, { x: LAYOUT_MARGIN + r * LAYOUT_ROW_GAP, y: LAYOUT_MARGIN + k * LAYOUT_LAYER_GAP })
     })
   })
-  // 孤立列起点 = 主流列数×列距（与最深列隔一整列，水平即不重叠），定义序堆叠。
-  const orphanX = LAYOUT_MARGIN + layers.length * LAYOUT_COL_GAP
+  // 孤立行起点 = 主流层数×层距（与最深层隔一整行，垂直即不重叠），定义序横排。
+  const orphanY = LAYOUT_MARGIN + layers.length * LAYOUT_LAYER_GAP
   orphans.forEach((n, i) => {
-    positions.set(n.id, { x: orphanX, y: LAYOUT_MARGIN + i * LAYOUT_ROW_GAP })
+    positions.set(n.id, { x: LAYOUT_MARGIN + i * LAYOUT_ROW_GAP, y: orphanY })
   })
 
   result.layerCount = layers.length

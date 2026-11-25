@@ -2,9 +2,10 @@
  * 自研 SVG 工作流画布基座（无外部库——bare import 白名单约束）。
  *
  * 能力（数据驱动，位置即 NodeDef.x/y——位置存定义）：
- * - 节点矩形（类型图标 + 标题 + 简略信息）+ 贝塞尔边（from 右锚点 → to 左锚点）；
+ * - 节点矩形（类型图标 + 标题 + 简略信息）+ 贝塞尔边（from 底锚点 → to 顶锚点，
+ *   与自动布局的自上而下主流方向一致）；
  * - 选中态（节点/边高亮）、背景点按取消选中；
- * - mode='edit'：节点拖拽（pointerdown→capture→pointermove 改 x/y）、从右锚点拖出
+ * - mode='edit'：节点拖拽（pointerdown→capture→pointermove 改 x/y）、从底锚点拖出
  *   连线到目标节点（pointerup 命中测试）、Delete 删除由宿主面板处理（本组件只回调
  *   选中）；触屏可用——拖拽目标挂 touch-action:none 阻断浏览器滚动抢占手势；
  * - mode='readonly'：禁一切编辑交互（实例视图复用基座，步骤 10；tap 选中可用）；
@@ -80,7 +81,7 @@ export interface WorkflowCanvasProps {
   onSelect: (selection: CanvasSelection) => void
   /** edit 限定：拖拽落点回调（每帧回调，宿主直接改定义状态）。 */
   onNodeMove?: (id: string, x: number, y: number) => void
-  /** edit 限定：连线完成（from 右锚点 → to 节点；基础去重/self 校验在此做）。 */
+  /** edit 限定：连线完成（from 底锚点 → to 节点；基础去重/self 校验在此做）。 */
   onCreateEdge?: (from: string, to: string) => void
   /** 画布可视中心回写（palette 新节点落点用；宿主每次读 current）。 */
   viewportCenterRef?: React.MutableRefObject<{ x: number; y: number } | null>
@@ -249,7 +250,7 @@ export default function WorkflowCanvas({
     }
   }
 
-  /** 右锚点按下：启动连线（预览线跟随指针，pointerup 命中目标节点即回调；Ctrl/多指平移跳过）。 */
+  /** 底锚点按下：启动连线（预览线跟随指针，pointerup 命中目标节点即回调；Ctrl/多指平移跳过）。 */
   const handleAnchorPointerDown = (event: React.PointerEvent, node: CanvasNodeView) => {
     if (!editable || !onCreateEdge || event.button !== 0 || event.ctrlKey || multiPanRef.current) return
     event.preventDefault()
@@ -403,25 +404,25 @@ export default function WorkflowCanvas({
     setPanning(false)
   }
 
-  // ── 边几何 ──
-  const anchorOut = (n: CanvasNodeView) => ({ x: n.x + NODE_W, y: n.y + NODE_H / 2 })
-  const anchorIn = (n: CanvasNodeView) => ({ x: n.x, y: n.y + NODE_H / 2 })
+  // ── 边几何（主流自上而下：底锚点出、顶锚点入，控制点沿 y 轴偏移） ──
+  const anchorOut = (n: CanvasNodeView) => ({ x: n.x + NODE_W / 2, y: n.y + NODE_H })
+  const anchorIn = (n: CanvasNodeView) => ({ x: n.x + NODE_W / 2, y: n.y })
 
   const edgePath = (from: CanvasNodeView, to: CanvasNodeView): string => {
     const s = anchorOut(from)
     const t = anchorIn(to)
-    const dx = Math.max(EDGE_GAP, Math.abs(t.x - s.x) / 2)
-    return `M ${s.x} ${s.y} C ${s.x + dx} ${s.y}, ${t.x - dx} ${t.y}, ${t.x} ${t.y}`
+    const dy = Math.max(EDGE_GAP, Math.abs(t.y - s.y) / 2)
+    return `M ${s.x} ${s.y} C ${s.x} ${s.y + dy}, ${t.x} ${t.y - dy}, ${t.x} ${t.y}`
   }
 
   const midPoint = (from: CanvasNodeView, to: CanvasNodeView): { x: number; y: number } => {
     // 三次贝塞尔 t=0.5：0.125·P0 + 0.375·P1 + 0.375·P2 + 0.125·P3
     const s = anchorOut(from)
     const t = anchorIn(to)
-    const dx = Math.max(EDGE_GAP, Math.abs(t.x - s.x) / 2)
+    const dy = Math.max(EDGE_GAP, Math.abs(t.y - s.y) / 2)
     return {
-      x: 0.125 * s.x + 0.375 * (s.x + dx) + 0.375 * (t.x - dx) + 0.125 * t.x,
-      y: 0.125 * s.y + 0.375 * s.y + 0.375 * t.y + 0.125 * t.y,
+      x: 0.125 * s.x + 0.375 * s.x + 0.375 * t.x + 0.125 * t.x,
+      y: 0.125 * s.y + 0.375 * (s.y + dy) + 0.375 * (t.y - dy) + 0.125 * t.y,
     }
   }
 
@@ -566,10 +567,10 @@ export default function WorkflowCanvas({
           const from = nodeById.get(pendingEdge.from)
           if (!from) return null
           const s = anchorOut(from)
-          const dx = Math.max(EDGE_GAP, Math.abs(pendingEdge.x - s.x) / 2)
+          const dy = Math.max(EDGE_GAP, Math.abs(pendingEdge.y - s.y) / 2)
           return (
             <path
-              d={`M ${s.x} ${s.y} C ${s.x + dx} ${s.y}, ${pendingEdge.x - dx} ${pendingEdge.y}, ${pendingEdge.x} ${pendingEdge.y}`}
+              d={`M ${s.x} ${s.y} C ${s.x} ${s.y + dy}, ${pendingEdge.x} ${pendingEdge.y - dy}, ${pendingEdge.x} ${pendingEdge.y}`}
               fill="none"
               stroke="var(--accent-blue, #61a5ff)"
               strokeWidth={1.8}
@@ -689,7 +690,7 @@ export default function WorkflowCanvas({
                   </text>
                 </g>
               ) : null}
-              {/* 右侧出锚点（edit 限定；hover/触按加深；外层透明大圆扩触屏命中区） */}
+              {/* 底部出锚点（edit 限定；hover/触按加深；外层透明大圆扩触屏命中区） */}
               {editable ? (
                 <g
                   className="wf-anchor-out"
@@ -698,8 +699,8 @@ export default function WorkflowCanvas({
                   onPointerDown={(e) => handleAnchorPointerDown(e, node)}
                 >
                   <circle
-                    cx={NODE_W}
-                    cy={NODE_H / 2}
+                    cx={NODE_W / 2}
+                    cy={NODE_H}
                     r={hoverAnchor === node.id ? 6 : 4.5}
                     style={{
                       fill: hoverAnchor === node.id
@@ -711,19 +712,19 @@ export default function WorkflowCanvas({
                     }}
                   />
                   <circle
-                    cx={NODE_W}
-                    cy={NODE_H / 2}
+                    cx={NODE_W / 2}
+                    cy={NODE_H}
                     r={14}
                     fill="transparent"
                     style={{ pointerEvents: 'all' }}
                   />
                 </g>
               ) : null}
-              {/* 左侧入锚点（视觉提示，非交互） */}
+              {/* 顶部入锚点（视觉提示，非交互） */}
               {editable ? (
                 <circle
-                  cx={0}
-                  cy={NODE_H / 2}
+                  cx={NODE_W / 2}
+                  cy={0}
                   r={3}
                   style={{
                     fill: 'var(--bg-secondary, #11141b)',

@@ -534,7 +534,7 @@ export default function DefinitionEditorPanel({
     setViewResetNonce(n => n + 1)
     const parts = [`${nodeCount} 个节点排为 ${layout.layerCount} 层`]
     if (layout.backEdgeCount > 0) parts.push(`${layout.backEdgeCount} 条回边留作回线`)
-    if (layout.orphanCount > 0) parts.push(`孤立节点 ${layout.orphanCount} 个集中在右侧`)
+    if (layout.orphanCount > 0) parts.push(`孤立节点 ${layout.orphanCount} 个集中在下方`)
     ui.showToast(`已自动布局：${parts.join('；')}（可继续手工微调，保存后持久化）`, 'success')
   }, [def, ui, updateDef])
 
@@ -704,7 +704,7 @@ export default function DefinitionEditorPanel({
             <div className="wf-editor-canvas-hint">
               {isMobile
                 ? '点按节点/边 → 「属性」面板编辑 · 拖动移动节点 · 空白处或任意位置双指拖动平移画布 · 变量在「组件 / 变量」面板'
-                : '拖动节点移动 · 从右侧锚点拖出连线 · 点击选中 · Delete 删除（连线标签为出边条件）'}
+                : '拖动节点移动 · 从底部锚点拖出连线 · 点击选中 · Delete 删除（连线标签为出边条件）'}
             </div>
           </div>
         </div>
@@ -1331,7 +1331,7 @@ function EdgePropertySection({
  * ── 人工验证清单（保存 → 重新打开还原往返） ────────────────────────────────
  * 1. 侧边栏「工作流」→ 新建工作流定义 → 画布出现「开始」节点，右下角 dirty ●。
  * 2. palette 添加命令节点 + AI 节点（落画布中心附近，自动选中）。
- * 3. 拖动节点改位置；从「开始」右侧锚点拖到命令节点建立边；再连到 AI 节点。
+ * 3. 拖动节点改位置；从「开始」底部锚点拖到命令节点建立边；再连到 AI 节点。
  * 4. 选中边 → 条件类型切 onSuccess，再切 outputEquals 填期望文本（保存重开后画布
  *    边标签显示「等于 …」）；选中命令节点 → 填 command/timeoutMs/maxRuns；
  *    选中 AI 节点 → 会话线下拉选「＋ 新建会话线…」→ 填名「writer」+ system prompt
