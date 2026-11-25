@@ -92,7 +92,7 @@ function instanceActive(status: string): boolean {
 /** 单次节点运行的实时投影（事件侧摘要；全量数据在 runs 记录）。 */
 export interface NodeRunProjection {
   runNo: number
-  status: 'running' | 'done' | 'failed' | 'skipped'
+  status: 'running' | 'done' | 'failed' | 'skipped' | 'cancelled'
   startedAt: number | null
   endedAt: number | null
   /** node.started 携带的输入预览（≤1KB 截断）。 */
@@ -203,6 +203,17 @@ export function projectNodesFromEvents(events: WorkflowInstanceEvent[]): Record<
         r.endedAt = e.ts || r.endedAt
         break
       }
+      case 'node.interrupted': {
+        // 实例终态收口中断的在飞运行（引擎 finish 收口扫描补发）——关闭节点/运行投影
+        n.status = 'cancelled'
+        n.lastRunNo = runNo
+        n.error = asStr(p.message) || n.error
+        const r = runOf(n, runNo)
+        r.status = 'cancelled'
+        r.endedAt = e.ts || r.endedAt
+        r.error = asStr(p.message) || r.error
+        break
+      }
       case 'wf.askUser': {
         // 挂起决策 → 等待黄；由该节点后续 node.started/skipped 或实例终态自然覆盖
         // （fail 决策下节点保持黄——「决策等待中实例终止」的如实呈现）。
@@ -237,6 +248,7 @@ const TERMINAL_NODE_STATUS_MAP: Record<string, RenderStatus | null> = {
   done: 'done',
   skipped: 'skipped',
   failed: 'failed',
+  cancelled: 'cancelled',
 }
 
 /**
@@ -335,6 +347,7 @@ const RENDER_STATUS_LABEL: Record<RenderStatus, string> = {
   waiting: '等待决策',
   skipped: '已跳过',
   created: '未运行',
+  cancelled: '已中断',
 }
 
 /**
@@ -605,6 +618,8 @@ function NodeDetail({
     <span className="wf-inst-badge wf-inst-badge--err">失败</span>
   ) : proj.status === 'waiting' ? (
     <span className="wf-inst-badge wf-inst-badge--wait">等待决策</span>
+  ) : proj.status === 'cancelled' ? (
+    <span className="wf-inst-badge wf-inst-badge--wait">已中断</span>
   ) : (
     <span className="wf-inst-badge">已跳过</span>
   )

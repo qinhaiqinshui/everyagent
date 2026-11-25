@@ -385,11 +385,12 @@ class WorkflowRerunTest {
         assertThat(engine.awaitTerminal(m.id(), 20_000)).isTrue();
         assertThat(meta(m.id()).status()).isEqualTo(InstanceStatus.FAILED);
         assertThat(meta(m.id()).error().nodeId()).isEqualTo("a");
-        // 实例失败时被中断的并行节点如实呈现 running
-        assertThat(meta(m.id()).nodeStates().get("b").status()).isEqualTo("running");
+        // 实例失败时被中断的并行节点收口为 cancelled（收口扫描：终态投影零 running）
+        assertThat(meta(m.id()).nodeStates().get("b").status()).isEqualTo("cancelled");
+        assertThat(eventNames(m.id())).contains("node.interrupted");
         assertThat(runs(m.id()).stream().filter(r -> "b".equals(r.nodeId()))).isEmpty();
 
-        // 从失败节点 a 重开（writer 修复）；b 重置 pending 不激活 → 不阻塞收束、不重跑
+        // 从失败节点 a 重开（writer 修复）；b（cancelled）重置 pending 不激活 → 不阻塞收束、不重跑
         factory.script("writer", key -> Fakes.Script.echo("修复"));
         assertThat(Json.parse(tools.workflow_rerun(m.id(), null, null))
                 .path("status").asString()).isEqualTo("done");

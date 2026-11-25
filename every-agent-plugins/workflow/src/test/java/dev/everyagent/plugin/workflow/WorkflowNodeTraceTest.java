@@ -270,4 +270,43 @@ class WorkflowNodeTraceTest {
         assertThat(rfd.path("error").asString()).contains("最大运行次数");
         assertThat(rfd.path("runNo").asInt()).isEqualTo(2);
     }
+
+    @Test
+    void failCascadeFlipsInFlightNodeTraceToCancelled() throws Exception {
+        // 失败级联中断在飞命令节点（wi_owr3 现场：并行慢分支仍在跑时兄弟失败收口）：
+        // 收口扫描将 started(running) 的 trace 同 id 原地翻转为 cancelled（interrupted 标记），
+        // 不残留永远「运行中」的 trace 行
+        boolean win = System.getProperty("os.name", "").toLowerCase().contains("win");
+        // 慢命令：Windows 用 cmd 内建死循环（无外部子进程，销毁即净不留孤儿锁 @TempDir——
+        // fake 的 nativeExec 只杀直接子进程）；Unix 用 sleep
+        NodeDef slow = new NodeDef("slow", "command", "慢命令", 0.0, 0.0,
+                win ? "for /l %i in (0,0,1) do rem" : "sleep 30", null, null, null, null, null, null);
+        Definition base = saveOnError(OnError.FAIL,
+                DefinitionValidatorTest.node("s", "start"),
+                DefinitionValidatorTest.node("slow", "command").command("echo placeholder"),
+                DefinitionValidatorTest.node("boom", "command").command("exit 3"),
+                DefinitionValidatorTest.edge("e1", "s", "slow"),
+                DefinitionValidatorTest.edge("e2", "s", "boom"));
+        startBound(withNode(base, slow), Map.of());
+        assertThat(status()).isEqualTo(InstanceStatus.FAILED);
+
+        List<EmitEvent> traces = tracesOf("slow");
+        assertThat(traces).hasSize(2);
+        assertThat(traces.get(0).status()).isEqualTo("running");
+        EmitEvent cancelled = traces.get(1);
+        assertThat(cancelled.status()).isEqualTo("cancelled");
+        // 同 id 原地翻转（started 轮已注册 nodeId:runNo 键）
+        assertThat(cancelled.id()).isEqualTo(traces.get(0).id());
+        assertThat(cancelled.summary()).contains("已中断");
+        assertThat(cancelled.content()).asString().contains("中断");
+        var cd = dataOf(cancelled);
+        assertThat(cd.path("interrupted").asBoolean()).isTrue();
+        assertThat(cd.path("error").asString()).contains("中断");
+        assertThat(cd.path("exitCode").isMissingNode()).isTrue();
+        // 实例域：关闭事件 + 终态投影零 running
+        assertThat(store.readEvents("ws_run", m.id(), 0, 0).stream()
+                .map(EventLine::event).toList()).contains("node.interrupted");
+        assertThat(store.findInstance(m.id()).orElseThrow().nodeStates()
+                .get("slow").status()).isEqualTo("cancelled");
+    }
 }

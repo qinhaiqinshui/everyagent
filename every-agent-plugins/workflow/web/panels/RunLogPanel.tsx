@@ -213,7 +213,7 @@ export interface TimelineRunEntry {
   ts: number
   run: WorkflowRunRecord
   /** live 伪记录的实时态（真记录=null，态由 error 字段自证）。 */
-  liveStatus: 'running' | 'done' | 'failed' | null
+  liveStatus: 'running' | 'done' | 'failed' | 'cancelled' | null
 }
 
 /** 实例级状态行条目（events 补充）。 */
@@ -239,7 +239,7 @@ interface LiveRunDraft {
   outputPreview: string
   exitCode: number | null
   error: string | null
-  status: 'running' | 'done' | 'failed'
+  status: 'running' | 'done' | 'failed' | 'cancelled'
 }
 
 /** live 中间态 → 伪 WorkflowRunRecord（复用 run 渲染器；收口落盘后被真记录取代）。 */
@@ -401,6 +401,15 @@ export function buildTimelineEntries(
         d.status = 'failed'
         break
       }
+      case 'node.interrupted': {
+        // 实例终态收口中断的在飞运行（引擎 finish 收口扫描补发）——live 行关闭为已中断
+        if (covered.has(runNo)) break
+        const d = liveDraft(runNo, nodeId, nameOf(nodeId))
+        d.endedAt = e.ts || d.endedAt
+        d.error = asStr(p.message) || d.error
+        d.status = 'cancelled'
+        break
+      }
       default:
         break
     }
@@ -474,6 +483,7 @@ function ensureLogStyles(): void {
 .wf-log-badge { font-size: 10.5px; border-radius: 999px; padding: 0 7px; border: 1px solid var(--text-muted, #6f7a8b); color: var(--text-muted, #6f7a8b); flex: none; }
 .wf-log-badge--ok { color: var(--accent-green, #41d19c); border-color: var(--accent-green, #41d19c); }
 .wf-log-badge--err { color: var(--accent-red, #ff6b6b); border-color: var(--accent-red, #ff6b6b); }
+.wf-log-badge--warn { color: var(--accent-amber, #f7bd54); border-color: var(--accent-amber, #f7bd54); }
 .wf-log-badge--run { color: var(--accent-blue, #61a5ff); border-color: var(--accent-blue, #61a5ff); animation: wf-log-blink 1.4s ease-in-out infinite; }
 @keyframes wf-log-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
 .wf-log-card-body { padding: 8px 10px 10px; display: flex; flex-direction: column; gap: 8px; }
@@ -544,6 +554,7 @@ function RunItem({
   const isAi = asStr(rec.nodeType) === 'ai'
   const failed = errorMessage !== '' || entry.liveStatus === 'failed'
   const running = entry.liveStatus === 'running'
+  const cancelled = entry.liveStatus === 'cancelled'
   const startedAt = asNum(rec.startedAt)
   const endedAt = asNum(rec.endedAt)
   const dur = asNum(rec.durationMs) ?? (startedAt != null && endedAt != null ? endedAt - startedAt : null)
@@ -563,6 +574,8 @@ function RunItem({
         {dur != null ? <span className="wf-log-card-dur">{formatDuration(dur)}</span> : null}
         {running ? (
           <span className="wf-log-badge wf-log-badge--run">运行中</span>
+        ) : cancelled ? (
+          <span className="wf-log-badge wf-log-badge--warn">已中断</span>
         ) : failed ? (
           <span className="wf-log-badge wf-log-badge--err">失败</span>
         ) : (

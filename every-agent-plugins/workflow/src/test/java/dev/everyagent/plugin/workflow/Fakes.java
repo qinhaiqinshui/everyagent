@@ -719,17 +719,19 @@ final class Fakes {
 
     // ══════════════════════════ NativeExec ══════════════════════════
 
-    /** ProcessBuilder 真执行（argv 直传、超时 destroyForcibly——与 worker OsSandbox 语义对齐）。 */
+    /** ProcessBuilder 真执行（argv 直传、超时/中断均 destroyForcibly——与 worker OsSandbox 语义对齐）。 */
     static final class RealNativeExec implements NativeExec {        @Override
         public ExecResult spawnNative(String[] argv, Path cwd, Map<String, String> env,
                 long timeoutMs) {
+            Process p = null;
             try {
                 ProcessBuilder pb = new ProcessBuilder(argv).directory(cwd.toFile());
-                Process p = pb.start();
+                p = pb.start();
+                final Process proc = p;
                 StringBuilder out = new StringBuilder();
                 StringBuilder err = new StringBuilder();
-                Thread t1 = Thread.ofVirtual().start(() -> read(p.getInputStream(), out));
-                Thread t2 = Thread.ofVirtual().start(() -> read(p.getErrorStream(), err));
+                Thread t1 = Thread.ofVirtual().start(() -> read(proc.getInputStream(), out));
+                Thread t2 = Thread.ofVirtual().start(() -> read(proc.getErrorStream(), err));
                 boolean done = p.waitFor(timeoutMs, TimeUnit.MILLISECONDS);
                 if (!done) {
                     p.destroyForcibly();
@@ -743,7 +745,22 @@ final class Fakes {
             } catch (IOException e) {
                 return new ExecResult("", "spawn 失败: " + e.getMessage(), -1, true);
             } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
+                // 与 OsSandbox 对齐：中断（取消/失败级联）同样不留子进程——销毁后同步收割
+                // （Windows 句柄释放异步于 TerminateProcess,不等会让孤儿短暂持有 cwd 锁死
+                // 测试 @TempDir 清理）;先清中断标志再等,等待完恢复
+                boolean interrupted = Thread.interrupted();
+                try {
+                    if (p != null) {
+                        p.destroyForcibly();
+                        p.waitFor(2, TimeUnit.SECONDS);
+                    }
+                } catch (InterruptedException ie) {
+                    // 收割等待自身被中断：放弃等待（尽力而为）
+                } finally {
+                    if (interrupted) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
                 return new ExecResult("", "interrupted", -1, true);
             }
         }

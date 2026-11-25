@@ -7,8 +7,9 @@
  * input/output/error 为<b>全量</b>（后端不截断，截断留给本展示层）。
  *
  * 状态推导：宿主 TaskTraceShell 合成的 PluginTraceRecord 不透传 payload.status
- * （只合成 title/summary/content/data），故状态从 data 推导——error 非空=failed、
- * exitCode 在场=done、否则 running（与后端三态发射一一对应）。
+ * （只合成 title/summary/content/data），故状态从 data 推导——interrupted 在场=cancelled
+ * （实例终态收口中断）、error 非空=failed、exitCode 在场=done、否则 running（与后端
+ * 四态发射一一对应）。
  *
  * 折叠行（TraceTypeDefinition 注册）：图标=按节点类型 glyph + 状态着色（宿主
  * CSS token），summary=`<类型> · <状态> · <耗时> · <输入/输出/错误首行摘要>`；
@@ -20,13 +21,14 @@ import './wfNodeTrace.css'
 /** trace kind（与引擎 WorkflowEngine.WF_NODE_TRACE_KIND 同值，wire 事件名）。 */
 export const WF_NODE_TRACE_KIND = 'wf.node'
 
-/** 三态（与后端 trace status 对应；由 data 推导，见文件头）。 */
-export type WfNodeTraceStatus = 'running' | 'done' | 'failed'
+/** 四态（与后端 trace status 对应；由 data 推导，见文件头）。 */
+export type WfNodeTraceStatus = 'running' | 'done' | 'failed' | 'cancelled'
 
 export const WF_NODE_STATUS_LABELS: Record<WfNodeTraceStatus, string> = {
   running: '运行中',
   done: '完成',
   failed: '失败',
+  cancelled: '已中断',
 }
 
 /** 节点类型 → 中文标签（仅命令节点发射，其余作未知类型兜底）。 */
@@ -61,8 +63,11 @@ export function readMetaNumber(value: unknown): number | undefined {
   return undefined
 }
 
-/** 由 data 推导节点运行状态（error 非空=failed、exitCode 在场=done、否则 running）。 */
+/** 由 data 推导节点运行状态（interrupted 在场=cancelled、error 非空=failed、exitCode 在场=done、否则 running）。 */
 export function wfNodeStatus(meta: Record<string, unknown>): WfNodeTraceStatus {
+  if (meta.interrupted === true) {
+    return 'cancelled'
+  }
   if (readMetaString(meta.error)) {
     return 'failed'
   }
@@ -92,7 +97,7 @@ function firstLineClamped(text: string, max: number): string {
   return `${firstLine.slice(0, max)}…`
 }
 
-/** 折叠行摘要：`<类型> · <状态> · <耗时> · <摘要>`（failed=错误 / done=输出 / running=输入）。 */
+/** 折叠行摘要：`<类型> · <状态> · <耗时> · <摘要>`（failed/cancelled=错误 / done=输出 / running=输入）。 */
 export function summarizeWfNode(trace: {
   summary?: string
   metadata?: Record<string, unknown>
@@ -109,7 +114,9 @@ export function summarizeWfNode(trace: {
     parts.push(formatWfNodeDuration(durationMs))
   }
   const preview = readMetaString(
-    status === 'failed' ? meta.error : status === 'done' ? meta.output : meta.input,
+    status === 'failed' || status === 'cancelled'
+      ? meta.error
+      : status === 'done' ? meta.output : meta.input,
   )
   const clamped = firstLineClamped(preview, 160)
   if (clamped) {

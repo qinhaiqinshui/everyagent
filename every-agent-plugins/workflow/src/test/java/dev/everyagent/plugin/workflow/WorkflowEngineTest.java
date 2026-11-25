@@ -78,6 +78,16 @@ class WorkflowEngineTest {
                 d.nodes(), d.edges());
     }
 
+    /** 替换定义中的同名节点（N 构造器无 timeoutMs 槽位，慢命令节点直接换 NodeDef）。 */
+    private static Definition withNode(Definition d, NodeDef replacement) {
+        List<NodeDef> nodes = new java.util.ArrayList<>();
+        for (NodeDef n : d.nodesOrEmpty()) {
+            nodes.add(n.id().equals(replacement.id()) ? replacement : n);
+        }
+        return new Definition(d.schemaVersion(), d.id(), d.name(), d.description(), d.workspaceId(),
+                d.createdAt(), d.updatedAt(), d.variables(), d.onError(), d.supervisor(), nodes, d.edges());
+    }
+
     private InstanceMeta start(Definition d) {
         return start(d, Map.of());
     }
@@ -632,6 +642,92 @@ class WorkflowEngineTest {
         // 被取消节点未完成：无该节点的 node.output（start 节点的照常有）
         assertThat(events(m.id()).stream().filter(e -> "node.output".equals(e.event())
                 && "n".equals(e.payload().path("nodeId").asString()))).isEmpty();
+        // 收口扫描：在飞节点置 cancelled + node.interrupted 关闭事件——终态投影零 running
+        InstanceMeta.NodeState n = meta(m.id()).nodeStates().get("n");
+        assertThat(n.status()).isEqualTo("cancelled");
+        assertThat(n.runCount()).isZero();
+        assertThat(meta(m.id()).nodeStates().values())
+                .noneMatch(st -> "running".equals(st.status()));
+        var interruptedEv = events(m.id()).stream()
+                .filter(e -> "node.interrupted".equals(e.event())).findFirst().orElseThrow();
+        assertThat(interruptedEv.payload().path("nodeId").asString()).isEqualTo("n");
+        assertThat(interruptedEv.payload().path("runNo").asInt()).isEqualTo(n.lastRunNo());
+        // 中断运行不落 runs 记录（无完整输入输出可记）
+        assertThat(runs(m.id()).stream().filter(rec -> "n".equals(rec.nodeId()))).isEmpty();
+    }
+
+    @Test
+    void failCascadeClosesInFlightNodesAsCancelled() throws Exception {
+        // 失败级联中断在飞并行节点（wi_owr3 现场）：fail-fast 收口时慢分支仍在跑——
+        // 终态投影不得残留 running（收口扫描置 cancelled + 关闭事件），失败归因仍指向失败节点
+        factory.script("slow", key -> Fakes.Script.delayed("不应完成", 30_000));
+        factory.script("boom", key -> Fakes.Script.failing(new RuntimeException("爆炸")));
+        Definition d = saveOnError(OnError.FAIL,
+                DefinitionValidatorTest.node("s", "start"),
+                DefinitionValidatorTest.node("a", "ai").agent("slow"),
+                DefinitionValidatorTest.node("b", "ai").agent("boom"),
+                DefinitionValidatorTest.edge("e1", "s", "a"),
+                DefinitionValidatorTest.edge("e2", "s", "b"));
+        InstanceMeta m = start(d);
+        awaitTerminal(m.id());
+        assertThat(meta(m.id()).status()).isEqualTo(InstanceStatus.FAILED);
+        assertThat(meta(m.id()).error().nodeId()).isEqualTo("b");
+        InstanceMeta.NodeState a = meta(m.id()).nodeStates().get("a");
+        assertThat(a.status()).isEqualTo("cancelled");
+        assertThat(a.runCount()).isZero(); // 中断尝试不计 runCount：rerun 预算完整
+        assertThat(meta(m.id()).nodeStates().get("b").status()).isEqualTo("failed");
+        assertThat(meta(m.id()).nodeStates().values())
+                .noneMatch(st -> "running".equals(st.status()));
+        var interruptedEv = events(m.id()).stream()
+                .filter(e -> "node.interrupted".equals(e.event())).findFirst().orElseThrow();
+        assertThat(interruptedEv.payload().path("nodeId").asString()).isEqualTo("a");
+        assertThat(interruptedEv.payload().path("runNo").asInt()).isEqualTo(a.lastRunNo());
+        assertThat(interruptedEv.payload().path("message").asString()).contains("failed");
+        assertThat(runs(m.id()).stream().filter(rec -> "a".equals(rec.nodeId()))).isEmpty();
+    }
+
+    @Test
+    void joinRefusalClosesInFlightSlowBranchAsCancelled() throws Exception {
+        // wi_owr3 现场（并行汇合语义测试）回归：三条并行分支汇入 j（每完成一条入边激活
+        // 一次），fin maxRuns=1 在第二条分支汇入时拒绝调度 → fail-fast 收口，此时最慢
+        // 分支 p1 仍在跑——收口扫描置 cancelled，终态投影零 running
+        boolean win = System.getProperty("os.name", "").toLowerCase().contains("win");
+        NodeDef p1 = new NodeDef("p1", "command", "并行1慢", 0.0, 0.0,
+                win ? "for /l %i in (0,0,1) do rem" : "sleep 30", null, null, null, null, null, null);
+        Definition base = saveOnError(OnError.FAIL,
+                DefinitionValidatorTest.node("s", "start"),
+                DefinitionValidatorTest.node("p1", "command").command("echo placeholder").maxRuns(1),
+                DefinitionValidatorTest.node("p2", "command").command("echo p2").maxRuns(1),
+                DefinitionValidatorTest.node("p3", "command").command("echo p3").maxRuns(1),
+                DefinitionValidatorTest.node("j", "command").command("echo j").maxRuns(10),
+                DefinitionValidatorTest.node("fin", "command").command("echo fin").maxRuns(1),
+                DefinitionValidatorTest.edge("g1", "s", "p1"),
+                DefinitionValidatorTest.edge("g2", "s", "p2"),
+                DefinitionValidatorTest.edge("g3", "s", "p3"),
+                DefinitionValidatorTest.edge("g4", "p1", "j"),
+                DefinitionValidatorTest.edge("g5", "p2", "j"),
+                DefinitionValidatorTest.edge("g6", "p3", "j"),
+                DefinitionValidatorTest.edge("g7", "j", "fin"));
+        InstanceMeta m = start(withNode(base, p1));
+        awaitTerminal(m.id());
+        assertThat(meta(m.id()).status()).isEqualTo(InstanceStatus.FAILED);
+        // 失败归因：fin 的第 2 次调度被 maxRuns 拒绝（汇合语义=每条入边一次激活）
+        assertThat(meta(m.id()).error().nodeId()).isEqualTo("fin");
+        assertThat(meta(m.id()).error().message()).contains("最大运行次数");
+        // j 至少跑 2 次（p3、p2 各触发一次）；fin 完成 1 次后拒绝第 2 次
+        assertThat(meta(m.id()).nodeStates().get("j").runCount()).isGreaterThanOrEqualTo(2);
+        assertThat(meta(m.id()).nodeStates().get("fin").status()).isEqualTo("failed");
+        assertThat(meta(m.id()).nodeStates().get("fin").runCount()).isEqualTo(1);
+        // 最慢分支在飞被收口：cancelled + 关闭事件 + runCount 不计中断尝试
+        InstanceMeta.NodeState slow = meta(m.id()).nodeStates().get("p1");
+        assertThat(slow.status()).isEqualTo("cancelled");
+        assertThat(slow.runCount()).isZero();
+        assertThat(meta(m.id()).nodeStates().values())
+                .noneMatch(st -> "running".equals(st.status()));
+        var interruptedEv = events(m.id()).stream()
+                .filter(e -> "node.interrupted".equals(e.event())).findFirst().orElseThrow();
+        assertThat(interruptedEv.payload().path("nodeId").asString()).isEqualTo("p1");
+        assertThat(runs(m.id()).stream().filter(rec -> "p1".equals(rec.nodeId()))).isEmpty();
     }
 
     // ══════════════════════════ 匿名 vs 命名 agent ══════════════════════════

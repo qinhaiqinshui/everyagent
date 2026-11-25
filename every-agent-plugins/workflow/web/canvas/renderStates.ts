@@ -12,8 +12,8 @@
  * text-secondary #aab3c2 / border-strong #3b4658。
  */
 
-/** 节点运行态（实例视图投影；编辑态无 status=中性灰）。 */
-export type RenderStatus = 'created' | 'waiting' | 'running' | 'done' | 'failed' | 'skipped'
+/** 节点运行态（实例视图投影；编辑态无 status=中性灰）。cancelled=实例终态收口中断的在飞运行。 */
+export type RenderStatus = 'created' | 'waiting' | 'running' | 'done' | 'failed' | 'skipped' | 'cancelled'
 
 /** 状态视觉（stroke=节点描边与状态点；markerId=画布 defs 里的箭头 marker key）。 */
 export interface StatusVisual {
@@ -69,6 +69,14 @@ export const STATUS_VISUALS: Record<RenderStatus, StatusVisual> = {
     markerId: 'wf-arrow',
     animated: false,
     label: '跳过',
+  },
+  cancelled: {
+    // 实例终态收口中断的在飞运行：非节点自身失败，warn 色系与实例级 cancelled 口径一致
+    stroke: 'var(--accent-amber, #f7bd54)',
+    badgeFill: 'var(--accent-amber, #f7bd54)',
+    markerId: 'wf-arrow-waiting',
+    animated: false,
+    label: '已中断',
   },
 }
 

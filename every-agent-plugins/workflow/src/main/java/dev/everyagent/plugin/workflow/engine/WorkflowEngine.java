@@ -91,10 +91,12 @@ public final class WorkflowEngine {
     /** wf.node trace 的 wire kind（非 AI 节点过程呈现，经任务 emitter 落任务 EventLog，§7.20.8）。 */
     public static final String WF_NODE_TRACE_KIND = "wf.node";
 
-    /** wf.node trace 的三态 status（payload.status 槽位；前端按 data.error/exitCode 推导同值）。 */
+    /** wf.node trace 的四态 status（payload.status 槽位；前端按 data.interrupted/error/exitCode 推导同值）。 */
     private static final String TRACE_RUNNING = "running";
     private static final String TRACE_DONE = "done";
     private static final String TRACE_FAILED = "failed";
+    /** 实例终态收口中断的在飞运行（非节点自身失败；data.interrupted=true 标记）。 */
+    private static final String TRACE_CANCELLED = "cancelled";
 
     private final WorkflowStore store;
     private final WorkerServices services;
@@ -284,9 +286,10 @@ public final class WorkflowEngine {
     /**
      * 失败实例的节点状态重建（rerun 专用，schedLock 内调用）：runCount 从终态投影延续
      * （maxRuns 预算跨 rerun 不重置——防无限循环；目标节点经决策级授权绕上限重开）；
-     * done/skipped 保持终态不重跑；running（实例失败时被中断的并行节点）与 failed 重置
-     * pending 但<b>不激活</b>（不在失败路径上，等待未来激活）。投影缺失（worker 重启中断
-     * 实例 nodeStates=null）回退按磁盘 runs 记录数恢复 runCount。
+     * done/skipped 保持终态不重跑；cancelled（实例失败时被中断的并行节点——终态收口扫描
+     * 落盘，runCount 未计入中断尝试，预算完整）与 failed 重置 pending 但<b>不激活</b>
+     * （不在失败路径上，等待未来激活）。投影缺失（worker 重启中断实例 nodeStates=null）
+     * 回退按磁盘 runs 记录数恢复 runCount。
      */
     private void restoreNodeStates(InstanceRun r, InstanceMeta meta) {
         Map<String, InstanceMeta.NodeState> projection = meta.nodeStates();
@@ -590,11 +593,14 @@ public final class WorkflowEngine {
         }
     }
 
-    /** 节点调度态：pending → running → done|skipped（done/skipped 可被再次激活重回 running）。 */
+    /** 节点调度态：pending → running → done|skipped|cancelled（done/skipped 可被再次激活重回 running）。
+     *  cancelled = 实例终态收口时被中断的在飞运行（非节点自身失败）。 */
     private static final class NodeState {
         volatile String status = "pending";
         int runCount;
         volatile int lastRunNo;
+        /** 在飞真实运行的 runNo（0=无）——终态收口扫描判据；区别于「拒绝调度」置 running 的伪在飞。 */
+        volatile int activeRunNo;
     }
 
     // ══════════════════════════ 调度 ══════════════════════════
@@ -655,6 +661,7 @@ public final class WorkflowEngine {
         st.status = "running";
         int runNo = r.runCounter.incrementAndGet();
         st.lastRunNo = runNo;
+        st.activeRunNo = runNo;
         r.vt.execute(() -> executeNodeRun(r, nodeId, runNo));
     }
 
@@ -682,6 +689,12 @@ public final class WorkflowEngine {
         try {
             if (node == null) {
                 failInstance(r, "节点不在定义快照中: " + nodeId, nodeId, runNo);
+                return;
+            }
+            // 收口竞态护栏：finish 的中断/收口扫描可能早于本任务实际启动（nodeThreads
+            // 快照未含未启动任务）——此时节点已按 cancelled 收口，不再发 starting 事件，
+            // 避免把已翻转的 trace/投影盖回 running
+            if (r.stopping || r.status.get().terminal()) {
                 return;
             }
             in = renderInput(r, node);
@@ -738,6 +751,7 @@ public final class WorkflowEngine {
             NodeState st = r.nodeStates.get(node.id());
             int maxRuns = node.maxRuns() != null ? node.maxRuns() : 1;
             st.status = failed ? "failed" : "done";
+            st.activeRunNo = 0;
             st.runCount++;
             for (EdgeDef e : r.outEdges.getOrDefault(node.id(), List.of())) {
                 if (NodeRunners.evaluate(e.condition(), result.exitCode(), result.conditionOutput())) {
@@ -844,6 +858,7 @@ public final class WorkflowEngine {
             NodeState st = r.nodeStates.get(node.id());
             if (st != null) {
                 st.runCount++;
+                st.activeRunNo = 0;
             }
             rec = buildRecord(r, node, runNo, startedAt, in, null,
                     new RunRecord.Error(truncate(message, 4000), null), List.of());
@@ -983,7 +998,8 @@ public final class WorkflowEngine {
     // ══════════════════════════ 实例收口 ══════════════════════════
 
     private void failInstance(InstanceRun r, String message, String nodeId, int runNo) {
-        // 失败节点投影标 failed（终态快照可读；其余运行中节点保持 running——取消/级联路径如实呈现）
+        // 失败节点投影标 failed（终态快照可读）；其余在飞节点不在此处理——由 finish 的
+        // 收口扫描统一置 cancelled（终态投影零 running，见 finish 内注释）
         synchronized (r.schedLock) {
             NodeState st = r.nodeStates.get(nodeId);
             if (st != null && "running".equals(st.status)) {
@@ -1028,6 +1044,36 @@ public final class WorkflowEngine {
         synchronized (r.schedLock) {
             if (r.status.get().terminal()) {
                 return;
+            }
+            // 在飞节点收口扫描：被中断的节点线程按 stopping 静默退场（onNodeInterrupted/
+            // onNodeFailed 的收口短路），若不在此统一补终态，终态投影将永久残留 running
+            // ——已终态实例的节点在实例页/任务页/列表投影三处永远显示「运行中」。
+            // 真实在飞（activeRunNo≠0）→ cancelled + node.interrupted 关闭事件 + trace 翻转
+            // （runs 记录不补写：中断运行无完整输入输出，事件侧 live 行已如实呈现）；
+            // 伪在飞（拒绝调度/错误策略窗口被收口打断）仅置 cancelled 不发事件——
+            // 其错误留痕由未被打断的正常路径或实例级 error 携带。
+            for (Map.Entry<String, NodeState> en : r.nodeStates.entrySet()) {
+                NodeState st = en.getValue();
+                if (!"running".equals(st.status)) {
+                    continue;
+                }
+                st.status = "cancelled";
+                String nodeId = en.getKey();
+                int runNo = st.activeRunNo;
+                if (runNo == 0) {
+                    continue;
+                }
+                NodeDef node = r.node(nodeId);
+                String message = "实例终态收口(" + statusWire(terminal) + "),节点运行被中断";
+                store.appendEvent(r.wsId, r.instanceId, "node.interrupted", Json.obj()
+                        .put("nodeId", nodeId)
+                        .put("nodeName", node == null ? nodeId : display(node))
+                        .put("runNo", runNo)
+                        .put("message", message));
+                if (node != null) {
+                    emitNodeTrace(r, node, runNo, TRACE_CANCELLED, null, null, message,
+                            List.of(), 0L, null);
+                }
             }
             r.pendingDecision = null;
             if (terminal == InstanceStatus.CANCELLED) {
@@ -1231,9 +1277,15 @@ public final class WorkflowEngine {
             data.put("exitCode", exitCode);
         }
         data.set("activatedEdges", Json.toJson(activatedEdges == null ? List.of() : activatedEdges));
-        // content 承载输出/错误文本（done/failed）；running 留空（折叠行由 summary 表达）
+        // cancelled（收口中断）打 interrupted 标记——前端 trace 卡片无法读 payload.status，
+        // 依 data.interrupted 优先于 error/exitCode 判定「已中断」，与 failed（自身失败）区分
+        if (TRACE_CANCELLED.equals(status)) {
+            data.put("interrupted", true);
+        }
+        // content 承载输出/错误文本（done/failed/cancelled）；running 留空（折叠行由 summary 表达）
         String content = TRACE_DONE.equals(status) ? (outputText == null ? "" : outputText)
-                : TRACE_FAILED.equals(status) ? (error == null ? "" : error) : null;
+                : TRACE_FAILED.equals(status) || TRACE_CANCELLED.equals(status)
+                        ? (error == null ? "" : error) : null;
         long id = r.traceIds.computeIfAbsent(node.id() + ":" + runNo, k -> SnowflakeId.next());
         try {
             taskExec.emitter().emit(EmitEvent.of(id, WF_NODE_TRACE_KIND, null,
@@ -1269,6 +1321,7 @@ public final class WorkflowEngine {
             case TRACE_RUNNING -> "运行中";
             case TRACE_DONE -> "完成";
             case TRACE_FAILED -> "失败";
+            case TRACE_CANCELLED -> "已中断";
             default -> status;
         };
         return durationMs > 0

@@ -58,7 +58,7 @@ tools: [workflow_create, workflow_get, workflow_update, workflow_delete, workflo
 - **Windows：`cmd.exe /c <command>`** —— 按 cmd 语法写（`dir`、`set`、`&&`、`^` 续行转义等）。
 - **Linux/macOS：`/bin/sh -c <command>`** —— POSIX sh 语法；`sh` **不是 bash**，`[[ ]]`、数组、`<<<` 等 bash 专有语法不可用。
 - 要跨平台复用的定义，command 需写两侧都兼容的写法（或按平台拆成不同节点、用边条件路由）。
-- cwd 固定为该工作流归属的工作区根；缺省超时 120 秒，节点 `timeoutMs`（毫秒）可覆盖；**超时/中止/取消会级联终止整个进程树**（含 shell 派生的孙进程），实例终态后命令不再有副作用。
+- cwd 固定为该工作流归属的工作区根；缺省超时 120 秒，节点 `timeoutMs`（毫秒）可覆盖；**超时/中止/取消会级联终止整个进程树**（含 shell 派生的孙进程），实例终态后命令不再有副作用。实例终态（失败/取消）收口时仍在飞的节点会被中断并落终态 `cancelled`（发 `node.interrupted` 关闭事件；不写 runs 记录、runCount 不计中断尝试——rerun 时预算完整）。
 - stdout 与 stderr 全量留档到实例 runs；出边条件求值用的 output = stdout+stderr 拼接，exitCode = 进程退出码。
 - **非零退出码 = 节点失败**（节点状态 `failed` + `node.error` 事件，不再按成功口径静默收束）：未达 `maxRuns` 自动重试（`node.retry` 事件留痕）；重试耗尽后有条件出边（onError/exitCode/always）接住则沿分支继续（实例可正常完成，返回体带 failed 计数告警）；无人接住走定义级 `onError` 策略（fail=实例失败 / askUser=挂起）。**注意**：失败被 `onError` 边接住时优先分支，fail-fast 仅在无人接住时生效。
 - `{{var}}` 替换发生在命令交给 shell **之前**，变量值原样替换、不做 shell 转义——值里含空格/引号等特殊字符时需在 command 里自行加引号；**注入面提示**：把用户输入/上游 agent 产出直接接到 command 的用法构成命令注入（值里的 `&`、`|`、`>`、`%` 会改写命令语义），外部值应经 AI 节点消化后再落命令，或由调用方自行转义。
@@ -75,6 +75,7 @@ tools: [workflow_create, workflow_get, workflow_update, workflow_delete, workflo
 - 节点失败（fail-fast，主 agent 即督导者）：`{"error":"节点「X」失败: ...","nodeId":"n2","runNo":3,"message":"...","context":[失败节点历史输出摘要],"hint":"可用 workflow_rerun 从中断节点续跑..."}`——先诊断 context，能修复再按 hint 续跑或全新运行，把结论告诉用户。命令节点非零退出码重试耗尽且无人接住时同样走此形态（message 形如「命令退出码非零: N」）。
 - 挂起等用户（onError=askUser）：`{"status":"waiting-user","pendingDecision":{...}}`——把 question 呈现给用户，决策经工作流实例页落地，之后用 `workflow_instance_status` 跟进。
 - 运行中实例在任务页实时可见（AI 节点=子 agent 会话条目，命令节点=wf.node 轨迹卡片），无需轮询。
+- 节点状态词表（`nodeStates` 与 `nodes[].status` 同构）：`pending`（未运行）/`running`（在飞）/`done`/`skipped`/`failed`（节点自身失败）/`cancelled`（实例终态收口中断的在飞运行——非节点自身失败，rerun 时按未完成重置可重跑）。终态实例的节点不会残留 `running`。
 - 字段语义：`runNo` 是**实例级全局序号**（每节点运行递增、跨节点延续，不是节点内尝试次数；节点内尝试次数看 `workflow_instance_log` 的 `attemptIndex`）；`durationMs` 是实例累计墙钟（含 rerun 前的人工间隔），rerun 后的返回另有 `resumedDurationMs`=本次续跑段时长。
 
 ### workflow_rerun 的语义与边界
