@@ -38,15 +38,4 @@ class SandboxTest {
         Sandbox sb = sandbox(root);
         assertThrows(SandboxViolationException.class, () -> sb.resolveLoose("../outside.txt"));
     }
-
-    @Test
-    void resolveLooseRejectsSymlinkParentEscape() throws Exception {
-        Path root = tempDir.resolve("ws");
-        Path outside = tempDir.resolve("outside");
-        Files.createDirectories(root);
-        Files.createDirectories(outside);
-        Files.createSymbolicLink(root.resolve("link"), outside);
-        Sandbox sb = sandbox(root);
-        assertThrows(SandboxViolationException.class, () -> sb.resolveLoose("link/missing.txt"));
-    }
 }

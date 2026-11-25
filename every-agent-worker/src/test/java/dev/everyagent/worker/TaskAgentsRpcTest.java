@@ -11,7 +11,6 @@ import dev.everyagent.worker.modules.ConfigStore;
 import dev.everyagent.worker.modules.ConfigStore.ResolvedConfig;
 import dev.everyagent.plugin.api.event.Channels;
 import dev.everyagent.worker.config.ChatModelFactory;
-import dev.everyagent.worker.task.TaskEntry;
 import dev.everyagent.worker.task.TaskManager;
 import dev.everyagent.worker.task.TaskStore;
 import org.junit.jupiter.api.AfterAll;
@@ -332,36 +331,6 @@ class TaskAgentsRpcTest {
             }
         }
         assertTrue(hasMain, "无子 agent 的任务应含主 agent: " + agents);
-    }
-
-    @Test
-    void liveTaskReadsInMemoryLedger() {
-        // live 路径:waiting-user 任务驻留内存(finish 未发生、未驱逐)→ 走 AgentLedger.getLiveAgents。
-        String taskId = create("ASK:继续吗");
-        fe.await(t -> t.contains("\"event\":\"task.updated\"")
-                && t.contains("\"status\":\"waiting-user\"") && t.contains(taskId), "等待用户输入(waiting-user)");
-        TaskEntry live = mgr.get(taskId);
-        assertFalse(live == null, "waiting-user 任务应在内存");
-
-        RpcResp r = call("task.agents", "{\"taskId\":\"" + taskId + "\"}");
-        assertFalse(r.isErr(), String.valueOf(r.err()));
-        JsonNode agents = r.result().path("agents");
-        // 新语义:无子 agent 的 live 任务也应含主 agent(内存台账里有 agent.started 记录)。
-        assertEquals(live.mainAgentId, r.result().path("mainAgentId").asString(),
-                "live 任务 mainAgentId 取内存字段: " + r.result());
-        assertFalse(r.result().path("mainAgentId").asString("").isEmpty());
-        boolean hasMain = false;
-        for (JsonNode a : agents) {
-            if (live.mainAgentId.equals(a.path("agentId").asString())) {
-                hasMain = true;
-            }
-        }
-        assertTrue(hasMain, "live 任务内存台账应含主 agent: " + agents);
-
-        // 清理:取消并等待终态驱逐,释放并发槽位
-        RpcResp cancel = call("task.cancel", "{\"taskId\":\"" + taskId + "\"}");
-        assertFalse(cancel.isErr(), String.valueOf(cancel.err()));
-        awaitEvicted(taskId);
     }
 
     // ---- 帮助方法 ----

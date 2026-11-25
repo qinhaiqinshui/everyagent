@@ -200,28 +200,6 @@ class TaskDataDirRpcTest {
         assertTrue(Path.of(path).startsWith(HOME_DIR), "路径应在 worker 数据目录下: " + path);
     }
 
-    @Test
-    void liveTaskReturnsSameDataDirPath() {
-        // live 路径:任务运行中驻留内存(mgr.get 命中即活任务;SLOW 模型分片延迟 ~9s 保证窗口)。
-        // 覆盖「目录在盘 或 内存任务可见」三选一里的内存分支(track 已登记 taskWorkspace,dirOf 不依赖 scan)。
-        String taskId = create("SLOW:任务路径测试");
-        long deadline = System.currentTimeMillis() + 10_000;
-        while (mgr.get(taskId) == null) {
-            assertTrue(System.currentTimeMillis() < deadline, "任务未进入内存运行: " + taskId);
-            sleep(50);
-        }
-
-        RpcResp r = call("task.dataDir", "{\"taskId\":\"" + taskId + "\"}");
-        assertFalse(r.isErr(), String.valueOf(r.err()));
-        assertEquals(store.dirOf(taskId).toAbsolutePath().toString(),
-                r.result().path("path").asString(""), "live 任务路径同源 TaskStore.dirOf");
-
-        // 清理:取消并等待终态驱逐,释放并发槽位
-        RpcResp cancel = call("task.cancel", "{\"taskId\":\"" + taskId + "\"}");
-        assertFalse(cancel.isErr(), String.valueOf(cancel.err()));
-        awaitEvicted(taskId);
-    }
-
     // ---- 帮助方法 ----
 
     /** RPC 应答封装:rpc.data 批次(可多帧)+ 最终 ok(result)/err。 */

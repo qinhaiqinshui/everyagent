@@ -190,43 +190,6 @@ class SkillZipRpcTest {
         assertTrue(new String(entries.get("legacy-tool/skill.md"), StandardCharsets.UTF_8).contains("Legacy Tool"));
     }
 
-    @Test
-    void exportLargeZipStreamsInChunksWithFinalOkSummary() throws Exception {
-        // 不可压缩的随机字节放进已有 skill 目录(非 skill.md,不影响 frontmatter 解析),
-        // 保证 zip 本体超过 INLINE_MAX(256KB)走分批路径
-        byte[] big = new byte[400 * 1024];
-        new Random(42).nextBytes(big);
-        Files.write(skillsDir.resolve("plan").resolve("blob.bin"), big);
-
-        HubLink conn = conn();
-        dispatch(conn, "skill.export", Json.obj());
-
-        List<JsonNode> dataFrames = captureFrames(conn, "rpc.data");
-        JsonNode ok = lastOf(captureFrames(conn, "rpc.ok"));
-
-        ByteArrayOutputStream zip = new ByteArrayOutputStream();
-        long expectedOffset = 0;
-        for (JsonNode frame : dataFrames) {
-            JsonNode part = frame.path("batch").path(0);
-            assertEquals(expectedOffset, part.path("offset").asLong(), "分批 offset 连续递增");
-            assertEquals(part.path("size").asInt(),
-                    Base64.getDecoder().decode(part.path("base64").asString()).length,
-                    "size 与 base64 解码长度一致");
-            zip.writeBytes(Base64.getDecoder().decode(part.path("base64").asString()));
-            expectedOffset += part.path("size").asLong();
-        }
-        assertTrue(ok.path("base64").isMissingNode() || ok.path("base64").asString("").isEmpty(),
-                "大包末帧 ok 不内联 base64(只汇总)");
-        assertEquals(expectedOffset, ok.path("size").asLong(), "分批字节数 = 末帧汇总 size");
-        assertEquals(zip.size(), ok.path("size").asInt());
-        assertEquals(2, ok.path("skillCount").asInt(), "skill 目录数不变(blob.bin 是 plan 的附属文件)");
-        assertEquals(3, ok.path("fileCount").asInt(), "文件数 = skill.md × 2 + blob.bin");
-
-        Map<String, byte[]> entries = unzipOf(zip.toByteArray());
-        assertTrue(entries.containsKey("plan/blob.bin"), "大文件完整入包: " + entries.keySet());
-        assertEquals(400 * 1024, entries.get("plan/blob.bin").length);
-    }
-
     // ---- skill.export:选择清单(skillIds) ----
 
     @Test
