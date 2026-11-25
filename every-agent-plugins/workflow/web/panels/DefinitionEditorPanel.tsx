@@ -12,6 +12,10 @@
  * 八种出边条件编辑器）——与实例详情面板同款隐藏规则：仅在选中后挂载，空白点按
  * 保留内容，× 关闭清选。顶部工具栏：定义名/描述 + 保存（def.save）+ 校验错误列表。
  *
+ * 属性表单排版（wf-editor-prop）：经典单列表单——每个字段占一整行，标签在上
+ * （FieldLabel：属性名加粗 + 说明弱化换行），输入框/下拉/文本域在下一行占满整行；
+ * 字段之间由容器 gap 统一呼吸，不再出现并排双列或「标签贴在上一控件下方」的歧义。
+ *
  * AI 节点会话线（无 agents 总表）：agent 名候选 = 沿边反向可达的上游 AI 节点已用名
  * （扫描逻辑见 {@link upstreamAgentDefinitions}，与后端运行时解析同语义）；
  * 下拉含「新建会话线」——本节点成为该会话线的定义节点（名 + system prompt 可编辑）；
@@ -93,10 +97,11 @@ function ensureEditorStyles(): void {
 .wf-editor-body { flex: 1; display: flex; min-height: 0; }
 .wf-editor-left { width: 218px; flex: none; border-right: 1px solid var(--border, #2a303b); background: var(--bg-secondary, #11141b); overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
 .wf-editor-mid { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.wf-editor-right { width: 292px; flex: none; border-left: 1px solid var(--border, #2a303b); background: var(--bg-secondary, #11141b); overflow-y: auto; padding: 12px; }
+.wf-editor-right { width: 292px; flex: none; border-left: 1px solid var(--border, #2a303b); background: var(--bg-secondary, #11141b); overflow-y: auto; padding: 0 14px 16px; }
 .wf-editor-canvas-wrap { flex: 1; min-height: 0; position: relative; }
 .wf-editor-canvas-hint { position: absolute; left: 10px; bottom: 8px; font-size: 11px; color: var(--text-faint, #525c6a); pointer-events: none; }
-.wf-editor-input, .wf-editor-select, .wf-editor-textarea { width: 100%; box-sizing: border-box; background: var(--bg-primary, #0b0d12); border: 1px solid var(--border, #2a303b); border-radius: 6px; color: var(--text-primary, #eef1f5); padding: 4px 8px; font-size: 13px; font-family: inherit; }
+.wf-editor-input, .wf-editor-select, .wf-editor-textarea { width: 100%; box-sizing: border-box; background: var(--bg-primary, #0b0d12); border: 1px solid var(--border, #2a303b); border-radius: 6px; color: var(--text-primary, #eef1f5); padding: 6px 9px; font-size: 13px; font-family: inherit; line-height: 1.5; transition: border-color 0.12s ease; }
+.wf-editor-input:focus, .wf-editor-select:focus, .wf-editor-textarea:focus { outline: none; border-color: var(--accent-blue, #61a5ff); }
 .wf-editor-textarea { min-height: 72px; resize: vertical; line-height: 1.6; }
 .wf-editor-btn { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border: 1px solid var(--border-strong, #3b4658); border-radius: 6px; background: transparent; color: var(--text-secondary, #aab3c2); cursor: pointer; font-size: 12.5px; white-space: nowrap; }
 .wf-editor-btn:hover { color: var(--text-primary, #eef1f5); border-color: var(--accent-blue, #61a5ff); }
@@ -110,17 +115,26 @@ function ensureEditorStyles(): void {
 .wf-editor-section-head { display: flex; align-items: center; gap: 6px; width: 100%; padding: 7px 10px; background: transparent; border: none; color: var(--text-secondary, #aab3c2); font-size: 12.5px; cursor: pointer; text-align: left; }
 .wf-editor-section-head:hover { color: var(--text-primary, #eef1f5); }
 .wf-editor-section-body { padding: 4px 10px 10px; display: flex; flex-direction: column; gap: 8px; }
-.wf-editor-card { border: 1px solid var(--border-light, #1b202a); border-radius: 8px; padding: 8px; background: var(--bg-secondary, #11141b); display: flex; flex-direction: column; gap: 6px; }
-.wf-editor-field { display: flex; flex-direction: column; gap: 4px; }
-.wf-editor-field > label { font-size: 11.5px; color: var(--text-muted, #6f7a8b); }
-.wf-editor-row { display: flex; gap: 6px; align-items: center; }
+.wf-editor-card { border: 1px solid var(--border-light, #1b202a); border-radius: 8px; padding: 10px; background: var(--bg-secondary, #11141b); display: flex; flex-direction: column; gap: 10px; }
+.wf-editor-card-head { display: flex; align-items: center; gap: 6px; }
+.wf-editor-card-title { flex: 1; min-width: 0; font-size: 12px; font-weight: 600; color: var(--text-secondary, #aab3c2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wf-editor-check { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text-secondary, #aab3c2); cursor: pointer; }
+.wf-editor-check > input { margin: 0; }
+/* ── 属性表单：经典单列表单——每行「上=属性名，下=控件」，逐行竖向排列 ── */
+.wf-editor-prop { display: flex; flex-direction: column; gap: 14px; }
+.wf-editor-prop-head { display: flex; flex-direction: column; gap: 2px; padding-bottom: 10px; border-bottom: 1px solid var(--border-light, #1b202a); }
+.wf-editor-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.wf-editor-label { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.wf-editor-label-name { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; color: var(--text-secondary, #aab3c2); line-height: 1.45; }
+.wf-editor-label-note { font-size: 11px; font-weight: 400; color: var(--text-faint, #525c6a); line-height: 1.45; }
 .wf-editor-hint { font-size: 11px; color: var(--text-faint, #525c6a); line-height: 1.5; margin: 0; }
 .wf-editor-errors { background: var(--accent-red-dim, rgba(255,107,107,0.14)); border: 1px solid var(--accent-red, #ff6b6b); border-radius: 8px; padding: 8px 12px; margin: 8px 12px; color: var(--accent-red, #ff6b6b); font-size: 12.5px; }
 .wf-editor-errors ul { margin: 4px 0 0; padding-left: 18px; }
 .wf-editor-center { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--text-muted, #6f7a8b); flex-direction: column; gap: 12px; }
-.wf-editor-prop-title { font-size: 13px; font-weight: 600; margin: 0 0 2px; }
-.wf-editor-prop-sub { font-size: 11px; color: var(--text-faint, #525c6a); margin: 0 0 10px; }
-.wf-editor-divider { border-top: 1px solid var(--border-light, #1b202a); margin: 12px 0; }
+.wf-editor-prop-title { font-size: 13.5px; font-weight: 600; margin: 0; }
+.wf-editor-prop-sub { font-size: 11px; color: var(--text-faint, #525c6a); margin: 0; }
+.wf-editor-divider { border-top: 1px solid var(--border-light, #1b202a); margin: 2px 0; }
+.wf-editor-btn-block { justify-content: center; width: 100%; }
 .wf-editor-mask { position: absolute; inset: 0; background: rgba(4, 6, 10, 0.5); z-index: 24; }
 .wf-editor-drawer-close { display: none; }
 /* 属性面板关闭按钮：桌面=面板顶部吸顶条（滚动长表单时始终可点）；移动端媒体查询覆盖为抽屉右上角浮钮 */
@@ -157,6 +171,8 @@ function ensureEditorStyles(): void {
     position: absolute; top: 8px; right: 10px; z-index: 1;
     width: 32px; height: 32px; justify-content: center; margin: 0; background: transparent;
   }
+  /* 移动端关闭键浮在内容上：标题行右侧让位，避免长节点名被遮。 */
+  .wf-editor-prop-head { padding-right: 36px; }
   .wf-editor-prop-close:active { color: var(--text-primary, #eef1f5); background: var(--bg-hover, #202631); }
   .wf-editor-icon-btn { width: 32px; height: 32px; }
   .wf-editor-btn { padding: 6px 12px; }
@@ -736,6 +752,22 @@ export default function DefinitionEditorPanel({
 
 // ─── 左栏折叠区：变量声明 ─────────────────────────────────────────────────
 
+/**
+ * 属性表单字段名（经典表单布局）：第一行=属性名（高亮可扫读），第二行=补充说明
+ * （可选，弱化色），控件另起一行由调用方紧随其后渲染。
+ */
+function FieldLabel({ name, note, icon }: { name: React.ReactNode; note?: React.ReactNode; icon?: React.ReactNode }) {
+  return (
+    <label className="wf-editor-label">
+      <span className="wf-editor-label-name">
+        {icon}
+        {name}
+      </span>
+      {note ? <span className="wf-editor-label-note">{note}</span> : null}
+    </label>
+  )
+}
+
 function Section({
   icon,
   title,
@@ -784,47 +816,56 @@ function VariablesSection({
       {vars.length === 0 ? <p className="wf-editor-hint">未声明变量。command 与 input 支持 {'{{变量名}}'} 渲染。</p> : null}
       {vars.map((v, i) => (
         <div className="wf-editor-card" key={i}>
-          <div className="wf-editor-row">
-            <input
-              className="wf-editor-input"
-              style={{ flex: 1 }}
-              value={v.name ?? ''}
-              placeholder="name"
-              onChange={e => patch(i, { name: e.target.value })}
-            />
+          <div className="wf-editor-card-head">
+            <span className="wf-editor-card-title">{v.name || `变量 ${i + 1}`}</span>
             <button className="wf-editor-icon-btn" title="删除变量" onClick={() => remove(i)}>
               <DeleteIcon size={13} />
             </button>
           </div>
-          <div className="wf-editor-row">
+          <div className="wf-editor-field">
+            <FieldLabel name="name" note={'模板里的 {{变量名}}'} />
             <input
               className="wf-editor-input"
-              style={{ flex: 1 }}
+              value={v.name ?? ''}
+              placeholder="novelName"
+              onChange={e => patch(i, { name: e.target.value })}
+            />
+          </div>
+          <div className="wf-editor-field">
+            <FieldLabel name="label" note="运行表单显示名" />
+            <input
+              className="wf-editor-input"
               value={v.label ?? ''}
-              placeholder="label（显示名）"
+              placeholder="小说名"
               onChange={e => patch(i, { label: e.target.value })}
             />
-            <label className="wf-editor-hint" style={{ display: 'flex', alignItems: 'center', gap: 3, whiteSpace: 'nowrap' }}>
-              <input
-                type="checkbox"
-                checked={v.required === true}
-                onChange={e => patch(i, { required: e.target.checked })}
-              />
-              必填
-            </label>
           </div>
-          <input
-            className="wf-editor-input"
-            value={v.defaultValue ?? ''}
-            placeholder="defaultValue（可选）"
-            onChange={e => patch(i, { defaultValue: e.target.value })}
-          />
-          <input
-            className="wf-editor-input"
-            value={v.description ?? ''}
-            placeholder="description（可选）"
-            onChange={e => patch(i, { description: e.target.value })}
-          />
+          <div className="wf-editor-field">
+            <FieldLabel name="defaultValue" note="默认值（可留空）" />
+            <input
+              className="wf-editor-input"
+              value={v.defaultValue ?? ''}
+              placeholder="默认值"
+              onChange={e => patch(i, { defaultValue: e.target.value })}
+            />
+          </div>
+          <div className="wf-editor-field">
+            <FieldLabel name="description" note="说明（可留空）" />
+            <input
+              className="wf-editor-input"
+              value={v.description ?? ''}
+              placeholder="给填写者的提示"
+              onChange={e => patch(i, { description: e.target.value })}
+            />
+          </div>
+          <label className="wf-editor-check">
+            <input
+              type="checkbox"
+              checked={v.required === true}
+              onChange={e => patch(i, { required: e.target.checked })}
+            />
+            必填
+          </label>
         </div>
       ))}
       <button className="wf-editor-btn" onClick={add}>
@@ -856,7 +897,7 @@ function PolicySection({
   return (
     <Section icon={<SettingsIcon size={14} />} title="出错策略与督导">
       <div className="wf-editor-field">
-        <label>onError（默认 supervisor）</label>
+        <FieldLabel name="onError" note="出错时的处置策略（默认 supervisor）" />
         <select
           className="wf-editor-select"
           value={onErrorValue}
@@ -870,11 +911,7 @@ function PolicySection({
       {onErrorValue === 'supervisor' ? (
         <>
           <div className="wf-editor-field">
-            <label>
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                <SupervisorIcon size={12} /> 督导模型配置
-              </span>
-            </label>
+            <FieldLabel name="督导模型配置" icon={<SupervisorIcon size={12} />} />
             <select
               className="wf-editor-select"
               value={def.supervisor?.modelConfigId ?? ''}
@@ -890,7 +927,7 @@ function PolicySection({
             </select>
           </div>
           <div className="wf-editor-field">
-            <label>督导 system prompt（空 = 默认模板）</label>
+            <FieldLabel name="督导 system prompt" note="空 = 默认模板" />
             <textarea
               className="wf-editor-textarea"
               style={{ minHeight: 56 }}
@@ -938,11 +975,13 @@ function NodePropertySection({
   const outEdges = (def.edges ?? []).filter(e => e.from === node.id)
 
   return (
-    <div>
-      <p className="wf-editor-prop-title">{node.name || node.id}</p>
+    <div className="wf-editor-prop">
+      <div className="wf-editor-prop-head">
+        <p className="wf-editor-prop-title">{node.name || node.id}</p>
+      </div>
 
       <div className="wf-editor-field">
-        <label>节点名称</label>
+        <FieldLabel name="节点名称" />
         <input
           className="wf-editor-input"
           value={node.name}
@@ -955,7 +994,7 @@ function NodePropertySection({
       {node.type === 'command' ? (
         <>
           <div className="wf-editor-field">
-            <label>command（shell 执行；支持 {'{{变量}}'} 渲染）</label>
+            <FieldLabel name="command" note={'shell 执行；支持 {{变量}} 渲染'} />
             <textarea
               className="wf-editor-textarea"
               value={node.command ?? ''}
@@ -963,28 +1002,26 @@ function NodePropertySection({
               onChange={e => patchNode(node.id, { command: e.target.value })}
             />
           </div>
-          <div className="wf-editor-row">
-            <div className="wf-editor-field" style={{ flex: 1 }}>
-              <label>timeoutMs（超时，仅命令节点）</label>
-              <input
-                className="wf-editor-input"
-                type="number"
-                min={1}
-                value={node.timeoutMs ?? 60000}
-                onChange={e => patchNode(node.id, { timeoutMs: e.target.value ? Number(e.target.value) : null })}
-              />
-            </div>
-            <div className="wf-editor-field" style={{ flex: 1 }}>
-              <label>maxRuns（循环上限 1-10）</label>
-              <input
-                className="wf-editor-input"
-                type="number"
-                min={1}
-                max={10}
-                value={node.maxRuns ?? 2}
-                onChange={e => patchNode(node.id, { maxRuns: e.target.value ? Number(e.target.value) : null })}
-              />
-            </div>
+          <div className="wf-editor-field">
+            <FieldLabel name="timeoutMs" note="超时毫秒（仅命令节点）" />
+            <input
+              className="wf-editor-input"
+              type="number"
+              min={1}
+              value={node.timeoutMs ?? 60000}
+              onChange={e => patchNode(node.id, { timeoutMs: e.target.value ? Number(e.target.value) : null })}
+            />
+          </div>
+          <div className="wf-editor-field">
+            <FieldLabel name="maxRuns" note="循环上限 1-10" />
+            <input
+              className="wf-editor-input"
+              type="number"
+              min={1}
+              max={10}
+              value={node.maxRuns ?? 2}
+              onChange={e => patchNode(node.id, { maxRuns: e.target.value ? Number(e.target.value) : null })}
+            />
           </div>
         </>
       ) : null}
@@ -993,7 +1030,7 @@ function NodePropertySection({
       {node.type === 'ai' ? (
         <>
           <div className="wf-editor-field">
-            <label>input 输入模板（支持 {'{{变量}}'} 渲染）</label>
+            <FieldLabel name="input 输入模板" note={'支持 {{变量}} 渲染'} />
             {/* 简单 textarea：不再经宿主 RichComposer/@ 引用注入胶囊（历史上已存
                 opaque token 的模板原样可编辑，运行时渲染语义不变）。 */}
             <textarea
@@ -1004,7 +1041,7 @@ function NodePropertySection({
             />
           </div>
           <div className="wf-editor-field">
-            <label>agent名</label>
+            <FieldLabel name="会话线（agent）" note="延续上游已有会话线，或在本节点新建" />
             <select
               className="wf-editor-select"
               value={referencing ? node.agent ?? '' : NEW_LINE_VALUE}
@@ -1033,7 +1070,7 @@ function NodePropertySection({
             SHOW_NODE_SYSTEM_PROMPT ? (
               <>
                 <div className="wf-editor-field">
-                  <label>system prompt（来自定义节点「{definingNode?.name || definingNode?.id || node.agent}」，只读）</label>
+                  <FieldLabel name="system prompt" note={`来自定义节点「${definingNode?.name || definingNode?.id || node.agent}」，只读`} />
                   <textarea
                     className="wf-editor-textarea"
                     style={{ minHeight: 56, opacity: 0.85 }}
@@ -1051,7 +1088,7 @@ function NodePropertySection({
           ) : (
             <>
               <div className="wf-editor-field">
-                <label>会话线名（agent；本节点为该会话线的定义节点）</label>
+                <FieldLabel name="新会话线名" note="本节点成为该会话线的定义节点，下游可延续" />
                 <input
                   className="wf-editor-input"
                   value={node.agent ?? ''}
@@ -1061,7 +1098,7 @@ function NodePropertySection({
               </div>
               {SHOW_NODE_SYSTEM_PROMPT ? (
                 <div className="wf-editor-field">
-                  <label>system prompt（可编辑；下游引用本会话线的节点只读回显）</label>
+                  <FieldLabel name="system prompt" note="下游引用本会话线的节点只读回显" />
                   <textarea
                     className="wf-editor-textarea"
                     style={{ minHeight: 56 }}
@@ -1074,7 +1111,7 @@ function NodePropertySection({
             </>
           )}
           <div className="wf-editor-field">
-            <label>模型配置（本节点生效；空 = 系统默认模型）</label>
+            <FieldLabel name="模型配置" note="本节点生效；空 = 系统默认模型" />
             <select
               className="wf-editor-select"
               value={node.modelConfigId ?? ''}
@@ -1090,7 +1127,7 @@ function NodePropertySection({
             </select>
           </div>
           <div className="wf-editor-field">
-            <label>maxRuns（循环上限 1-10）</label>
+            <FieldLabel name="maxRuns" note="循环上限 1-10" />
             <input
               className="wf-editor-input"
               type="number"
@@ -1108,11 +1145,7 @@ function NodePropertySection({
           null——后端 NON_NULL 序列化落盘不带该字段，序列化干净。 ── */}
       {node.type !== 'start' ? (
         <div className="wf-editor-field">
-          <label>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-              <JoinModeIcon size={12} /> 汇合模式（joinMode）
-            </span>
-          </label>
+          <FieldLabel name="汇合模式" note="joinMode" icon={<JoinModeIcon size={12} />} />
           <select
             className="wf-editor-select"
             value={node.joinMode === 'all' ? 'all' : 'none'}
@@ -1129,24 +1162,19 @@ function NodePropertySection({
       ) : null}
 
       {node.type === 'start' ? (
-        <p className="wf-editor-hint" style={{ marginTop: 6 }}>
-          开始节点先行执行，全图唯一；无类型特定字段。
-        </p>
+        <p className="wf-editor-hint">开始节点先行执行，全图唯一；无类型特定字段。</p>
       ) : null}
 
       {outEdges.length > 0 ? (
-        <>
-          <div className="wf-editor-divider" />
-          <p className="wf-editor-hint" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-            <ConditionIcon size={13} /> 该节点有 {outEdges.length} 条出边——选中边可在右侧编辑出边条件。
-          </p>
-        </>
+        <p className="wf-editor-hint" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          <ConditionIcon size={13} /> 该节点有 {outEdges.length} 条出边——选中边可在右侧编辑出边条件。
+        </p>
       ) : null}
 
       {node.type !== 'start' ? (
         <>
           <div className="wf-editor-divider" />
-          <button className="wf-editor-btn" onClick={onDelete} style={{ color: 'var(--accent-red, #ff6b6b)' }}>
+          <button className="wf-editor-btn wf-editor-btn-block" onClick={onDelete} style={{ color: 'var(--accent-red, #ff6b6b)' }}>
             <DeleteIcon size={13} /> 删除节点（Delete）
           </button>
         </>
@@ -1183,18 +1211,16 @@ function EdgePropertySection({
   }
 
   return (
-    <div>
-      <p className="wf-editor-prop-title">
-        {fromNode?.name ?? edge.from} → {toNode?.name ?? edge.to}
-      </p>
-      <p className="wf-editor-prop-sub">边 {edge.id} · 出边条件在源节点完成时求值一次</p>
+    <div className="wf-editor-prop">
+      <div className="wf-editor-prop-head">
+        <p className="wf-editor-prop-title">
+          {fromNode?.name ?? edge.from} → {toNode?.name ?? edge.to}
+        </p>
+        <p className="wf-editor-prop-sub">边 {edge.id} · 出边条件在源节点完成时求值一次</p>
+      </div>
 
       <div className="wf-editor-field">
-        <label>
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-            <ConditionIcon size={12} /> 条件类型（八种）
-          </span>
-        </label>
+        <FieldLabel name="条件类型" note="八种，参数按类型显隐" icon={<ConditionIcon size={12} />} />
         <select className="wf-editor-select" value={condition.type ?? 'always'} onChange={e => changeType(e.target.value as WorkflowConditionType)}>
           {CONDITION_TYPES.map(t => (
             <option key={t.value} value={t.value}>{t.label}</option>
@@ -1206,7 +1232,7 @@ function EdgePropertySection({
       {/* 参数输入按类型显隐 */}
       {(condition.type ?? 'always') === 'exitCode' ? (
         <div className="wf-editor-field">
-          <label>value（退出码）</label>
+          <FieldLabel name="value" note="期望退出码" />
           <input
             className="wf-editor-input"
             type="number"
@@ -1218,7 +1244,7 @@ function EdgePropertySection({
 
       {condition.type === 'outputContains' || condition.type === 'outputNotContains' ? (
         <div className="wf-editor-field">
-          <label>text（匹配文本）</label>
+          <FieldLabel name="text" note="匹配文本" />
           <input
             className="wf-editor-input"
             value={condition.text ?? ''}
@@ -1230,7 +1256,7 @@ function EdgePropertySection({
 
       {condition.type === 'outputEquals' ? (
         <div className="wf-editor-field">
-          <label>text（期望输出；比较时两侧忽略首尾空白）</label>
+          <FieldLabel name="text" note="期望输出；比较时两侧忽略首尾空白" />
           <input
             className="wf-editor-input"
             value={condition.text ?? ''}
@@ -1243,7 +1269,7 @@ function EdgePropertySection({
 
       {condition.type === 'outputMatches' ? (
         <div className="wf-editor-field">
-          <label>pattern（正则）</label>
+          <FieldLabel name="pattern" note="正则" />
           <input
             className="wf-editor-input"
             value={condition.pattern ?? ''}
@@ -1257,12 +1283,12 @@ function EdgePropertySection({
         <p className="wf-editor-hint">该类型无需参数。</p>
       ) : null}
 
-      <p className="wf-editor-hint" style={{ marginTop: 6 }}>
+      <p className="wf-editor-hint">
         求值语义：源节点完成后所有满足条件的出边全部激活；存在条件出边但无一满足 = 该分支走到尽头（不报错）。
       </p>
 
       <div className="wf-editor-divider" />
-      <button className="wf-editor-btn" onClick={onDelete} style={{ color: 'var(--accent-red, #ff6b6b)' }}>
+      <button className="wf-editor-btn wf-editor-btn-block" onClick={onDelete} style={{ color: 'var(--accent-red, #ff6b6b)' }}>
         <DeleteIcon size={13} /> 删除边（Delete）
       </button>
     </div>
