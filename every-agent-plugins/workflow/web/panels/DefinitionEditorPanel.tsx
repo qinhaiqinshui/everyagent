@@ -4,8 +4,7 @@
  * tab.data 约定（index.ts 打开编辑器时的参数袋）：
  *   { workspaceId: string   稳定工作区 id（workflow.* RPC 的 workspace 参数）
  *     definitionId?: string 定义 id；空/缺省 = 新建（空白定义，保存时后端赋 wf id）
- *     workspaceRoot?: string 工作区根（RichComposer @ 引用定向；缺省经注册表解析）
- *     workerId?: string     定向 worker（config.get / RichComposer 菜单；缺省经注册表解析）
+ *     workerId?: string     定向 worker（config.get；缺省经注册表解析）
  *   }
  *
  * 布局三栏：左 = palette（添加节点）+ 变量/onError+supervisor 折叠编辑区；
@@ -311,14 +310,12 @@ export function upstreamAgentDefinitions(
 export interface DefinitionEditorPanelProps {
   workspaceId: string
   definitionId?: string
-  workspaceRoot?: string
   workerId?: string
 }
 
 export default function DefinitionEditorPanel({
   workspaceId,
   definitionId,
-  workspaceRoot,
   workerId,
 }: DefinitionEditorPanelProps) {
   ensureEditorStyles()
@@ -333,9 +330,6 @@ export default function DefinitionEditorPanel({
   const [dirty, setDirty] = React.useState(false)
   const [selection, setSelection] = React.useState<CanvasSelection>(null)
   const [modelConfigs, setModelConfigs] = React.useState<WorkflowModelConfig[]>([])
-  const [resolvedRoot, setResolvedRoot] = React.useState(workspaceRoot ?? '')
-  const [resolvedWorker, setResolvedWorker] = React.useState(workerId ?? '')
-  const [fallbackTokenLabel, setFallbackTokenLabel] = React.useState('')
   const viewportCenterRef = React.useRef<{ x: number; y: number } | null>(null)
   // ── 移动端抽屉（≤768px）：left=palette/变量/策略，right=属性面板。
   const isMobile = useIsMobile()
@@ -355,14 +349,10 @@ export default function DefinitionEditorPanel({
       setLoading(true)
       setLoadError(null)
       try {
-        let root = workspaceRoot ?? ''
         let worker = workerId ?? ''
-        if (!root || !worker) {
+        if (!worker) {
           const ref = await resolveWorkspaceRef(workspaceId)
-          if (ref) {
-            root = root || ref.root
-            worker = worker || ref.workerId
-          }
+          if (ref) worker = ref.workerId
         }
         const [loaded, configs] = await Promise.all([
           definitionId
@@ -373,8 +363,6 @@ export default function DefinitionEditorPanel({
             : Promise.resolve<WorkflowModelConfig[]>([])).catch(() => [] as WorkflowModelConfig[]),
         ])
         if (cancelled) return
-        setResolvedRoot(root)
-        setResolvedWorker(worker)
         setModelConfigs(configs)
         setDef(loaded ?? blankDefinition(workspaceId))
         setDirty(!loaded)
@@ -388,7 +376,7 @@ export default function DefinitionEditorPanel({
     return () => {
       cancelled = true
     }
-  }, [workspaceId, definitionId, workspaceRoot, workerId, reloadNonce])
+  }, [workspaceId, definitionId, workerId, reloadNonce])
 
   // ── 定义状态更新入口（统一置 dirty）。
   const updateDef = React.useCallback((updater: (d: WorkflowDefinition) => WorkflowDefinition) => {
@@ -727,10 +715,6 @@ export default function DefinitionEditorPanel({
                 node={selectedNode}
                 def={def}
                 modelConfigs={modelConfigs}
-                resolvedRoot={resolvedRoot}
-                resolvedWorker={resolvedWorker}
-                fallbackTokenLabel={fallbackTokenLabel}
-                setFallbackTokenLabel={setFallbackTokenLabel}
                 patchNode={patchNode}
                 updateDef={updateDef}
                 onDelete={deleteSelection}
@@ -929,10 +913,6 @@ function NodePropertySection({
   node,
   def,
   modelConfigs,
-  resolvedRoot,
-  resolvedWorker,
-  fallbackTokenLabel,
-  setFallbackTokenLabel,
   patchNode,
   updateDef,
   onDelete,
@@ -940,15 +920,10 @@ function NodePropertySection({
   node: WorkflowNodeDef
   def: WorkflowDefinition
   modelConfigs: WorkflowModelConfig[]
-  resolvedRoot: string
-  resolvedWorker: string
-  fallbackTokenLabel: string
-  setFallbackTokenLabel: (v: string) => void
   patchNode: (id: string, patch: Partial<WorkflowNodeDef>) => void
   updateDef: (updater: (d: WorkflowDefinition) => WorkflowDefinition) => void
   onDelete: () => void
 }) {
-  const ui = getPluginContext().ui
 
   /** 上游会话线扫描（候选下拉 + 引用回显）：与后端运行时解析同语义。 */
   const upstreamAgents = React.useMemo(
@@ -1018,48 +993,15 @@ function NodePropertySection({
       {node.type === 'ai' ? (
         <>
           <div className="wf-editor-field">
-            <label>input 输入模板（支持 {'{{变量}}'} 与胶囊引用）</label>
-            {ui.RichComposer ? (
-              <ui.RichComposer
-                value={node.input ?? ''}
-                onChange={v => patchNode(node.id, { input: v })}
-                placeholder="AI 节点输入模板……"
-                workspace={resolvedRoot || undefined}
-                workerId={resolvedWorker || undefined}
-                enableAt
-              />
-            ) : (
-              <>
-                <textarea
-                  className="wf-editor-textarea"
-                  value={node.input ?? ''}
-                  placeholder="AI 节点输入模板……（宿主未注入富输入框）"
-                  onChange={e => patchNode(node.id, { input: e.target.value })}
-                />
-                {/* 降级路径的胶囊手工插入：buildComposerToken 构造 opaque token 追加进模板 */}
-                <div className="wf-editor-row" style={{ marginTop: 4 }}>
-                  <input
-                    className="wf-editor-input"
-                    style={{ flex: 1 }}
-                    value={fallbackTokenLabel}
-                    placeholder="胶囊标签（如文件路径）"
-                    onChange={e => setFallbackTokenLabel(e.target.value)}
-                  />
-                  <button
-                    className="wf-editor-btn"
-                    onClick={() => {
-                      const label = fallbackTokenLabel.trim()
-                      if (!label) return
-                      const token = ui.buildComposerToken({ kind: 'file', label, payload: { path: label } })
-                      patchNode(node.id, { input: `${node.input ?? ''}${node.input ? ' ' : ''}${token}` })
-                      setFallbackTokenLabel('')
-                    }}
-                  >
-                    插入胶囊
-                  </button>
-                </div>
-              </>
-            )}
+            <label>input 输入模板（支持 {'{{变量}}'} 渲染）</label>
+            {/* 简单 textarea：不再经宿主 RichComposer/@ 引用注入胶囊（历史上已存
+                opaque token 的模板原样可编辑，运行时渲染语义不变）。 */}
+            <textarea
+              className="wf-editor-textarea"
+              value={node.input ?? ''}
+              placeholder="AI 节点输入模板……"
+              onChange={e => patchNode(node.id, { input: e.target.value })}
+            />
           </div>
           <div className="wf-editor-field">
             <label>agent名</label>

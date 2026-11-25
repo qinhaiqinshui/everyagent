@@ -23,7 +23,7 @@
  * ── tab.data 参数约定（openTab 的 data 袋，宿主透明中转、本插件自解释） ──
  * - workflow-editor（tabTypes.tsx）：{ workspaceId: 稳定工作区 id（workflow.* RPC 的
  *     workspace 参数）；definitionId?: 定义 id，空/缺省=新建（保存时后端赋 wf id）；
- *     workspaceRoot?/workerId?: 富输入框与 RPC 定向（缺省经注册表解析） }
+ *     workerId?: RPC 定向（config.get；缺省经注册表解析） }
  *   打开方式：ctx.ui.openTab('workflow-editor', { workspaceId, definitionId }, 标题)
  * - workflow-instance（tabTypes.tsx）：{ instanceId: 实例 id（wi_…）；workspaceId?（回开定义用） }
  *   实例运行页：画布只读回放 + instance.events 长轮询 + 决策横幅。

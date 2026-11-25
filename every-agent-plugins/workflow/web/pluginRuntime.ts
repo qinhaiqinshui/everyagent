@@ -5,8 +5,8 @@
  * （插件代码不得引用宿主 web 模块，一切宿主能力经 ctx 暴露）。
  *
  * 额外提供 workspaceId（稳定 id）→ {root, workerId} 反查：workflow.* RPC 的
- * workspace 参数是稳定工作区 id（wire 契约），而 RichComposer 的 @ 引用需要
- * workspace 根路径、RPC 定向需要 workerId——两者都经注册表解析。
+ * workspace 参数是稳定工作区 id（wire 契约），而 task.run 的 workspace 参数是
+ * 工作区根路径、RPC 定向需要 workerId——两者都经注册表解析。
  */
 import type { PluginContext, PluginWorkspaceEntry } from '@everyagent/plugin-api'
 
@@ -23,7 +23,7 @@ export function getPluginContext(): PluginContext {
   return pluginCtx
 }
 
-/** workspaceId 解析结果：根路径（RichComposer @ 引用）+ 归属 worker（RPC 定向）。 */
+/** workspaceId 解析结果：根路径（task.run workspace 参数）+ 归属 worker（RPC 定向）。 */
 export interface WorkspaceRef {
   workspaceId: string
   root: string

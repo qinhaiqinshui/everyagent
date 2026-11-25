@@ -3,7 +3,7 @@
  * workflow-manage）。
  *
  * tab.data 参数约定见 index.ts 头注释（openTab 的 data 袋，宿主透明中转）：
- * - workflow-editor：{ workspaceId, definitionId?, workspaceRoot?, workerId? }
+ * - workflow-editor：{ workspaceId, definitionId?, workerId? }
  * - workflow-instance：{ instanceId, workspaceId? }
  * - workflow-manage：{ workspaceId }（每个工作区一个管理标签页，重复打开聚焦）
  */
@@ -45,7 +45,6 @@ export const workflowEditorTabType: UiWorkspaceTabTypeDefinition = {
       <LazyDefinitionEditorPanel
         workspaceId={data.workspaceId ?? ''}
         definitionId={data.definitionId || undefined}
-        workspaceRoot={data.workspaceRoot || undefined}
         workerId={data.workerId || undefined}
       />
     )
