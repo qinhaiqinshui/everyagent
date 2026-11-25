@@ -381,7 +381,7 @@ function InstanceRow({
         </div>
       ) : null}
       {errorMessage ? (
-        <div style={cardErrorStyle} title="实例失败原因">✕ {errorMessage.slice(0, 80)}</div>
+        <div style={cardErrorStyle}>✕ {errorMessage.slice(0, 80)}</div>
       ) : null}
     </div>
   )
