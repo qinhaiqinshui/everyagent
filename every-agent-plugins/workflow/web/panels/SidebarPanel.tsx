@@ -8,9 +8,9 @@
  * - 分组卡片（padding 6 / radius-md / border-light / bg-primary）：组头=折叠箭头（仅点击图标
  *   折叠，rotate 过渡）+ 粗体组名 + 右侧图标按钮（▶ 运行 / 管理 / ⋯ 刷新）；
  * - 组内实例行**直接平铺**（无子区头、无折叠、无计数——数量与状态在行卡片药丸自明）；
- * - 行卡片（.ui-row）=**单行**：粗体工作流名（弹性占位、悬浮 title 见实例 id）+
- *   可点击切换的相对/绝对时间 + 状态药丸 + hover 浮现的 ⋯「更多操作」菜单；
- *   有运行参数时另起一行只显示参数值（「；」分隔，单行溢出可见不截断）；
+ * - 行卡片（.ui-row）=两行：首行粗体实例 id + 运行参数（「；」分隔只显示参数值，
+ *   单行省略）+ hover 浮现的 ⋯「更多操作」菜单；次行工作流名（弹性占位、单行
+ *   省略）+ 可点击切换的相对/绝对时间 + 状态药丸；
  *   失败实例追加错误行，尾组「工作区缺失」追加归属 chip 行。
  *
  * 与任务面板的一处刻意差异：空工作区也展示——任务在输入框创建、侧栏可隐藏空组；工作流
@@ -356,9 +356,12 @@ function InstanceRow({
         </div>
       ) : null}
       <div style={cardMetaRowStyle}>
-        <span style={cardTitleStyle}>{inst.definitionName || inst.definitionId}</span>
-        <CardTime ms={inst.createdAt} label="创建于" />
-        <span style={{ ...cardPillStyle, color: pillColor }}>{instanceStatusLabel(inst.status)}</span>
+        <span style={cardIdStyle}>{inst.id}</span>
+        {varsText ? (
+          // 运行参数跟在实例 id 后（「；」分隔只显示参数值，单行省略），
+          // title 悬浮可看全量。
+          <div style={cardVarsStyle} title={varsText}>{varsText}</div>
+        ) : null}
         {!batchActive ? (
           <RowActions
             items={menuItems}
@@ -370,11 +373,13 @@ function InstanceRow({
           />
         ) : null}
       </div>
-      {varsText ? (
-        // 运行参数行：只显示参数值（「；」分隔），单行不换行、溢出可见不截断
-        // （显示不下就露出多少算多少——title 悬浮可看全量）。
-        <div style={cardVarsStyle} title={varsText}>{varsText}</div>
-      ) : null}
+      <div style={cardMetaRowStyle}>
+        <span style={cardNameStyle} title={inst.definitionName || inst.definitionId}>
+          {inst.definitionName || inst.definitionId}
+        </span>
+        <CardTime ms={inst.createdAt} label="创建于" />
+        <span style={{ ...cardPillStyle, color: pillColor }}>{instanceStatusLabel(inst.status)}</span>
+      </div>
       {workspaceChip ? (
         <div style={cardSubRowStyle}>
           <span style={chipStyle} title={inst.workspaceId}>{workspaceChip}</span>
@@ -1122,16 +1127,24 @@ const cardStyle: React.CSSProperties = {
   cursor: 'pointer',
 }
 
-/** 实例行首列名称：粗体单行省略，flex:1 占据剩余宽度（时间/药丸/⋯ 靠右）。 */
-const cardTitleStyle: React.CSSProperties = {
+/** 实例行首列 id：粗体单行、不收缩（短 id 长度恒定，运行参数接在后面）。 */
+const cardIdStyle: React.CSSProperties = {
   fontSize: 'var(--text-sm)',
   fontWeight: 700,
+  flexShrink: 0,
+  whiteSpace: 'nowrap',
+  color: 'var(--text-primary)',
+}
+
+/** 次行工作流名：弹性占位、单行省略（title 悬浮可看全名），时间/药丸靠右。 */
+const cardNameStyle: React.CSSProperties = {
+  fontSize: 'var(--text-xs)',
+  color: 'var(--text-secondary)',
   minWidth: 0,
   flex: 1,
   overflow: 'hidden',
-  textOverflow: 'clip',
+  textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',
-  color: 'var(--text-primary)',
 }
 
 const cardMetaRowStyle: React.CSSProperties = {
@@ -1143,17 +1156,18 @@ const cardMetaRowStyle: React.CSSProperties = {
 }
 
 /**
- * 运行参数行：只显示参数值（「；」分隔）。刻意 nowrap + 溢出可见——显示不下
- * 也不截断（无 ellipsis/overflow:hidden），能显示多少就显示多少；完整内容
- * 在行悬浮 title。
+ * 运行参数：跟在实例 id 之后、同行尾有 ⋯ 菜单按钮，故取 flex 弹性占位 + 单行
+ * 省略（原独立行刻意「溢出可见不截断」，并进首行后溢出可见会压到尾随按钮）；
+ * 完整内容在悬浮 title。
  */
 const cardVarsStyle: React.CSSProperties = {
   fontSize: 'var(--text-xs)',
   color: 'var(--text-muted)',
-  whiteSpace: 'nowrap',
-  overflow: 'visible',
-  textOverflow: 'clip',
+  flex: '1 1 0',
   minWidth: 0,
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
 }
 
 const cardTimeStyle: React.CSSProperties = {
