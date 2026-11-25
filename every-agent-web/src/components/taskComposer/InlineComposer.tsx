@@ -514,7 +514,12 @@ const InlineComposer = React.forwardRef<InlineComposerHandle, InlineComposerProp
 
   const editorRef = React.useRef<HTMLDivElement | null>(null)
   const tokensRef = React.useRef<ChatComposerToken[]>(tokens)
-  const lastEmittedRef = React.useRef<string>(rawContent)
+  // null = 尚未与 DOM 同步过。不能初始化为 rawContent：下方 rebuild 守卫以
+  // 「rawContent === 上次上报值」判等跳过重建，首挂时若把初始值记作「已上报」，
+  // 挂载即非空的受控值（如 workflow AI 节点 input 模板反显、草稿恢复）永远不会
+  // 写进 contentEditable（React 渲染的 div 无 children），输入框空白且 placeholder
+  // 状态也无人维护。null 哨兵使首挂必同步一次 DOM，此后恢复「等值跳过」语义。
+  const lastEmittedRef = React.useRef<string | null>(null)
   /** 是否处于输入法合成中（composition 进行中）。 */
   const isComposingRef = React.useRef(false)
 
@@ -542,6 +547,7 @@ const InlineComposer = React.forwardRef<InlineComposerHandle, InlineComposerProp
   }, [tokens])
 
   // 外部 rawContent 变化且与上次自上报内容不同 → 重建 DOM（保护光标：相同则跳过重渲染）。
+  // 首挂（lastEmittedRef 为 null 哨兵）也走一次重建，把初始受控值渲染进 DOM。
   React.useEffect(() => {
     const root = editorRef.current
     if (!root) return
