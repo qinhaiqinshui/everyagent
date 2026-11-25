@@ -33,6 +33,12 @@
 8b. 会话线引用：再加一个下游 AI 节点连线 → 其下拉出现「writer · 由「…」定义」；
    选中后 system prompt 只读回显定义节点值、模型可另选；回定义节点改 system prompt
    → 引用节点回显同步变化（不存副本）。
+8c. 自动布局：搭线性 + 并行分支 + 多路汇合图，再连一条回指边（如 C→B）并留一个
+   孤立节点 → 工具栏「自动布局」→ 节点按层重排（start 第 0 列、层内无重叠，回边
+   从右层弯回左层，孤立节点集中最深列右侧独立列），dirty ● 出现 + toast 汇报
+   「N 个节点排为 M 层；K 条回边留作回线；孤立节点 X 个」，视口回到原点；手工
+   微调后再点一次仍正常；保存 → 重开还原新坐标，其余字段不变。60 节点规模抽查
+   一次（无重叠、列内连线交叉可接受）。
 
 ## 2. 侧边栏（只展示运行实例，推送驱动）
 
@@ -218,6 +224,38 @@
    改提示词后，下游引用节点重跑即用新值（引用节点不存副本）。
 9. **同工作区隔离**：同一 worker 上两个工作区各建同名定义/实例互不可见
    （`workflow.def.list`/`instance.list` 按 workspace 过滤）。
+10. **joinMode=all 等齐触发**：搭「开始→A/B 两并行分支→汇合 X（joinMode=all）」，
+    X 有 A、B 两条入边 → 实例运行后 X **只执行一次**（runs/事件各一条），
+    `node.started`/`node.output` 的 runCount=1；对照不写 joinMode 的同构图 →
+    X 被两条入边各触发一次（执行两次、runCount=2）。给 X 配回指边（X→A 循环）
+    再跑：每轮等齐 A、B 两条入边到达才触发一次，maxRuns 按**触发次数**计
+    （如 maxRuns=3 → 汇合触发 3 次后额度耗尽失败）。
+11. **joinMode 部分分支不达的静默 skip**：两分支汇入 X（joinMode=all），A 分支
+    末端条件边不满足（如 outputContains 检查未命中、节点走到尽头）→ X 只收到
+    B 的到达 → 整图静默后 X 置 `skipped` 终态、events.jsonl 出现 `node.skipped`
+    （message 含「join 汇合未等齐」），实例收束 done；变体：A 命令 `exit 1` 被
+    onError 出边接往收尾节点 → A 终态 failed、X 同样静默 skip、实例 done 且
+    返回体带 failed 告警；对照：A 失败且无人接住 → 实例直接走定义级 onError
+    （fail=实例 failed），join 节点不参与抢救。
+12. **PowerShell 命令节点（Windows 宿主）**：命令节点产出中文（如
+    `python -c "print('中文输出')"` 或 `Write-Output 中文`）→ runs 留档与
+    出边 outputContains 中文匹配均正常 UTF-8（无 GBK 乱码）；`exit 3` → 节点
+    失败、message 形如「命令退出码非零: 3」；双引号包中文变量
+    （`python do.py "{{novelName}}"`）→ 参数原样到达；`python3 xxx` → 命令
+    解析失败（Windows 无 python3 别名，验证文档口径）。
+13. **失败首败即分流**：命令节点 `exit 1` + 一条 onError/exitCode 出边 →
+    **第一次失败**即沿分支接管（events.jsonl 只有失败的 node.error，**无
+    node.retry 事件**；节点终态 failed、实例可收束 done 带 warning）；同图去掉
+    条件出边 → 首败直接走定义级 onError（fail=实例 failed / askUser=挂起）；
+    读存量旧实例（含历史 node.retry 数据）→ 事件读取侧原样投影不报错。
+14. **maxRuns 记账口径（执行即消耗）**：长跑命令节点 A（`ping -n 30 127.0.0.1`，
+    maxRuns=2）与快速失败节点 B（`exit 1` 无人接）并行 → B 失败、实例 failed
+    收口时 A 被中断（`node.interrupted` 事件 + 终态投影 cancelled、无 runs
+    记录）→ 终态投影与 node.started 事件里 A 的 runCount=**1**（开跑即计、
+    中断不返还）；rerun 失败实例重跑 B → A 的 runCount 延续不重置（重开绕上限
+    但继续累计）；节点摘要 nodes[].runCount 与事件水位（node.started/node.output
+    的 runCount/maxRuns）同口径。对照超时路径：A 单独跑 `timeoutMs:2000` 超时
+    → 节点失败走错误策略（runs 记录含 error、node.error 事件），非中断口径。
 
 ## 7. hidden 工具（任务 AI 侧观察点）
 

@@ -227,7 +227,7 @@ public class MyFirstPlugin implements EveryAgentPlugin {
 | 方法 | 行号 | 用途 |
 |---|---|---|
 | `sandbox()` | `:29` | 沙箱门面（SandboxBackend）：查 `id()` 判后端、委托挂载 |
-| `nativeExec()` | `:32` | 宿主原生进程执行器（argv 直传 + 超时 + 输出上限；git 等受控操作用）。**cwd 不得位于插件目录**（worker 直接拒绝并返回失败结果——长驻子进程以插件目录为工作目录会锁死目录、令卸载必败），改用工作区或临时目录 |
+| `nativeExec()` | `:32` | 宿主原生进程执行器（argv 直传 + 超时 + 输出上限；git 等受控操作用）。另含 `spawnPowerShell(command, ...)`：PowerShell 方言脚本执行，复用 worker 核心共享管线（临时 .ps1〔UTF-8 BOM〕+ PATH 探测 pwsh 优先/回退内置 powershell.exe 5.1 + stdout/stderr 文件承载防 OEM 转码 + CLIXML/ANSI 还原 + 退出码传导）；宿主无法解析 PowerShell 可执行文件时抛 `IllegalStateException`，调用方可捕获回退其它 shell。**cwd 不得位于插件目录**（worker 直接拒绝并返回失败结果——长驻子进程以插件目录为工作目录会锁死目录、令卸载必败），改用工作区或临时目录 |
 | `workspaces()` | `:35` | 工作区管理器（多工作区注册表、jailed 路径解析） |
 | `tokenEstimator()` | `:40` | Token 估算器（内置或插件注册的自定义实现）；`TokenEstimator` SPI 只含 `estimate(text, configId)` 一个方法 |
 | `slashTokens()` | `:43` | 任务级 slash token 只读查询（任务级开关的**真相源**读取口：`tokensOf(taskId)` / `hasKind(taskId, kind)`，见 `SlashTokenService`；AI 审议 / 无人值守 / 禁用网络的开关判定都经此，不再走 `metadata`） |

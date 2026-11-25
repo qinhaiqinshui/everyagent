@@ -71,7 +71,7 @@ has_children: false
 | 方法 | 一句话 | 消费范例 |
 |---|---|---|
 | `SandboxBackend sandbox()` | 沙箱门面：查后端 id、委托挂载 | sandbox 三家 |
-| `nativeExec()` | 宿主原生进程执行器（argv 直传 + 超时 + 输出上限）。cwd 不得位于插件目录（worker 拒绝） | git |
+| `nativeExec()` | 宿主原生进程执行器（argv 直传 + 超时 + 输出上限）；另有 `spawnPowerShell(command, ...)` 执行 PowerShell 方言脚本（worker 共享管线：临时 .ps1 + pwsh 优先/5.1 回退 + 输出文件承载防 OEM 转码 + 退出码传导；宿主无 PowerShell 抛 IllegalStateException）。cwd 不得位于插件目录（worker 拒绝） | git、workflow（Windows 命令节点） |
 | `workspaces()` | 多工作区注册表、jailed 路径解析 | git（每方法首行 `sandboxFor`） |
 | `tokenEstimator()` | token 估算器（内置或插件注册版） | token-estimator |
 | `SlashTokenService slashTokens()` | 任务级 slash token 只读查询：任务级开关的真相源读取口（`tokensOf(taskId)` / `hasKind(taskId, kind)`，见 `SlashTokenService`） | ai-review、unattended |

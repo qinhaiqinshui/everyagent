@@ -80,7 +80,9 @@ public final class WorkflowTools {
             + "校验失败返回 {error, details[逐项原因]}。",
             resultConverter = PlainTextToolCallResultConverter.class)
     public String workflow_create(
-            @ToolParam(description = "完整工作流定义 JSON 文本(结构见「工作流编排」技能)") String definition) {
+            @ToolParam(description = "完整工作流定义 JSON 文本(结构见「工作流编排」技能;节点可选 joinMode:"
+                    + " none(缺省,每条激活入边到达即执行一次)/all(等齐全部入边各激活一次才触发一次执行,"
+                    + "多入边汇合场景用,maxRuns 按触发执行次数计))") String definition) {
         return saveDefinitionJson(null, definition);
     }
 
@@ -101,7 +103,9 @@ public final class WorkflowTools {
             resultConverter = PlainTextToolCallResultConverter.class)
     public String workflow_update(
             @ToolParam(description = "要更新的定义 id") String id,
-            @ToolParam(description = "更新后的完整定义 JSON 文本(其 id 以参数 id 为准)") String definition) {
+            @ToolParam(description = "更新后的完整定义 JSON 文本(其 id 以参数 id 为准;节点可选 joinMode:"
+                    + " none(缺省,每条激活入边到达即执行一次)/all(等齐全部入边各激活一次才触发一次执行,"
+                    + "多入边汇合场景用,maxRuns 按触发执行次数计))") String definition) {
         return saveDefinitionJson(requireId(id), definition);
     }
 
@@ -148,8 +152,10 @@ public final class WorkflowTools {
 
     @Tool(description = "在当前任务内运行一个工作流并<b>阻塞至终态</b>(实例运行期间本工具不返回,节点过程以子 agent 会话"
             + "与 wf.node 轨迹形式实时呈现在任务页)。参数:definitionId 必填;variables 可选(JSON 文本 {k:v});"
-            + "workspace 可选(缺省=当前任务工作区)。返回:done → {instanceId,status:'done',durationMs,nodes:[节点摘要]};"
-            + "failed → {error,nodeId,runNo,message,context(失败节点历史输出摘要),hint:可用 workflow_rerun 从中断节点续跑};"
+            + "workspace 可选(缺省=当前任务工作区)。返回:done → {instanceId,status:'done',durationMs,nodes:[节点摘要]"
+            + ",warning?(存在 pending/failed 节点时携带未收净告警——失败被条件出边接住时实例仍收束 done)};"
+            + "failed → {error,nodeId,runNo,message,context(失败节点历史输出摘要),hint:可用 workflow_rerun 从中断节点续跑}"
+            + "(节点失败不自动重试:首败即分流——有满足条件的出边则分支接管,无人接住才走定义级 onError 策略);"
             + "cancelled/waiting-user → 结构化说明。校验失败返回 {error,details[逐项原因]}。",
             resultConverter = PlainTextToolCallResultConverter.class)
     public String workflow_run(
