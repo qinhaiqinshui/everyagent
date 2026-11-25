@@ -11,7 +11,7 @@
  * - 行卡片（.ui-row）=两行：首行粗体实例 id + 运行参数（「；」分隔只显示参数值，
  *   单行省略）+ hover 浮现的 ⋯「更多操作」菜单；次行工作流名（弹性占位、单行
  *   省略）+ 可点击切换的相对/绝对时间 + 状态药丸；
- *   失败实例追加错误行，尾组「工作区缺失」追加归属 chip 行。
+ *   尾组「工作区缺失」追加归属 chip 行。
  *
  * 与任务面板的一处刻意差异：空工作区也展示——任务在输入框创建、侧栏可隐藏空组；工作流
  * 的定义创建入口在管理页（组头「管理」直达），隐藏空组会让首个工作流无处可建。
@@ -321,10 +321,6 @@ function InstanceRow({
       onSelect: onDelete,
     },
   ]
-  const errorMessage =
-    inst.error && typeof inst.error === 'object'
-      ? String((inst.error as { message?: unknown }).message ?? '')
-      : ''
   return (
     <div
       className="ui-row"
@@ -384,9 +380,6 @@ function InstanceRow({
         <div style={cardSubRowStyle}>
           <span style={chipStyle} title={inst.workspaceId}>{workspaceChip}</span>
         </div>
-      ) : null}
-      {errorMessage ? (
-        <div style={cardErrorStyle}>✕ {errorMessage.slice(0, 80)}</div>
       ) : null}
     </div>
   )
@@ -1197,14 +1190,6 @@ const cardSubRowStyle: React.CSSProperties = {
   minWidth: 0,
   fontSize: 'var(--text-xs)',
   color: 'var(--text-muted)',
-}
-
-const cardErrorStyle: React.CSSProperties = {
-  fontSize: 'var(--text-xs)',
-  color: 'var(--accent-red)',
-  overflow: 'hidden',
-  textOverflow: 'ellipsis',
-  whiteSpace: 'nowrap',
 }
 
 const chipStyle: React.CSSProperties = {
