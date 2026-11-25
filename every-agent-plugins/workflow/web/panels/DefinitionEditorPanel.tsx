@@ -33,6 +33,7 @@ import WorkflowCanvas, {
   type CanvasNodeView,
   type CanvasSelection,
 } from '../canvas/WorkflowCanvas'
+import { computeAutoLayout } from '../canvas/autoLayout'
 import { getPluginContext, resolveWorkspaceRef } from '../pluginRuntime'
 import { useIsMobile } from '../useIsMobile'
 import {
@@ -52,10 +53,12 @@ import {
 import { modelConfigOptionLabel, refreshModelConfigs, type WorkflowModelConfig } from '../modelConfigStore'
 import {
   AiNodeIcon,
+  AutoLayoutIcon,
   CloseIcon,
   CommandNodeIcon,
   ConditionIcon,
   DeleteIcon,
+  JoinModeIcon,
   PlusIcon,
   SettingsIcon,
   StartNodeIcon,
@@ -328,6 +331,8 @@ export default function DefinitionEditorPanel({
   // ── 移动端抽屉（≤768px）：left=palette/变量/策略，right=属性面板。
   const isMobile = useIsMobile()
   const [mobileDrawer, setMobileDrawer] = React.useState<'none' | 'left' | 'right'>('none')
+  // 自动布局 nonce：自增驱动画布视口滚回原点（重排后新网格从原点铺开）。
+  const [viewResetNonce, setViewResetNonce] = React.useState(0)
 
   // ── 加载：defGet（新建=空白定义）+ config.get 重拉（插件收不到 config.changed，每次打开重拉）。
   React.useEffect(() => {
@@ -499,11 +504,44 @@ export default function DefinitionEditorPanel({
     }
   }, [def, workspaceId, saving, ui])
 
+  // ── 自动布局（工具栏按钮）：Sugiyama 简化分层（算法见 canvas/autoLayout.ts）。
+  //    结果经 updateDef 一次性写回全部节点 x/y——与手工拖拽同一条定义更新链
+  //    （dirty/保存语义一致），节点其余字段与定义其它部分不动；视口带回原点。
+  const handleAutoLayout = React.useCallback(() => {
+    if (!def) return
+    const nodeCount = (def.nodes ?? []).length
+    if (nodeCount === 0) {
+      ui.showToast('定义中没有节点，无需布局', 'info')
+      return
+    }
+    const layout = computeAutoLayout(def)
+    updateDef(d => ({
+      ...d,
+      nodes: (d.nodes ?? []).map(n => {
+        const p = layout.positions.get(n.id)
+        return p ? { ...n, x: Math.round(p.x), y: Math.round(p.y) } : n
+      }),
+    }))
+    setViewResetNonce(n => n + 1)
+    const parts = [`${nodeCount} 个节点排为 ${layout.layerCount} 层`]
+    if (layout.backEdgeCount > 0) parts.push(`${layout.backEdgeCount} 条回边留作回线`)
+    if (layout.orphanCount > 0) parts.push(`孤立节点 ${layout.orphanCount} 个集中在右侧`)
+    ui.showToast(`已自动布局：${parts.join('；')}（可继续手工微调，保存后持久化）`, 'success')
+  }, [def, ui, updateDef])
+
   // ── 画布视图模型组装（缺坐标兜底 + 副标题 + 条件短标签）。
   const canvasNodes: CanvasNodeView[] = React.useMemo(() => {
     return (def?.nodes ?? []).map((n, i) => {
       const pos = nodePos(n, i)
-      return { id: n.id, type: n.type, name: n.name, x: pos.x, y: pos.y, subtitle: nodeSubtitle(n) }
+      return {
+        id: n.id,
+        type: n.type,
+        name: n.name,
+        x: pos.x,
+        y: pos.y,
+        subtitle: nodeSubtitle(n),
+        joinMode: n.joinMode,
+      }
     })
   }, [def])
 
@@ -566,6 +604,14 @@ export default function DefinitionEditorPanel({
           onChange={e => updateDef(d => ({ ...d, description: e.target.value }))}
         />
         {dirty ? <span title="有未保存更改" style={{ color: 'var(--accent-amber, #f7bd54)' }}>●</span> : null}
+        <button
+          type="button"
+          className="wf-editor-btn"
+          title="按图结构一键分层排布：回指边留作回线、孤立节点靠右；重写全部节点坐标（可继续手工微调）"
+          onClick={handleAutoLayout}
+        >
+          <AutoLayoutIcon size={15} /> 自动布局
+        </button>
         {isMobile ? (
           <>
             <button
@@ -643,6 +689,7 @@ export default function DefinitionEditorPanel({
               onNodeMove={(id, x, y) => patchNode(id, { x, y })}
               onCreateEdge={createEdge}
               viewportCenterRef={viewportCenterRef}
+              resetViewNonce={viewResetNonce}
               style={{ position: 'absolute', inset: 0 }}
             />
             <div className="wf-editor-canvas-hint">
@@ -909,9 +956,6 @@ function NodePropertySection({
   return (
     <div>
       <p className="wf-editor-prop-title">{node.name || node.id}</p>
-      <p className="wf-editor-prop-sub">
-        {node.type} · x={Math.round(node.x ?? 0)} y={Math.round(node.y ?? 0)} · {node.id}
-      </p>
 
       <div className="wf-editor-field">
         <label>节点名称</label>
@@ -1104,6 +1148,31 @@ function NodePropertySection({
         </>
       ) : null}
 
+      {/* ── 汇合模式（command/ai 有入边语义；start 无入边不显示）。写回走
+          patchNode（与其它字段同一条 dirty/保存链）；选「每次到达即执行」写回
+          null——后端 NON_NULL 序列化落盘不带该字段，序列化干净。 ── */}
+      {node.type !== 'start' ? (
+        <div className="wf-editor-field">
+          <label>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+              <JoinModeIcon size={12} /> 汇合模式（joinMode）
+            </span>
+          </label>
+          <select
+            className="wf-editor-select"
+            value={node.joinMode === 'all' ? 'all' : 'none'}
+            onChange={e => patchNode(node.id, { joinMode: e.target.value === 'all' ? 'all' : null })}
+          >
+            <option value="none">每次到达即执行（none）</option>
+            <option value="all">等齐全部入边（all）</option>
+          </select>
+          <p className="wf-editor-hint">
+            缺省=每条激活入边到达即执行一次；「等齐」=汇合屏障，等齐全部入边各激活一次后才触发一次执行
+            （画布上该节点右上角出现「等齐」角标）。
+          </p>
+        </div>
+      ) : null}
+
       {node.type === 'start' ? (
         <p className="wf-editor-hint" style={{ marginTop: 6 }}>
           开始节点先行执行，全图唯一；无类型特定字段。
@@ -1243,6 +1312,11 @@ function EdgePropertySection({
  * 4b. 再加一个下游 AI 节点并连线 → 其会话线下拉应出现「writer · 由「…」定义」；
  *    选中后 system prompt 只读回显定义节点的值，模型可另选；回到定义节点改
  *    system prompt → 下游引用节点的回显随之变化（不存副本）。
+ * 4c. 汇合模式：选中 command/ai 节点 → 「汇合模式」下拉选「等齐全部入边（all）」
+ *    → 画布该节点右上角出现 amber「等齐」角标、dirty ● 亮；切回「每次到达即执行
+ *    （none）」→ 角标消失；start 节点不显示该控件。保存 → 重开同一定义 → 下拉回显
+ *    「等齐全部入边」（无 joinMode 字段/为 none 的旧定义回显「每次到达即执行」）；
+ *    实例运行图（readonly）上带角标节点与运行态徽点并排不遮挡。
  * 5. 左栏「运行变量」默认展开，加一个 required 变量、「出错策略」确认默认 supervisor +
  *    选督导模型。
  * 6. 保存 → toast「工作流已创建：wf_…」，dirty ● 消失，标题处显示定义 id。
@@ -1252,9 +1326,14 @@ function EdgePropertySection({
  *    AI 节点清空会话线名保存 → 「AI 节点必须指定 agent 名」逐项报错。
  * 8b. 画布容量：连续添加/拖动节点到 3200×2400 固定画布边界之外（右/下）→ 画布随
  *     内容扩展，滚动能看到每个节点（桌面与移动端同验证）。
+ * 8c. 自动布局：搭线性 + 并行分支 + 汇合图，再连一条回指边（如 C→B）与一个孤立
+ *     节点 → 工具栏「自动布局」→ 节点按层重排（start 第 0 列，回边右→左弯回，
+ *     孤立节点集中最深列右侧独立列，全部无重叠），dirty ● 出现、toast 汇报层数/
+ *     回边/孤立数，视口回到原点；微调拖动一两个节点后再点一次自动布局仍正常；
+ *     保存 → 重开还原新坐标（其它字段不变）。
  *
  * ── 人工验证清单（移动端，视口 ≤768px / 手机或桌面窄窗）──────────────────
- * 9. 窄视口打开编辑器：画布占满全宽；工具栏只剩 定义名/描述/组件 / 变量/属性/保存（定义
+ * 9. 窄视口打开编辑器：画布占满全宽；工具栏只剩 定义名/描述/自动布局/组件 / 变量/属性/保存（定义
  *    id 标签隐藏），输入占满整行。
  * 10. 「组件 / 变量」→ 左抽屉滑入（palette + 默认展开的「运行变量」+ 策略 可滚动）；
  *     点遮罩或 × 收起。

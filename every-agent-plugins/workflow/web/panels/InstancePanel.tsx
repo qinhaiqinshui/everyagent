@@ -994,6 +994,7 @@ export default function InstancePanel({ instanceId, workspaceId }: InstancePanel
           x: pos.x,
           y: pos.y,
           subtitle: canvasNodeSubtitle(n, projection[n.id]),
+          joinMode: n.joinMode,
           status: projection[n.id]?.status ?? undefined,
         }
       }),

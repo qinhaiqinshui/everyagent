@@ -27,11 +27,13 @@
 import React from 'react'
 import { nodeTypeGlyph } from '../icons'
 import { nodeStrokeColor, statusVisual, NEUTRAL_STATUS_VISUAL, type RenderStatus } from './renderStates'
+import { NODE_H, NODE_W } from './geometry'
 
 // ─── 几何常量 ─────────────────────────────────────────────────────────────
 
-export const NODE_W = 180
-export const NODE_H = 64
+// 尺寸常量改由 geometry.ts 持有（autoLayout 布局算法共用——算法模块保持纯 TS、
+// 零 React 依赖以便自测）；此再导出保持本模块历史导出面不变（既有 import 不受影响）。
+export { NODE_H, NODE_W } from './geometry'
 /** 画布最小尺寸（历史固定值，内容不足时兜底）。 */
 const CANVAS_W = 3200
 const CANVAS_H = 2400
@@ -51,6 +53,9 @@ export interface CanvasNodeView {
   y: number
   /** 简略信息行（命令首行 / agent 名等），由宿主面板组装。 */
   subtitle?: string
+  /** 汇合模式（definition 同名字段原样投影）：'all' → 右上角「等齐」角标；
+   *  null/缺省/'none'/其它值 = 无标记（后端契约仅 null/"none"/"all" 三态）。 */
+  joinMode?: string | null
   /** 运行态（readonly/实例视图投影；缺省=编辑态中性）。 */
   status?: RenderStatus
 }
@@ -79,6 +84,9 @@ export interface WorkflowCanvasProps {
   onCreateEdge?: (from: string, to: string) => void
   /** 画布可视中心回写（palette 新节点落点用；宿主每次读 current）。 */
   viewportCenterRef?: React.MutableRefObject<{ x: number; y: number } | null>
+  /** 视口回原点触发器（nonce 变化即滚回 (0,0)）：自动布局等批量重排后，新网格从
+   *  原点铺开，视口若停留在旧滚动位会看不到变化——由宿主在重排后自增此值。 */
+  resetViewNonce?: number
   className?: string
   style?: React.CSSProperties
 }
@@ -125,6 +133,7 @@ export default function WorkflowCanvas({
   onNodeMove,
   onCreateEdge,
   viewportCenterRef,
+  resetViewNonce,
   className,
   style,
 }: WorkflowCanvasProps) {
@@ -212,6 +221,13 @@ export default function WorkflowCanvas({
       }
     }
   })
+
+  // 自动布局等批量重排后视口带回原点（nonce 变化触发一次；未传本 prop 的实例
+  // 视图不受影响。挂载首帧画布本就在原点，滚 (0,0) 为无操作）。
+  React.useLayoutEffect(() => {
+    if (resetViewNonce === undefined) return
+    scrollRef.current?.scrollTo({ left: 0, top: 0 })
+  }, [resetViewNonce])
 
   /** 节点主体按下：记录 tap 候选 + （edit）启动拖拽（Ctrl 或多指平移中=平移画布意图，跳过）。
    *  选中延迟到 pointerup（位移 ≤ TAP_SLOP）——触屏按下即选中会立刻弹属性抽屉，
@@ -644,6 +660,34 @@ export default function WorkflowCanvas({
                   className={visual.animated ? 'wf-status-running' : undefined}
                   style={{ fill: visual.badgeFill, pointerEvents: 'none' }}
                 />
+              ) : null}
+              {/* 汇合角标（joinMode=all）：右上角「等齐」胶囊小标，amber 描边与运行态
+                  色彩语言同源（waiting=amber，汇合屏障=等待语义）；右缘留 24px 与贴角
+                  运行态徽点（NODE_W-14,14）错位共存，实例图两种标记并排可辨。 */}
+              {node.joinMode === 'all' ? (
+                <g style={{ pointerEvents: 'none' }}>
+                  <rect
+                    x={NODE_W - 56}
+                    y={3}
+                    width={32}
+                    height={14}
+                    rx={7}
+                    style={{
+                      fill: 'var(--bg-secondary, #11141b)',
+                      stroke: 'var(--accent-amber, #f7bd54)',
+                      strokeWidth: 1,
+                    }}
+                  />
+                  <text
+                    x={NODE_W - 40}
+                    y={13.4}
+                    textAnchor="middle"
+                    fontSize={9.5}
+                    style={{ fill: 'var(--accent-amber, #f7bd54)' }}
+                  >
+                    等齐
+                  </text>
+                </g>
               ) : null}
               {/* 右侧出锚点（edit 限定；hover/触按加深；外层透明大圆扩触屏命中区） */}
               {editable ? (

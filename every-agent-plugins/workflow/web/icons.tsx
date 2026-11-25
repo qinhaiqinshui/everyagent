@@ -171,6 +171,29 @@ export function AiNodeIcon({ size = 16, style, className, color }: IconProps) {
   )
 }
 
+/** 自动布局（编辑器工具栏）：单源分两支、分层排布的意象。 */
+export function AutoLayoutIcon({ size = 16, style, className, color }: IconProps) {
+  return (
+    <Svg size={size} style={style} className={className} color={color}>
+      <rect x="1.6" y="6.6" width="3.6" height="2.8" rx="0.9" />
+      <rect x="10.8" y="1.6" width="3.6" height="2.8" rx="0.9" />
+      <rect x="10.8" y="11.6" width="3.6" height="2.8" rx="0.9" />
+      <path d="M5.2 8H8.1M8.1 8V3H10.8M8.1 8V13H10.8" />
+    </Svg>
+  )
+}
+
+/** 汇合模式（joinMode=all）：两支流汇为一股继续向前——汇合屏障的意象。 */
+export function JoinModeIcon({ size = 16, style, className, color }: IconProps) {
+  return (
+    <Svg size={size} style={style} className={className} color={color}>
+      <path d="M2.4 4.4H5.2C7 4.4 7 8 9 8H11.4" />
+      <path d="M2.4 11.6H5.2C7 11.6 7 8 9 8H11.4" />
+      <path d="M11.4 6.2L13.4 8L11.4 9.8" />
+    </Svg>
+  )
+}
+
 /** 运行（步骤 9 运行对话框用；先备好）。 */
 export function RunIcon({ size = 16, style, className, color }: IconProps) {
   return (

@@ -59,6 +59,12 @@ export interface WorkflowNodeDef {
   timeoutMs?: number | null
   /** 循环上限 ∈[1,10]。 */
   maxRuns?: number | null
+  /**
+   * 汇合模式（wire 名 joinMode，与后端 JoinMode 契约一致）：null/"none"（缺省）=
+   * 每条激活入边到达即执行一次（现状）；"all"=等齐全部入边各激活一次后触发一次
+   * 执行（汇合屏障）。仅 command/ai 有入边语义；start 无入边不消费该字段。
+   */
+  joinMode?: string | null
   /** ai 节点：命名会话线（必填；候选=上游 AI 节点已用名，或本节点新建）。 */
   agent?: string | null
   /** ai 节点：模型配置（本节点生效；空=系统默认模型）。 */
