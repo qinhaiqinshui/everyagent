@@ -332,6 +332,12 @@ class RgToolsTest {
             lastTimeoutMs = timeoutMs;
             return next;
         }
+
+        @Override
+        public ExecResult spawnPowerShell(String command, Path cwd, Map<String, String> env,
+                long timeoutMs) {
+            throw new UnsupportedOperationException("rg 工具不走 PowerShell 执行");
+        }
     }
 
     /**
@@ -360,6 +366,12 @@ class RgToolsTest {
             } catch (Exception e) {
                 throw new RuntimeException("测试 spawn 失败: " + argv[0], e);
             }
+        }
+
+        @Override
+        public ExecResult spawnPowerShell(String command, Path cwd, Map<String, String> env,
+                long timeoutMs) {
+            throw new UnsupportedOperationException("rg 工具不走 PowerShell 执行");
         }
     }
 }

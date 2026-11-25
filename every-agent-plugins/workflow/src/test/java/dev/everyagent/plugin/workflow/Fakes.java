@@ -719,8 +719,13 @@ final class Fakes {
 
     // ══════════════════════════ NativeExec ══════════════════════════
 
-    /** ProcessBuilder 真执行（argv 直传、超时/中断均 destroyForcibly——与 worker OsSandbox 语义对齐）。 */
-    static final class RealNativeExec implements NativeExec {        @Override
+    /**
+     * ProcessBuilder 真执行（argv 直传、超时/中断均 destroyForcibly——与 worker OsSandbox 语义对齐）；
+     * {@code spawnPowerShell} 与生产 {@code OsSandbox#spawnPowerShell} 同构管线
+     * （组装件全部复用 plugin-api，不依赖 worker，§14.9 红线）。
+     */
+    static final class RealNativeExec implements NativeExec {
+        @Override
         public ExecResult spawnNative(String[] argv, Path cwd, Map<String, String> env,
                 long timeoutMs) {
             Process p = null;
@@ -773,6 +778,130 @@ final class Fakes {
                 }
             } catch (IOException ignored) {
                 // 流关闭
+            }
+        }
+
+        /**
+         * PowerShell 管线桩（与生产 {@code OsSandbox#spawnPowerShell} 同构，组装件复用
+         * plugin-api 的 {@code ExecResults}）：{@code buildPowerShellScript}(prefix+包裹+
+         * 退出码尾部) + UTF-8 BOM 临时 {@code .ps1} + {@code -File} + stdout/stderr
+         * <b>文件承载</b>（PS 5.1 管道承载会按 OEM 码页转码毁中文）+
+         * {@code decodeConsoleOutput}/{@code decodeClixml} 还原。宿主无法解析 PowerShell
+         * 可执行文件时与生产同语义抛 {@link IllegalStateException}（命令节点回退 cmd.exe）。
+         */
+        @Override
+        public ExecResult spawnPowerShell(String command, Path cwd, Map<String, String> env,
+                long timeoutMs) {
+            String exe = fakePsExe();
+            Path script = null;
+            Path outFile = null;
+            Path errFile = null;
+            Process p = null;
+            try {
+                script = java.nio.file.Files.createTempFile("ea-fake-ps-", ".ps1");
+                byte[] bom = {(byte) 0xEF, (byte) 0xBB, (byte) 0xBF};
+                byte[] body = dev.everyagent.plugin.api.shell.ExecResults
+                        .buildPowerShellScript(command)
+                        .getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                byte[] full = new byte[bom.length + body.length];
+                System.arraycopy(bom, 0, full, 0, bom.length);
+                System.arraycopy(body, 0, full, bom.length, body.length);
+                java.nio.file.Files.write(script, full);
+                outFile = java.nio.file.Files.createTempFile("ea-fake-out-", ".tmp");
+                errFile = java.nio.file.Files.createTempFile("ea-fake-err-", ".tmp");
+                p = new ProcessBuilder(exe, "-NoProfile", "-ExecutionPolicy", "Bypass",
+                        "-File", script.toString())
+                        .directory(cwd.toFile())
+                        .redirectOutput(outFile.toFile())
+                        .redirectError(errFile.toFile())
+                        .start();
+                boolean done = p.waitFor(timeoutMs, TimeUnit.MILLISECONDS);
+                if (!done) {
+                    p.destroyForcibly();
+                    p.waitFor(2, TimeUnit.SECONDS);
+                }
+                // 句柄随子进程退出关闭，须等进程结束/强杀后再读文件
+                String out = dev.everyagent.plugin.api.shell.ExecResults.decodeConsoleOutput(
+                        java.nio.file.Files.readAllBytes(outFile));
+                String err = dev.everyagent.plugin.api.shell.ExecResults.decodeClixml(
+                        dev.everyagent.plugin.api.shell.ExecResults.decodeConsoleOutput(
+                                java.nio.file.Files.readAllBytes(errFile)));
+                if (!done) {
+                    return new ExecResult(out,
+                            err + (err.isEmpty() ? "" : "\n") + "[exec 超时中止: >" + timeoutMs + "ms]",
+                            -1, true);
+                }
+                return new ExecResult(out, err, p.exitValue(), false);
+            } catch (InterruptedException e) {
+                // 与 spawnNative 对齐：中断（级联取消）不留子进程——销毁后同步收割，恢复中断标记
+                Thread.currentThread().interrupt();
+                try {
+                    if (p != null) {
+                        p.destroyForcibly();
+                        p.waitFor(2, TimeUnit.SECONDS);
+                    }
+                } catch (InterruptedException ie) {
+                    // 收割等待自身被中断：放弃等待（尽力而为）
+                }
+                return new ExecResult("", "interrupted", -1, true);
+            } catch (IOException e) {
+                return new ExecResult("", "spawn 失败: " + e.getMessage(), -1, true);
+            } finally {
+                deleteQuietly(script);
+                deleteQuietly(outFile);
+                deleteQuietly(errFile);
+            }
+        }
+
+        /** PowerShell 宿主解析（与 OsSandbox 同策略）：pwsh.exe 优先 → powershell.exe（PATH/System32 出厂位置）。 */
+        private static String fakePsExe() {
+            String pwsh = fakeFindInPath("pwsh.exe");
+            if (pwsh != null) {
+                return pwsh;
+            }
+            String inPath = fakeFindInPath("powershell.exe");
+            if (inPath != null) {
+                return inPath;
+            }
+            String sysRoot = System.getenv("SystemRoot");
+            if (sysRoot != null) {
+                Path builtin = Path.of(sysRoot, "System32", "WindowsPowerShell", "v1.0",
+                        "powershell.exe");
+                if (java.nio.file.Files.isRegularFile(builtin)) {
+                    return builtin.toString();
+                }
+            }
+            throw new IllegalStateException("测试宿主无法解析 PowerShell 可执行文件(pwsh/powershell 均未寻得)");
+        }
+
+        private static String fakeFindInPath(String name) {
+            String pathEnv = System.getenv("Path");
+            if (pathEnv == null || pathEnv.isBlank()) {
+                pathEnv = System.getenv("PATH");
+            }
+            if (pathEnv == null || pathEnv.isBlank()) {
+                return null;
+            }
+            for (String dir : pathEnv.split(java.util.regex.Pattern.quote(java.io.File.pathSeparator))) {
+                if (dir.isBlank()) {
+                    continue;
+                }
+                Path candidate = Path.of(dir, name);
+                if (java.nio.file.Files.isRegularFile(candidate)) {
+                    return candidate.toAbsolutePath().toString();
+                }
+            }
+            return null;
+        }
+
+        private static void deleteQuietly(Path f) {
+            if (f == null) {
+                return;
+            }
+            try {
+                java.nio.file.Files.deleteIfExists(f);
+            } catch (IOException ignored) {
+                // 删不掉不影响结果
             }
         }
     }

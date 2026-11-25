@@ -240,16 +240,201 @@ public final class OsSandbox implements SandboxBackend, NativeExec {
         // cwd 护栏(架构 §8.5):插件目录内不得作为子进程工作目录 —— Windows 上进程 CWD
         // 会锁死目录、令 plugin.uninstall 必败(文件可删、目录删不掉,即墓碑自愈要兜的坑)。
         // 既有调用方(git/rg/命令执行器)均以工作区为 cwd,不受影响。
+        ExecResult guard = rejectCwdInPluginsDir(cwd,
+                argv != null && argv.length > 0 ? argv[0] : "");
+        if (guard != null) {
+            return guard;
+        }
+        return runDirectCommand(java.util.List.of(argv), cwd, env, true, timeoutMs);
+    }
+
+    /**
+     * cwd 插件目录护栏(架构 §8.5,spawnNative 与 spawnPowerShell 共用契约):cwd 落在外部
+     * 插件目录内时返回失败 {@code ExecResult}(调用方直接回传),合规返回 null。
+     */
+    private ExecResult rejectCwdInPluginsDir(Path cwd, String argv0) {
         Path pluginsRoot = props.resolvePluginsDir();
         if (cwd != null && cwd.toAbsolutePath().normalize().startsWith(pluginsRoot)) {
             log.warn("[os-sandbox] 拒绝以插件目录为 cwd 的原生执行(防卸载目录锁死): cwd={} argv0={}",
-                    cwd, argv != null && argv.length > 0 ? argv[0] : "");
+                    cwd, argv0);
             return new ExecResult("", "cwd 不得位于插件目录(" + pluginsRoot + ")内: "
                     + "长驻进程以插件目录为工作目录会锁死目录、导致插件卸载失败;请改用工作区或临时目录",
                     1, false);
         }
-        return runDirectCommand(java.util.List.of(argv), cwd, env, true, timeoutMs);
+        return null;
     }
+
+    /**
+     * 宿主 PowerShell 方言脚本执行({@link NativeExec} 契约方法)——<b>worker 核心 PowerShell
+     * 管线唯一实现</b>,会话 powershell 工具({@code CommandExecutor})与工作流命令节点
+     * ({@code NodeRunners.CommandNodeRunner})共用,行为完全一致。
+     *
+     * <p>管线五件套(均收拢在本方法内,调用方只交命令原文):
+     * <ol>
+     *   <li><b>脚本组装</b>:{@code ExecResults.buildPowerShellScript}——UTF-8 编码偏好 +
+     *       非成功流抑制前缀 + {@code &{} | Out-String -Stream} 包裹(PS-003 顶层对象输出
+     *       断流 / PS-004 异常终止丢输出修复)+ {@code POWERSHELL_EXIT_TAIL} 退出码传导
+     *       (原生子进程退出码转成 PowerShell 进程码);</li>
+     *   <li><b>临时 {@code .ps1} + UTF-8 BOM</b>:PS 5.1 读无 BOM 文件按系统 ACP(如 GBK)
+     *       解码,中文会被错解;pwsh 7 对 BOM 同样接受。{@code -File} 而非 {@code -Command}
+     *       ——脚本经 Java 文件 IO 写入不过命令行,引号在进程边界被改写这一整类问题消失
+     *       (PS-002);</li>
+     *   <li><b>宿主解析</b>:{@link #resolveWindowsPowerShellExe}——PATH 探测
+     *       {@code pwsh.exe}(7+)优先,回退出厂 {@code powershell.exe}(5.1);非 Windows 恒
+     *       {@code pwsh}。<b>宿主无法解析 PowerShell 可执行文件时抛
+     *       {@link IllegalStateException}</b>(调用方可回退其它 shell,如工作流命令节点回退
+     *       {@code cmd.exe /c});</li>
+     *   <li><b>stdout/stderr 文件承载</b>:{@link #spawnToFileRedirected}——防 PS 5.1 管道
+     *       承载下按 OEM 码页(中文 Windows=936/GBK)转码毁原生子进程 UTF-8 输出;</li>
+     *   <li><b>CLIXML/ANSI 还原</b>:stderr 非空即过 {@code ExecResults.decodeClixml}
+     *       (PS 5.1 重定向下 error 流序列化成 CLIXML,不还原则真实错误静默丢失;pwsh 7
+     *       直出携带 VT 着色,同一出口剥离)。</li>
+     * </ol>
+     *
+     * <p>命令执行失败(非零退出码/超时/中断)以失败 {@code ExecResult} 返回;仅「宿主无法
+     * 解析 PowerShell 可执行文件」抛 {@link IllegalStateException}。cwd 禁入外部插件目录
+     * 契约与 {@link #spawnNative} 相同。
+     */
+    @Override
+    public ExecResult spawnPowerShell(String command, Path cwd, Map<String, String> env,
+            long timeoutMs) {
+        ExecResult guard = rejectCwdInPluginsDir(cwd, "powershell");
+        if (guard != null) {
+            return guard;
+        }
+        java.nio.file.Path tempScript = null;
+        try {
+            String script = dev.everyagent.plugin.api.shell.ExecResults
+                    .buildPowerShellScript(command);
+            tempScript = createScratchFile("ea-ps-", ".ps1", cwd).toPath();
+            // UTF-8 BOM: PowerShell 5.1 需要它来正确识别 UTF-8 编码的脚本文件
+            byte[] bom = {(byte) 0xEF, (byte) 0xBB, (byte) 0xBF};
+            byte[] content = script.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            byte[] full = new byte[bom.length + content.length];
+            System.arraycopy(bom, 0, full, 0, bom.length);
+            System.arraycopy(content, 0, full, bom.length, content.length);
+            java.nio.file.Files.write(tempScript, full);
+            String psExe = WINDOWS ? resolveWindowsPowerShellExe() : requireUnixPwsh();
+            String[] fullCmd = {psExe, "-NoProfile", "-ExecutionPolicy", "Bypass",
+                    "-File", tempScript.toString()};
+            return restoreClixml(
+                    spawnToFileRedirected(fullCmd, cwd, env, timeoutMs));
+        } catch (java.io.IOException e) {
+            return new ExecResult("", "execute: 无法创建临时脚本文件 " + e.getMessage(), 1, false);
+        } finally {
+            if (tempScript != null) {
+                try {
+                    java.nio.file.Files.deleteIfExists(tempScript);
+                } catch (Exception ignored) {
+                    // 临时文件清理失败不影响结果
+                }
+            }
+        }
+    }
+
+    /**
+     * 非 Windows 的 pwsh 解析:PATH 探测 {@code pwsh}(跨平台 PowerShell 常态名),未寻得抛
+     * {@link IllegalStateException}——与 Windows 分支「无法解析即抛」同契约。
+     */
+    private static String requireUnixPwsh() {
+        String pwsh = findInPath("pwsh");
+        if (pwsh == null) {
+            throw new IllegalStateException(
+                    "宿主无法解析 PowerShell 可执行文件(PATH 未寻得 pwsh)");
+        }
+        return pwsh;
+    }
+
+    /**
+     * Windows 宿主 PowerShell 可执行文件解析:PATH 探测 {@code pwsh.exe}(PowerShell 7+)
+     * 优先,未安装回退出厂 {@code powershell.exe}(5.1,任何 Windows 必带)。进程级缓存
+     * (volatile 双检锁,全进程只探测一次)——与 codex 后端
+     * {@code CodexCommandExecutor#detectShell} 同策略;worker 核心不依赖插件(三层解耦),
+     * 此处自带最小实现。
+     *
+     * <p>回退名 {@code "powershell.exe"} 为裸名(交 ProcessBuilder 按 PATH 解析);调用方若需
+     * 判定「宿主确实无 PowerShell」,以 {@link #windowsPowerShellFindable()} 复核(PATH 或
+     * System32 出厂安装位置任一命中)。整条执行管线对两种宿主均兼容(见
+     * {@code ExecResults#buildPowerShellScript}「两种宿主实测」):UTF-8 BOM 双宿主通用、
+     * CLIXML 还原对无 CLIXML 的 pwsh 输出是 no-op、错误流 ANSI 着色统一剥离;pwsh 7 下
+     * 5.1 的 OEM 码页类怪癖(GBK 转码/CLIXML 包装)天然消失。
+     */
+    static String resolveWindowsPowerShellExe() {
+        String cached = cachedWinPsExe;
+        if (cached != null) {
+            return cached;
+        }
+        synchronized (OsSandbox.class) {
+            if (cachedWinPsExe == null) {
+                String pwsh = findInPath("pwsh.exe");
+                cachedWinPsExe = pwsh != null ? pwsh : "powershell.exe";
+                log.info("[os-sandbox] Windows PowerShell 宿主: {}{}",
+                        cachedWinPsExe, pwsh != null ? "(pwsh 7+)" : "(未装 pwsh,回退内置 5.1)");
+            }
+            return cachedWinPsExe;
+        }
+    }
+
+    /** 出厂 powershell.exe 是否可寻:PATH 或 System32 默认安装位置任一命中。 */
+    static boolean windowsPowerShellFindable() {
+        if (findInPath("powershell.exe") != null) {
+            return true;
+        }
+        String sysRoot = System.getenv("SystemRoot");
+        return sysRoot != null && java.nio.file.Files.isRegularFile(Path.of(
+                sysRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"));
+    }
+
+    /**
+     * 还原 stderr 里的 PowerShell CLIXML 流记录为真实错误文本（PowerShell 管线统一出口）。
+     *
+     * <p>PowerShell 5.1 在 stderr 被<b>重定向</b>(管道或文件——它只看是否控制台)时,把
+     * error/warning/verbose 等流序列化成 CLIXML({@code #< CLIXML} + {@code <Objs>…</Objs>})。
+     * 整段删除会把 {@code rg '(' file} 的「regex parse error」、命令不存在、路径不可读全成
+     * 静默——只剩 {@code [exit code: 2]} 甚至什么都没有,AI 把「用错了」误读成「没匹配」。
+     * 现委托 {@code ExecResults#decodeClixml}:段内 {@code <S S="Error">} 文本抽出来留在
+     * stderr,段外原生命令纯文本原样保留。CLIXML 与承载形态无关(文件承载下实测同样产生),
+     * 本方法覆盖共享管线的残余。
+     *
+     * <p><b>pwsh 7 直通</b>:pwsh 7.x 错误流<b>直出</b>、不产生 CLIXML,但携带
+     * {@code ESC[31;1m} 等 ANSI/VT 着色——故 stderr 非空即<b>无条件</b>过
+     * {@code decodeClixml}(它是 stderr 解码链统一出口:无 CLIXML 时退化为
+     * {@code stripAnsi}),不得因「没有 CLIXML」早退绕过剥离(早退分支在 5.1 下不可达,
+     * 在 pwsh 7 下会把着色残留漏给模型)。
+     */
+    private static ExecResult restoreClixml(ExecResult r) {
+        String err = r.stderr();
+        if (err == null || err.isEmpty()) {
+            return r;
+        }
+        return new ExecResult(r.stdout(),
+                dev.everyagent.plugin.api.shell.ExecResults.decodeClixml(err), r.exitCode(),
+                r.aborted());
+    }
+
+    /** PATH 中查找可执行文件;找到返回绝对路径,未找到返回 null(与 codex findInPath 同实现)。 */
+    static String findInPath(String name) {
+        String pathEnv = System.getenv("Path");
+        if (pathEnv == null || pathEnv.isBlank()) {
+            pathEnv = System.getenv("PATH");
+        }
+        if (pathEnv == null || pathEnv.isBlank()) {
+            return null;
+        }
+        for (String dir : pathEnv.split(java.util.regex.Pattern.quote(java.io.File.pathSeparator))) {
+            if (dir.isBlank()) {
+                continue;
+            }
+            Path candidate = Path.of(dir, name);
+            if (java.nio.file.Files.isRegularFile(candidate)) {
+                return candidate.toAbsolutePath().toString();
+            }
+        }
+        return null;
+    }
+
+    /** Windows PowerShell 宿主解析缓存(volatile 双检锁;static 全进程只探测一次)。 */
+    private static volatile String cachedWinPsExe;
 
     /**
      * <b>stdout / stderr 以文件承载</b>执行(§7.10 输出编码契约,PowerShell 中文乱码根治)。

@@ -161,9 +161,13 @@ public final class NodeRunners {
     // ══════════════════════════ 命令节点 ══════════════════════════
 
     /**
-     * 命令节点执行器：{@code services().nativeExec().spawnNative}（argv 直传）；
-     * Windows {@code cmd.exe /c}、Unix {@code /bin/sh -c}；cwd=工作区根；
-     * stdout/stderr 全量入 runs 文件（返回值交引擎留档）。超时/中止视为节点失败抛出。
+     * 命令节点执行器：{@code services().nativeExec()} 直跑宿主（不经 PermissionGate/沙箱
+     * 后端，与既有纪律一致）；Windows 默认经
+     * {@code services().nativeExec().spawnPowerShell}（worker 核心共享管线，与会话
+     * powershell 工具同一实现、行为完全一致），宿主无法解析 PowerShell 可执行文件（抛
+     * {@link IllegalStateException}）时回退 {@code cmd.exe /c} 旧路径；Unix
+     * {@code /bin/sh -c}；cwd=工作区根；stdout/stderr 全量入 runs 文件（返回值交引擎
+     * 留档）。超时/中止视为节点失败抛出。
      */
     public static final class CommandNodeRunner {
 
@@ -173,13 +177,29 @@ public final class NodeRunners {
         public NodeResult run(WorkerServices services, String workspaceRoot, NodeDef node,
                 String renderedCommand) {
             boolean windows = System.getProperty("os.name", "").toLowerCase().contains("win");
-            String[] argv = windows
-                    ? new String[]{"cmd.exe", "/c", renderedCommand}
-                    : new String[]{"/bin/sh", "-c", renderedCommand};
             long timeoutMs = node.timeoutMs() != null && node.timeoutMs() > 0
                     ? node.timeoutMs() : DEFAULT_COMMAND_TIMEOUT_MS;
-            ExecResult r = services.nativeExec()
-                    .spawnNative(argv, Path.of(workspaceRoot), Map.of(), timeoutMs);
+            ExecResult r;
+            if (windows) {
+                // Windows 默认经 PowerShell：复用 worker 核心共享管线（临时 .ps1(UTF-8 BOM)
+                // + 宿主解析 pwsh 优先/回退 powershell.exe + stdout/stderr 文件承载 +
+                // CLIXML/ANSI 还原 + 退出码传导），与会话 powershell 工具行为完全一致；
+                // 宿主无 PowerShell（共享实现抛 IllegalStateException）→ 回退 cmd.exe /c
+                try {
+                    r = services.nativeExec().spawnPowerShell(renderedCommand,
+                            Path.of(workspaceRoot), Map.of(), timeoutMs);
+                } catch (IllegalStateException e) {
+                    log.warn("[workflow] 宿主无法解析 PowerShell,命令节点回退 cmd.exe: {}",
+                            e.getMessage());
+                    r = services.nativeExec().spawnNative(
+                            new String[]{"cmd.exe", "/c", renderedCommand},
+                            Path.of(workspaceRoot), Map.of(), timeoutMs);
+                }
+            } else {
+                r = services.nativeExec().spawnNative(
+                        new String[]{"/bin/sh", "-c", renderedCommand},
+                        Path.of(workspaceRoot), Map.of(), timeoutMs);
+            }
             if (r == null) {
                 throw new IllegalStateException("命令执行返回空结果: " + node.name());
             }

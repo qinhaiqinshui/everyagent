@@ -46,9 +46,8 @@ class CommandExecutorLogMaskTest {
         logger.detachAppender(appender);
     }
 
-    @Test
-    void execAuditLogMasksCredentialShapesInCmd(@TempDir Path ws) throws Exception {
-        Path realWs = ws.toRealPath();
+    /** 构造真 OsSandbox + 真门禁链(良性命令放行)的 CommandExecutor。 */
+    private CommandExecutor newExecutor(Path realWs) throws java.io.IOException {
         ExecContext task = mock(ExecContext.class);
         when(task.workspaceRoot()).thenReturn(realWs.toString());
         when(task.subjectId()).thenReturn("t-mask-test");
@@ -63,9 +62,15 @@ class CommandExecutorLogMaskTest {
                 mock(OverBroadRootCheck.class), mock(AuthorizeCheck.class),
                 new CommandCheck(new WorkerProperties(), workspaces, null),
                 mock(PrivilegeCheck.class));
-        CommandExecutor executor = new CommandExecutor(
+        return new CommandExecutor(
                 new OsSandbox(new WorkerProperties(), new SandboxProviderRegistry()),
                 task, gate, "a-mask-test");
+    }
+
+    @Test
+    void execAuditLogMasksCredentialShapesInCmd(@TempDir Path ws) throws Exception {
+        Path realWs = ws.toRealPath();
+        CommandExecutor executor = newExecutor(realWs);
 
         String anthropicKey = "sk-ant-sid01-" + "A".repeat(58) + "6280";
         String bearer = "abcdef0123456789ABCD";
@@ -88,5 +93,24 @@ class CommandExecutorLogMaskTest {
         assertFalse(auditLine.contains(anthropicKey), "密钥原文不得落审计日志");
         assertFalse(auditLine.contains("sid01"), "格式中段也是密钥本体: " + auditLine);
         assertTrue(result.contains("exec-mask-probe"), "执行结果(业务面)不受日志掩码影响");
+    }
+
+    /**
+     * powershell shell 分支端到端冒烟(共享化回归):execute() 委托
+     * {@code OsSandbox#spawnPowerShell} 共享管线(临时 .ps1(UTF-8 BOM) + 宿主解析 +
+     * 文件承载 + CLIXML 还原 + 退出码传导),门禁/审计/格式化照常——锁死「会话 powershell
+     * 工具与工作流命令节点同一实现」的委托链路本体。Windows 守护(非 Windows 需宿主 pwsh)。
+     */
+    @org.junit.jupiter.api.Test
+    @org.junit.jupiter.api.condition.EnabledOnOs(org.junit.jupiter.api.condition.OS.WINDOWS)
+    void powershellShellDelegatesToSharedSpawnPowerShellPipeline(@TempDir Path ws) throws Exception {
+        Path realWs = ws.toRealPath();
+        CommandExecutor executor = newExecutor(realWs);
+
+        // cmdlet 中文 + 原生退出码传导:两条行为都是共享管线的招牌能力(乱码根治/exit code 尾注)
+        String result = executor.execute(
+                "Write-Output '管道冒烟-中文'; cmd /c \"exit 7\"", "powershell");
+        assertTrue(result.contains("管道冒烟-中文"), "cmdlet 中文经共享管线须原样回传,实得: " + result);
+        assertTrue(result.contains("[exit code: 7]"), "原生子进程退出码须经尾部传导,实得: " + result);
     }
 }

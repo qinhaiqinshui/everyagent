@@ -155,46 +155,57 @@ class GitServiceIntegrationTest {
     /**
      * NativeExec 桩:ProcessBuilder argv 直传真跑宿主进程(与 worker OsSandbox.spawnNative
      * 同语义:超时、双流分离捕获),让 NativeGit 全链路(探测/执行/输出解码)走真实路径。
+     * PowerShell 管线与 git 无关——桩不实现,调用即抛。
      */
     private static NativeExec testNativeExec() {
-        return (argv, cwd, env, timeoutMs) -> {
-            Process p;
-            try {
-                ProcessBuilder pb = new ProcessBuilder(argv).directory(cwd.toFile());
-                if (env != null && !env.isEmpty()) {
-                    pb.environment().putAll(env);
+        return new NativeExec() {
+            @Override
+            public ExecResult spawnNative(String[] argv, Path cwd, Map<String, String> env,
+                    long timeoutMs) {
+                Process p;
+                try {
+                    ProcessBuilder pb = new ProcessBuilder(argv).directory(cwd.toFile());
+                    if (env != null && !env.isEmpty()) {
+                        pb.environment().putAll(env);
+                    }
+                    p = pb.start();
+                } catch (IOException e) {
+                    return new ExecResult("", "启动失败: " + e.getMessage(), -1, false);
                 }
-                p = pb.start();
-            } catch (IOException e) {
-                return new ExecResult("", "启动失败: " + e.getMessage(), -1, false);
+                StringBuilder out = new StringBuilder();
+                StringBuilder err = new StringBuilder();
+                Thread tOut = new Thread(() -> readQuietly(p.getInputStream(), out));
+                Thread tErr = new Thread(() -> readQuietly(p.getErrorStream(), err));
+                tOut.setDaemon(true);
+                tErr.setDaemon(true);
+                tOut.start();
+                tErr.start();
+                boolean finished;
+                try {
+                    finished = p.waitFor(timeoutMs, TimeUnit.MILLISECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    p.destroyForcibly();
+                    return new ExecResult(out.toString(), err.toString(), p.exitValue(), true);
+                }
+                if (!finished) {
+                    p.destroyForcibly();
+                    return new ExecResult(out.toString(), err.toString(), -1, true);
+                }
+                try {
+                    tOut.join(2000);
+                    tErr.join(2000);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                return new ExecResult(out.toString(), err.toString(), p.exitValue(), false);
             }
-            StringBuilder out = new StringBuilder();
-            StringBuilder err = new StringBuilder();
-            Thread tOut = new Thread(() -> readQuietly(p.getInputStream(), out));
-            Thread tErr = new Thread(() -> readQuietly(p.getErrorStream(), err));
-            tOut.setDaemon(true);
-            tErr.setDaemon(true);
-            tOut.start();
-            tErr.start();
-            boolean finished;
-            try {
-                finished = p.waitFor(timeoutMs, TimeUnit.MILLISECONDS);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                p.destroyForcibly();
-                return new ExecResult(out.toString(), err.toString(), p.exitValue(), true);
+
+            @Override
+            public ExecResult spawnPowerShell(String command, Path cwd, Map<String, String> env,
+                    long timeoutMs) {
+                throw new UnsupportedOperationException("git 测试桩不支持 PowerShell 执行");
             }
-            if (!finished) {
-                p.destroyForcibly();
-                return new ExecResult(out.toString(), err.toString(), -1, true);
-            }
-            try {
-                tOut.join(2000);
-                tErr.join(2000);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            }
-            return new ExecResult(out.toString(), err.toString(), p.exitValue(), false);
         };
     }
 

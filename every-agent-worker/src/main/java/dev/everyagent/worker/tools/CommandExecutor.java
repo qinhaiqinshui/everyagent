@@ -102,14 +102,14 @@ public class CommandExecutor {
             prepareWritableRoots(cwd, powershell);
         }
         Map<String, String> env = new HashMap<>();
-        // powershell 专属(Windows 原生域):授权检查之后以 ExecResults.buildPowerShellScript
-        // 组装完整脚本——UTF-8 编码偏好 + 非成功流抑制前缀(权限检查与审计日志始终是用户
-        // 原始命令)、PS-003 顶层对象输出断流修复 + PS-004 异常终止丢输出(&{} | Out-String
-        // -Stream 包裹,见其 javadoc)、退出码传导尾部。前缀先于用户命令执行,用户若显式设置
-        // 该偏好,后写覆盖本前缀。
-        // 真正的非 ASCII 正确性由「输出文件承载」保证(见 OsSandbox#spawnToFileRedirected),
-        // 前缀只负责编码偏好与噪声抑制。
-        String spawnCmd = powershell ? ExecResults.buildPowerShellScript(command) : command;
+        // powershell 专属(Windows 原生域):执行体委托 OsSandbox#spawnPowerShell 共享管线
+        // (临时 .ps1(UTF-8 BOM) + PATH 探测 pwsh.exe 优先/回退出厂 powershell.exe +
+        // stdout/stderr 文件承载 + CLIXML/ANSI 还原 + 退出码传导;脚本组装
+        // ExecResults.buildPowerShellScript——UTF-8 编码偏好 + 非成功流抑制前缀、PS-003/PS-004
+        // 包裹、退出码尾部——亦收在共享实现内)。权限检查与审计日志始终是用户原始命令;
+        // 前缀先于用户命令执行,用户若显式设置该偏好,后写覆盖本前缀;真正的非 ASCII 正确性
+        // 由「输出文件承载」保证(见 OsSandbox#spawnToFileRedirected),前缀只负责编码偏好与
+        // 噪声抑制。工作流命令节点(NodeRunners.CommandNodeRunner)走同一实现,行为完全一致。
         // wsl-bwrap 后端:已授权 EXEC 根随调用挂载进沙箱(授权=绑定,撤销=下次不绑,零宿主状态);
         // 走 execRootsSandboxed(§7.8 过宽根过滤)——过度宽泛根(如历史 C:\\)不得进 --bind 白名单,
         // 否则整个 /mnt/c 会被读写挂进沙箱,读隔离被击穿。wsl-direct 不建 bwrap 命名空间,
@@ -131,20 +131,25 @@ public class CommandExecutor {
         // 直接 ProcessBuilder 执行（核心宿主访问工具,DIRECT 模式）
         boolean win = System.getProperty("os.name").toLowerCase().contains("win");
         if (powershell) {
-            // powershell 唯一执行形态:临时 .ps1 + -File + stdout/stderr 文件承载 + 退出码传导。
-            // 不再保留 -Command 分支——分支差异正是引号被 MSVCRT 转义吞掉(PS-002)的温床。
-            // 脚本本体已在 spawnCmd 处经 buildPowerShellScript 组装完毕(含退出码尾部)。
-            r = executePowerShell(spawnCmd, win, cwd, env);
+            // powershell 唯一执行形态:委托 OsSandbox#spawnPowerShell 共享管线(临时 .ps1(UTF-8
+            // BOM) + -File + stdout/stderr 文件承载 + 退出码传导)。不再保留 -Command 分支——
+            // 分支差异正是引号被 MSVCRT 转义吞掉(PS-002)的温床。
+            // 宿主无法解析 PowerShell 可执行文件时共享实现抛 IllegalStateException:powershell
+            // 是用户显式选择的 shell,不静默回退其它 shell——转为失败文本回灌模型(与旧路径
+            // spawn 失败回灌 ExecResult 的形态一致,不让异常穿出工具回调)。
+            try {
+                r = sandbox.spawnPowerShell(command, cwd, env, sandbox.execTimeoutMs());
+            } catch (IllegalStateException e) {
+                r = new ExecResult("", "execute: " + e.getMessage(), 1, false);
+            }
         } else {
             String[] shellPrefix = win ? new String[]{"cmd.exe", "/c"} : new String[]{"bash", "-c"};
             java.util.List<String> fullCmd = new java.util.ArrayList<>(java.util.List.of(shellPrefix));
-            fullCmd.add(spawnCmd);
+            fullCmd.add(command);
             r = sandbox.spawnNative(fullCmd.toArray(new String[0]), cwd, env);
         }
-        // powershell 专属:stderr 里若仍有 CLIXML 流记录,还原成真实错误文本(绝不静默丢弃)
-        if (powershell) {
-            r = restoreClixml(r);
-        }
+        // powershell 专属:stderr 里若仍有 CLIXML 流记录,还原成真实错误文本——已收进
+        // OsSandbox#spawnPowerShell 共享实现(含 pwsh 7 ANSI 剥离),此处不再重复兜底。
         log.info("[exec] task={} backend={} rc={} aborted={} cmd={}", task.subjectId(),
                 sandbox.id(),
                 r.exitCode(), r.aborted(), ExecResults.truncate(SecretPatterns.maskSecrets(command), 200));
@@ -156,146 +161,12 @@ public class CommandExecutor {
         return ExecResults.format(r);
     }
 
-    /**
-     * PowerShell 脚本执行:临时 {@code .ps1}(UTF-8 BOM) + {@code -File} +
-     * <b>stdout/stderr 文件承载</b>（BUG-1 根治 + PS-002 修复）。
-     *
-     * <p><b>为什么文件承载而不是管道</b>:PS 5.1 的 stdout 指向管道时,
-     * {@code [Console]::OutputEncoding} 取系统 OEM 码页(中文 Windows=936),原生子进程
-     *（rg/git 等）的 UTF-8 字节会被 PS 先按 GBK 解码再回编码,非法序列当场变 U+FFFD——
-     * 信息在子进程出口就被毁掉,读取端无从还原(中文仓库里 rg 的文件名/内容全乱码,
-     * 且乱码文件名回灌 rg 直接 os error 2,任务卡死)。改为文件承载后,子进程直接继承
-     * 文件句柄写原始字节,PS 完全不参与转码;实测同一路径下 cmdlet 中文与原生 UTF-8
-     * 输出在文件里<b>同为合法 UTF-8</b>,stderr 也不再被 CLIXML 包装。
-     * 详见 {@link OsSandbox#spawnToFileRedirected}。
-     *
-     * <p><b>为什么 -File 而不是 -Command</b>:ProcessBuilder 按 MSVCRT 规则转义参数里的
-     * 双引号({@code "} → {@code \"}),而 PowerShell {@code -Command} 的引号解析与 MSVCRT
-     * 不一致,嵌套引号会被截断或吞掉(PS-002)。脚本经 Java 文件 IO 写入,不过命令行,
-     * 引号与控制字符在进程边界被改写这一整类问题随之消失;顺带免去「有无引号走两条路」
-     * 造成的行为分叉。
-     *
-     * <p><b>脚本文件编码</b>:UTF-8 <b>BOM</b>。PowerShell 5.1 读无 BOM 文件时按系统 ACP
-     *（如 GBK）解码,命令串里的中文会被错解成另一个字;pwsh 7 对 BOM 同样接受(有 BOM
-     * 即按 UTF-8),该兼容层两种宿主通用。
-     *
-     * <p><b>退出码</b>:{@link ExecResults#POWERSHELL_EXIT_TAIL} 已在尾部把
-     * {@code $LASTEXITCODE}(最后一个原生子进程)转成 powershell.exe 的进程退出码,
-     * 否则 {@code [exit code: N]} 尾注恒为 0,模型无法区分 rg「无匹配(1)」与「用错(2)」。
-     */
-    private ExecResult executePowerShell(String script, boolean win,
-            Path cwd, Map<String, String> env) {
-        java.nio.file.Path tempScript = null;
-        try {
-            tempScript = OsSandbox.createScratchFile("ea-ps-", ".ps1", cwd).toPath();
-            // UTF-8 BOM: PowerShell 5.1 需要它来正确识别 UTF-8 编码的脚本文件
-            byte[] bom = {(byte) 0xEF, (byte) 0xBB, (byte) 0xBF};
-            byte[] content = script.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-            byte[] full = new byte[bom.length + content.length];
-            System.arraycopy(bom, 0, full, 0, bom.length);
-            System.arraycopy(content, 0, full, bom.length, content.length);
-            java.nio.file.Files.write(tempScript, full);
-
-            // Windows 宿主可执行文件解析:PATH 探测 pwsh.exe(PowerShell 7+)优先,未装回退
-            // 出厂 powershell.exe(5.1)——与 codex 后端 detectShell 同策略,核心不依赖插件
-            // (三层解耦)自带最小实现;非 Windows 恒 pwsh(跨平台 PowerShell 常态名)。
-            String psExe = win ? resolveWindowsPowerShellExe() : "pwsh";
-            String[] fullCmd = {psExe, "-NoProfile", "-ExecutionPolicy", "Bypass",
-                    "-File", tempScript.toString()};
-            return sandbox.spawnToFileRedirected(fullCmd, cwd, env, sandbox.execTimeoutMs());
-        } catch (java.io.IOException e) {
-            return new ExecResult("", "execute: 无法创建临时脚本文件 " + e.getMessage(), 1, false);
-        } catch (Exception e) {
-            return new ExecResult("", "execute: 临时脚本执行异常 " + e.getMessage(), 1, false);
-        } finally {
-            if (tempScript != null) {
-                try {
-                    java.nio.file.Files.deleteIfExists(tempScript);
-                } catch (Exception ignored) {
-                    // 临时文件清理失败不影响结果
-                }
-            }
-        }
-    }
-
-    /**
-     * Windows 宿主 PowerShell 可执行文件解析:PATH 探测 {@code pwsh.exe}(PowerShell 7+)
-     * 优先,未安装回退出厂 {@code powershell.exe}(5.1,任何 Windows 必带)。进程级缓存
-     * (volatile 双检锁,全进程只探测一次)——与 codex 后端
-     * {@code CodexCommandExecutor#detectShell} 同策略;worker 核心不依赖插件(三层解耦),
-     * 此处自带最小实现。
-     *
-     * <p>整条执行管线对两种宿主均兼容(见 {@link ExecResults#buildPowerShellScript}
-     * 「两种宿主实测」与 ARCHITECTURE §7.10):UTF-8 BOM 双宿主通用、CLIXML 还原对无
-     * CLIXML 的 pwsh 输出是 no-op、错误流 ANSI 着色由 {@code ExecResults} 剥离;
-     * pwsh 7 下 5.1 的 OEM 码页类怪癖(GBK 转码/CLIXML 包装)天然消失。
-     */
-    static String resolveWindowsPowerShellExe() {
-        String cached = cachedWinPsExe;
-        if (cached != null) {
-            return cached;
-        }
-        synchronized (CommandExecutor.class) {
-            if (cachedWinPsExe == null) {
-                String pwsh = findInPath("pwsh.exe");
-                cachedWinPsExe = pwsh != null ? pwsh : "powershell.exe";
-                log.info("[direct-shell] Windows PowerShell 宿主: {}{}",
-                        cachedWinPsExe, pwsh != null ? "(pwsh 7+)" : "(未装 pwsh,回退内置 5.1)");
-            }
-            return cachedWinPsExe;
-        }
-    }
-
-    /** PATH 中查找可执行文件;找到返回绝对路径,未找到返回 null(与 codex findInPath 同实现)。 */
-    static String findInPath(String name) {
-        String pathEnv = System.getenv("Path");
-        if (pathEnv == null || pathEnv.isBlank()) {
-            pathEnv = System.getenv("PATH");
-        }
-        if (pathEnv == null || pathEnv.isBlank()) {
-            return null;
-        }
-        for (String dir : pathEnv.split(java.util.regex.Pattern.quote(java.io.File.pathSeparator))) {
-            if (dir.isBlank()) {
-                continue;
-            }
-            Path candidate = Path.of(dir, name);
-            if (java.nio.file.Files.isRegularFile(candidate)) {
-                return candidate.toAbsolutePath().toString();
-            }
-        }
-        return null;
-    }
-
-    /** Windows PowerShell 宿主解析缓存(volatile 双检锁;static 全进程只探测一次)。 */
-    private static volatile String cachedWinPsExe;
-
-    /**
-     * 还原 stderr 里的 PowerShell CLIXML 流记录为真实错误文本（兜底路径）。
-     *
-     * <p>PowerShell 5.1 在 stderr 被<b>重定向</b>(管道或文件——它只看是否控制台)时,把
-     * error/warning/verbose 等流序列化成
-     * CLIXML({@code #< CLIXML} + {@code <Objs>…</Objs>})。旧实现是<b>整段删除</b>,于是
-     * {@code rg '(' file} 的「regex parse error」、命令不存在、路径不可读全成静默——只剩
-     * {@code [exit code: 2]} 甚至什么都没有,AI 把「用错了」误读成「没匹配」(BUG-2)。
-     * 现委托 {@link ExecResults#decodeClixml}:段内 {@code <S S="Error">} 文本抽出来留在
-     * stderr,段外原生命令纯文本原样保留。CLIXML 与承载形态无关(2026-10 codex 后端文件
-     * 承载下实测同样产生,codex 执行器聚合处已同样接入),此处覆盖本执行路径的残余。
-     *
-     * <p><b>pwsh 7 直通(2026-12 DIRECT 宿主 pwsh 化)</b>:pwsh 7.x 错误流<b>直出</b>、
-     * 不产生 CLIXML,但携带 {@code ESC[31;1m} 等 ANSI/VT 着色——故 stderr 非空即
-     * <b>无条件</b>过 {@code decodeClixml}(它是 stderr 解码链统一出口:无 CLIXML 时
-     * 退化为 {@code stripAnsi},ISSUES 四.8),不得因「没有 CLIXML」早退绕过剥离
-     * (早退分支在 5.1 下不可达,在 pwsh 7 下会把着色残留漏给模型)。
-     */
-    private static ExecResult restoreClixml(ExecResult r) {
-        String err = r.stderr();
-        if (err == null || err.isEmpty()) {
-            return r;
-        }
-        return new ExecResult(r.stdout(), ExecResults.decodeClixml(err), r.exitCode(),
-                r.aborted());
-    }
+    // PowerShell 执行管线(临时 .ps1 + UTF-8 BOM + 宿主解析 + 文件承载 + CLIXML 还原 +
+    // 退出码传导)已整体收拢为 OsSandbox#spawnPowerShell 共享实现——本类 execute() 的
+    // powershell 分支直接委托;会话 powershell 工具与工作流命令节点同一实现、行为一致。
+    // 设计动机(为什么文件承载/-File/BOM/退出码尾部)详见
+    // {@link OsSandbox#spawnPowerShell} 与 {@link ExecResults#buildPowerShellScript} 的
+    // javadoc,此处不再复述。
 
     /**
      * Medium IL 方案:沙箱进程运行在 Medium IL(Restricted Token 去特权但不降级),

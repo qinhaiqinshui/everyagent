@@ -1,4 +1,4 @@
-package dev.everyagent.worker.tools;
+package dev.everyagent.worker.os;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledOnOs;
@@ -12,28 +12,34 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * DIRECT 路径 Windows PowerShell 宿主解析回归({@link CommandExecutor#resolveWindowsPowerShellExe}):
+ * DIRECT 路径 Windows PowerShell 宿主解析回归({@link OsSandbox#resolveWindowsPowerShellExe}):
  * PATH 探测 {@code pwsh.exe}(PowerShell 7+)优先,未装回退出厂 {@code powershell.exe}(5.1)。
  * 与 codex 后端 detectShell 同策略(ARCHITECTURE §7.10),本测试锁死「装了最新版就必须用上」。
+ * 解析逻辑随 PowerShell 共享管线({@link OsSandbox#spawnPowerShell})由 CommandExecutor
+ * 迁入 OsSandbox(会话 powershell 工具与工作流命令节点共用),测试随之迁移。
  */
 @EnabledOnOs(OS.WINDOWS)
-class CommandExecutorShellProbeTest {
+class OsSandboxPowerShellHostProbeTest {
 
     @Test
     void 装有pwsh时优先解析到绝对路径否则回退内置5_1() {
-        String resolved = CommandExecutor.resolveWindowsPowerShellExe();
-        String pwsh = CommandExecutor.findInPath("pwsh.exe");
+        String resolved = OsSandbox.resolveWindowsPowerShellExe();
+        String pwsh = OsSandbox.findInPath("pwsh.exe");
         if (pwsh != null) {
             assertEquals(pwsh, resolved, "装有 pwsh 时必须解析到 pwsh 绝对路径,不得回退 5.1");
             assertTrue(resolved.endsWith("pwsh.exe"), "解析结果须是 pwsh.exe: " + resolved);
         } else {
             assertEquals("powershell.exe", resolved, "未装 pwsh 时回退出厂 5.1");
+            // 裸名回退须真实可寻(PATH 或 System32 出厂位置)——否则 spawnPowerShell 将抛
+            // IllegalStateException(调用方回退其它 shell)
+            assertTrue(OsSandbox.windowsPowerShellFindable(),
+                    "回退 powershell.exe 时宿主必须真实可寻(PATH/System32)");
         }
     }
 
     @Test
     void findInPath对不存在的名字返回null() {
-        assertNull(CommandExecutor.findInPath("ea-definitely-missing-exe.exe"),
+        assertNull(OsSandbox.findInPath("ea-definitely-missing-exe.exe"),
                 "PATH 中不存在的可执行文件不得命中");
     }
 
@@ -43,7 +49,7 @@ class CommandExecutorShellProbeTest {
      */
     @Test
     void 解析出的宿主真实可执行且报告版本() throws Exception {
-        String exe = CommandExecutor.resolveWindowsPowerShellExe();
+        String exe = OsSandbox.resolveWindowsPowerShellExe();
         Process p = new ProcessBuilder(exe, "-NoProfile", "-NoLogo", "-NonInteractive",
                 "-Command", "$PSVersionTable.PSVersion.Major").redirectErrorStream(true).start();
         String major;

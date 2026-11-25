@@ -32,4 +32,29 @@ public interface NativeExec {
      * @return 执行结果（stdout / stderr / exitCode / aborted）
      */
     ExecResult spawnNative(String[] argv, Path cwd, Map<String, String> env, long timeoutMs);
+
+    /**
+     * 宿主 PowerShell 方言脚本执行（复用 worker 核心管线，非调用方手搓）。
+     *
+     * <p>{@code command} 是 PowerShell 方言脚本体，原样嵌入完整脚本交宿主 PowerShell 进程
+     * 执行。worker 实现（{@code OsSandbox}）走核心共享管线：<b>临时 {@code .ps1}
+     * （UTF-8 BOM）+ PATH 探测 {@code pwsh.exe}（PowerShell 7+）优先/回退出厂
+     * {@code powershell.exe}（5.1）+ stdout/stderr 文件承载（防 PS 5.1 管道下按 OEM 码页
+     * 转码毁 UTF-8）+ CLIXML/ANSI 还原 + 退出码传导</b>（脚本组装与退出码尾部见
+     * {@code ExecResults#buildPowerShellScript / POWERSHELL_EXIT_TAIL}）。会话 powershell
+     * 工具与工作流命令节点共用同一实现，行为完全一致。
+     *
+     * <p><b>宿主无法解析 PowerShell 可执行文件时抛 {@link IllegalStateException}</b>，
+     * 调用方可捕获后回退其它 shell（如 Windows 工作流命令节点回退 {@code cmd.exe /c}）。
+     * 命令执行本身的失败（非零退出码/超时/中断）仍以失败 {@code ExecResult} 返回，不抛异常。
+     *
+     * <p>cwd 禁入外部插件目录契约与 {@link #spawnNative} 相同（违规直接返回失败结果）。
+     *
+     * @param command   PowerShell 方言脚本体（不转写、不拆分，整段嵌入）
+     * @param cwd       工作目录（不得位于外部插件目录内，见类级「cwd 契约」）
+     * @param env        额外环境变量（与进程默认 env 合并）
+     * @param timeoutMs 超时毫秒数（超时强制销毁进程树，aborted=true）
+     * @return 执行结果（stdout / stderr 已解码与 CLIXML/ANSI 还原 / exitCode / aborted）
+     */
+    ExecResult spawnPowerShell(String command, Path cwd, Map<String, String> env, long timeoutMs);
 }
