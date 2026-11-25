@@ -172,6 +172,14 @@ function ensureEditorStyles(): void {
 /** AI 节点会话线下拉的「新建」哨兵值（真实 agent 名不含该前缀）。 */
 const NEW_LINE_VALUE = '__new_agent_line__'
 
+/**
+ * AI 节点 system prompt 编辑 UI 的可见性开关（2026-12 暂时隐藏）。
+ * 隐藏的是纯展示层：数据模型（WorkflowNodeDef.systemPrompt）、保存链路、
+ * 引用节点不存副本（agent 引用时写 systemPrompt: null）与后端沿图解析
+ * 全部原样保留——已有定义里的 systemPrompt 读写不受影响，重启用改回 true 即可。
+ */
+const SHOW_NODE_SYSTEM_PROMPT = false
+
 // ─── 纯逻辑（往返自测的最小核：new→mutate→save payload 组装） ─────────────
 
 /** 新建空白定义（一个 start 节点 + 默认 supervisor 策略）。 */
@@ -1080,22 +1088,24 @@ function NodePropertySection({
             ) : null}
           </div>
           {referencing ? (
-            <>
-              <div className="wf-editor-field">
-                <label>system prompt（来自定义节点「{definingNode?.name || definingNode?.id || node.agent}」，只读）</label>
-                <textarea
-                  className="wf-editor-textarea"
-                  style={{ minHeight: 56, opacity: 0.85 }}
-                  value={definingNode?.systemPrompt ?? ''}
-                  placeholder="（定义节点未填写 system prompt）"
-                  readOnly
-                />
-              </div>
-              <p className="wf-editor-hint">
-                要修改系统提示词，请在画布选中上游定义节点「{definingNode?.name || definingNode?.id || node.agent}」；
-                本节点仅延续会话线，可另配模型。
-              </p>
-            </>
+            SHOW_NODE_SYSTEM_PROMPT ? (
+              <>
+                <div className="wf-editor-field">
+                  <label>system prompt（来自定义节点「{definingNode?.name || definingNode?.id || node.agent}」，只读）</label>
+                  <textarea
+                    className="wf-editor-textarea"
+                    style={{ minHeight: 56, opacity: 0.85 }}
+                    value={definingNode?.systemPrompt ?? ''}
+                    placeholder="（定义节点未填写 system prompt）"
+                    readOnly
+                  />
+                </div>
+                <p className="wf-editor-hint">
+                  要修改系统提示词，请在画布选中上游定义节点「{definingNode?.name || definingNode?.id || node.agent}」；
+                  本节点仅延续会话线，可另配模型。
+                </p>
+              </>
+            ) : null
           ) : (
             <>
               <div className="wf-editor-field">
@@ -1107,16 +1117,18 @@ function NodePropertySection({
                   onChange={e => patchNode(node.id, { agent: e.target.value })}
                 />
               </div>
-              <div className="wf-editor-field">
-                <label>system prompt（可编辑；下游引用本会话线的节点只读回显）</label>
-                <textarea
-                  className="wf-editor-textarea"
-                  style={{ minHeight: 56 }}
-                  value={node.systemPrompt ?? ''}
-                  placeholder="system prompt（可选）"
-                  onChange={e => patchNode(node.id, { systemPrompt: e.target.value || null })}
-                />
-              </div>
+              {SHOW_NODE_SYSTEM_PROMPT ? (
+                <div className="wf-editor-field">
+                  <label>system prompt（可编辑；下游引用本会话线的节点只读回显）</label>
+                  <textarea
+                    className="wf-editor-textarea"
+                    style={{ minHeight: 56 }}
+                    value={node.systemPrompt ?? ''}
+                    placeholder="system prompt（可选）"
+                    onChange={e => patchNode(node.id, { systemPrompt: e.target.value || null })}
+                  />
+                </div>
+              ) : null}
             </>
           )}
           <div className="wf-editor-field">
