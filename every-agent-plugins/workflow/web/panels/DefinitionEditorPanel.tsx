@@ -9,8 +9,9 @@
  *
  * 布局三栏：左 = palette（添加节点）+ 变量/主 agent 配置/onError+supervisor 折叠编辑区；
  * 中 = WorkflowCanvas(mode=edit)；右 = 属性面板（选中节点 → 类型特定字段；选中边 →
- * 八种出边条件编辑器）——与实例详情面板同款隐藏规则：仅在选中后挂载，空白点按
- * 保留内容，× 关闭清选。顶部工具栏：定义名/描述 + 保存（def.save）+ 校验错误列表。
+ * 八种出边条件 + 边数据传递编辑器〔assigns 输出赋值 / input 模板〕）——与实例详情面板
+ * 同款隐藏规则：仅在选中后挂载，空白点按保留内容，× 关闭清选。顶部工具栏：定义名/
+ * 描述 + 保存（def.save）+ 校验错误列表。
  *
  * 属性表单排版（wf-editor-prop）：经典单列表单——每个字段占一整行，标签在上
  * （FieldLabel：属性名加粗 + 说明弱化换行），输入框/下拉/文本域在下一行占满整行；
@@ -42,6 +43,7 @@ import { useIsMobile } from '../useIsMobile'
 import {
   WorkflowValidationError,
   conditionLabel,
+  edgeDataLabel,
   localShortId,
   rpcErrorMessage,
   workflowGateway,
@@ -561,12 +563,17 @@ export default function DefinitionEditorPanel({
   }, [def])
 
   const canvasEdges: CanvasEdgeView[] = React.useMemo(() => {
-    return (def?.edges ?? []).map(e => ({
-      id: e.id,
-      from: e.from,
-      to: e.to,
-      conditionLabel: conditionLabel(e.condition),
-    }))
+    return (def?.edges ?? []).map(e => {
+      const cl = conditionLabel(e.condition)
+      const dl = edgeDataLabel(e)
+      return {
+        id: e.id,
+        from: e.from,
+        to: e.to,
+        // 条件 + 数据流合并单标签槽：如「不含 PASS → bReport ⇢ input」
+        conditionLabel: [cl, dl].filter(s => s !== '').join(' ') || undefined,
+      }
+    })
   }, [def])
 
   const selectedNode = selection?.kind === 'node' ? (def?.nodes ?? []).find(n => n.id === selection.id) ?? null : null
@@ -1326,6 +1333,98 @@ function EdgePropertySection({
       </p>
 
       <div className="wf-editor-divider" />
+
+      {/* ── 边数据传递：输出赋值（assigns）——校验-回指重试的报告回传通道 ── */}
+      <div className="wf-editor-field">
+        <FieldLabel name="输出赋值（assigns）" note="边激活时把源节点输出写入变量" icon={<VariableIcon size={12} />} />
+        {(edge.assigns ?? []).map((a, i) => (
+          <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            <input
+              className="wf-editor-input"
+              value={a.var}
+              placeholder="变量名，如 bReport"
+              onChange={e => {
+                const assigns = [...(edge.assigns ?? [])]
+                assigns[i] = { ...a, var: e.target.value }
+                patchEdge(edge.id, { assigns })
+              }}
+            />
+            <button
+              type="button"
+              className="wf-editor-icon-btn"
+              title="删除该赋值"
+              onClick={() => {
+                const assigns = (edge.assigns ?? []).filter((_, j) => j !== i)
+                patchEdge(edge.id, { assigns: assigns.length > 0 ? assigns : null })
+              }}
+            >
+              <DeleteIcon size={13} />
+            </button>
+          </div>
+        ))}
+        <button
+          type="button"
+          className="wf-editor-btn"
+          onClick={() => patchEdge(edge.id, { assigns: [...(edge.assigns ?? []), { var: '', from: 'output' }] })}
+        >
+          <PlusIcon size={12} /> 添加赋值
+        </button>
+        <p className="wf-editor-hint">
+          输出 = 命令 stdout+stderr / AI 最终回复全文（截断 8KB，全文在 runs 留档）；下游
+          command/input 以 {'{{变量名}}'} 消费。具名输出是实例级载体：不同源节点写同名变量会被保存校验拒绝。
+        </p>
+      </div>
+
+      {/* ── 边数据传递：边输入模板（input）——「路径即指令」，回指重试无需哨兵默认值 ── */}
+      <div className="wf-editor-field">
+        <FieldLabel name="边输入（input）" note="边激活时渲染模板写入变量（缺省名 input）" icon={<ConditionIcon size={12} />} />
+        {edge.input == null ? (
+          <button
+            type="button"
+            className="wf-editor-btn"
+            onClick={() => patchEdge(edge.id, { input: { var: null, template: '' } })}
+          >
+            <PlusIcon size={12} /> 添加边输入模板
+          </button>
+        ) : (
+          <>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <input
+                className="wf-editor-input"
+                value={edge.input.var ?? ''}
+                placeholder="变量名（留空 = input）"
+                onChange={e => patchEdge(edge.id, {
+                  input: { var: e.target.value.trim() || null, template: edge.input?.template ?? '' },
+                })}
+              />
+              <button
+                type="button"
+                className="wf-editor-icon-btn"
+                title="移除边输入"
+                onClick={() => patchEdge(edge.id, { input: null })}
+              >
+                <DeleteIcon size={13} />
+              </button>
+            </div>
+            <textarea
+              className="wf-editor-textarea"
+              style={{ minHeight: 56 }}
+              value={edge.input.template}
+              placeholder={'目标节点本次运行收到的指令，如：\n上一轮校验报告：{{bReport}}\n请逐条修复……'}
+              onChange={e => patchEdge(edge.id, {
+                input: { var: edge.input?.var ?? null, template: e.target.value },
+              })}
+            />
+            <p className="wf-editor-hint">
+              先执行本边的输出赋值、再渲染本模板（可引用刚写入的变量与用户输入变量）；目标节点——
+              命令与 AI 均可——用 {'{{变量名}}'} 消费（命令写 {'{{input}}'} 槽位）。不同入边携带不同模板：
+              首轮走任务边、回指轮走修复边，无需哨兵默认值。
+            </p>
+          </>
+        )}
+      </div>
+
+      <div className="wf-editor-divider" />
       <button className="wf-editor-btn wf-editor-btn-block" onClick={onDelete} style={{ color: 'var(--accent-red, #ff6b6b)' }}>
         <DeleteIcon size={13} /> 删除边（Delete）
       </button>
@@ -1350,6 +1449,11 @@ function EdgePropertySection({
  *    （none）」→ 角标消失；start 节点不显示该控件。保存 → 重开同一定义 → 下拉回显
  *    「等齐全部入边」（无 joinMode 字段/为 none 的旧定义回显「每次到达即执行」）；
  *    实例运行图（readonly）上带角标节点与运行态徽点并排不遮挡。
+ * 4d. 边数据传递：选中边 → 「输出赋值」加一条（填 bReport）+ 「边输入」点添加（变量名
+ *    留空 = input，模板填「上一轮报告：{{bReport}}，请修复」）→ 画布边标签追加
+ *    「→ bReport ⇢ input」、dirty ● 亮；保存重开全部还原。反向校验：目标节点 command/
+ *    input 未引用对应变量、或引用了不在上游的写入变量 → 保存被拒并逐项报错
+ *    （「写入边不在引用方上游」）；不同源节点的出边写同名 assigns 变量 → 同样被拒。
  * 5. 左栏「运行变量」默认展开，加一个 required 变量、「主 agent 配置」选一个非默认
  *    模型、「出错策略」确认默认 supervisor + 选督导模型。
  * 5b. 主 agent 配置回退链：AI 节点「模型配置」留空 + 定义选了主 agent 配置 → 运行

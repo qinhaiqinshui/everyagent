@@ -369,6 +369,131 @@ class DefinitionValidatorTest {
         assertThat(DefinitionValidator.validate(d)).anyMatch(e -> e.contains("name 不能为空"));
     }
 
+    // ── 边数据传递（assigns / 边 input 模板）──
+
+    @Test
+    void edgeDataLoopDefinitionIsValid() {
+        // 旗舰形态：n0→a→b→（回指 a ｜ →c）。e0/e1/e2 不同源边共写缺省 input 变量
+        // （边 input=到达即写的路径指令，跨源合法）；aResult/bReport 为 assigns 具名
+        // 载体（bReport 由 b 的两条出边写——同源多边，列表序后写覆盖合法）
+        Definition d = withVariables(def(
+                node("n0", "start"),
+                node("a", "ai").agent("worker").maxRuns(3).input("{{input}}"),
+                node("b", "ai").agent("reviewer").maxRuns(3).input("{{input}}"),
+                node("c", "ai").agent("finisher").input("产物:{{aResult}}\n结论:{{bReport}}"),
+                edge("e0", "n0", "a", null, null, new EdgeDef.EdgeInput(null, "任务:{{task}}")),
+                edge("e1", "a", "b", null,
+                        List.of(new EdgeDef.EdgeAssign("aResult", null)),
+                        new EdgeDef.EdgeInput(null, "产物:\n{{aResult}}")),
+                edge("e2", "b", "a", new ConditionDef("outputNotContains", null, "PASS", null),
+                        List.of(new EdgeDef.EdgeAssign("bReport", null)),
+                        new EdgeDef.EdgeInput(null, "报告:\n{{bReport}}\n请修复")),
+                edge("e3", "b", "c", new ConditionDef("outputContains", null, "PASS", null),
+                        List.of(new EdgeDef.EdgeAssign("bReport", null)), null)),
+                new VariableDef("task", null, true, null, null));
+        assertThat(DefinitionValidator.validate(d)).isEmpty();
+    }
+
+    @Test
+    void edgeWrittenVarCollidingWithUserVarIsError() {
+        Definition d = withVariables(def(
+                node("n0", "start"),
+                node("a", "command").command("echo hi"),
+                node("b", "command").command("echo {{v}}"),
+                edge("e1", "n0", "a"),
+                edge("e2", "a", "b", null, List.of(new EdgeDef.EdgeAssign("v", null)), null)),
+                new VariableDef("v", null, true, null, null));
+        assertThat(DefinitionValidator.validate(d)).anyMatch(e -> e.contains("同名"));
+    }
+
+    @Test
+    void assignsCrossSourceIsErrorButInputCrossSourceIsAllowed() {
+        // assigns 跨源竞写（具名输出=实例级载体，并行无静态时序）→ 报错
+        Definition assigns = def(
+                node("n0", "start"),
+                node("a", "command").command("echo a").maxRuns(3),
+                node("b", "command").command("echo b").maxRuns(3),
+                node("c", "command").command("echo {{v}}").maxRuns(3),
+                edge("e1", "n0", "a"), edge("e2", "n0", "b"),
+                edge("e3", "a", "c", null, List.of(new EdgeDef.EdgeAssign("v", null)), null),
+                edge("e4", "b", "c", null, List.of(new EdgeDef.EdgeAssign("v", null)), null));
+        assertThat(DefinitionValidator.validate(assigns))
+                .anyMatch(e -> e.contains("assigns 变量") && e.contains("不同源"));
+        // 边 input 跨源共写缺省 input（写入与目标触发耦合）→ 合法
+        Definition inputs = def(
+                node("n0", "start"),
+                node("a", "command").command("echo a").maxRuns(3),
+                node("b", "command").command("echo b").maxRuns(3),
+                node("c", "command").command("echo {{input}}").maxRuns(3),
+                edge("e1", "n0", "a"), edge("e2", "n0", "b"),
+                edge("e3", "a", "c", null, null, new EdgeDef.EdgeInput(null, "来自A")),
+                edge("e4", "b", "c", null, null, new EdgeDef.EdgeInput(null, "来自B")));
+        assertThat(DefinitionValidator.validate(inputs)).isEmpty();
+    }
+
+    @Test
+    void edgeTemplateRefsMustBeDeclaredAndUnpairedBracesAreError() {
+        Definition undeclared = def(
+                node("n0", "start"),
+                node("a", "command").command("echo hi"),
+                edge("e1", "n0", "a", null, null, new EdgeDef.EdgeInput(null, "引用 {{ghost}}")));
+        assertThat(DefinitionValidator.validate(undeclared))
+                .anyMatch(e -> e.contains("{{ghost}}") && e.contains("边 input 模板"));
+
+        Definition unpaired = def(
+                node("n0", "start"),
+                node("a", "command").command("echo hi"),
+                edge("e1", "n0", "a", null, null, new EdgeDef.EdgeInput(null, "引用 {{v}")));
+        assertThat(DefinitionValidator.validate(unpaired))
+                .anyMatch(e -> e.contains("未配对") && e.contains("边 input 模板"));
+    }
+
+    @Test
+    void unreachableNodeVarReferenceIsError() {
+        // a 的 assigns 写 v：y（a 下游）引用合法；x（与 a 并行的 b 下游）引用 → 时序
+        // 不定的空值，创建期拒绝
+        Definition d = def(
+                node("n0", "start"),
+                node("a", "command").command("echo a"),
+                node("b", "command").command("echo b"),
+                node("y", "command").command("echo ok:{{v}}"),
+                node("x", "command").command("echo bad:{{v}}"),
+                edge("e1", "n0", "a"), edge("e2", "n0", "b"),
+                edge("e3", "a", "y", null, List.of(new EdgeDef.EdgeAssign("v", null)), null),
+                edge("e4", "b", "x"));
+        List<String> errors = DefinitionValidator.validate(d);
+        assertThat(errors).hasSize(1);
+        assertThat(errors.get(0)).contains("{{v}}").contains("上游");
+    }
+
+    @Test
+    void unreachableEdgeTemplateVarIsError() {
+        // 边模板在 from 完成时渲染：e5(a→x) 模板引用 b 写入的 w——a 完成时 b 未必完成 → 拒
+        Definition d = def(
+                node("n0", "start"),
+                node("a", "command").command("echo a"),
+                node("b", "command").command("echo b"),
+                node("x", "command").command("echo x"),
+                edge("e1", "n0", "a"), edge("e2", "n0", "b"),
+                edge("e3", "b", "x", null, List.of(new EdgeDef.EdgeAssign("w", null)), null),
+                edge("e4", "a", "x", null, null, new EdgeDef.EdgeInput(null, "用 {{w}}")));
+        List<String> errors = DefinitionValidator.validate(d);
+        assertThat(errors).hasSize(1);
+        assertThat(errors.get(0)).contains("{{w}}").contains("上游");
+    }
+
+    @Test
+    void edgeInputBlankTemplateAndUnknownAssignFromAreErrors() {
+        Definition d = def(
+                node("n0", "start"),
+                node("a", "command").command("echo hi"),
+                edge("e1", "n0", "a", null, List.of(new EdgeDef.EdgeAssign("v", "stdout")), null),
+                edge("e2", "n0", "a", null, null, new EdgeDef.EdgeInput(null, "  ")));
+        List<String> errors = DefinitionValidator.validate(d);
+        assertThat(errors).anyMatch(e -> e.contains("from 未知"));
+        assertThat(errors).anyMatch(e -> e.contains("模板不能为空"));
+    }
+
     // ── 构造工具（可变测试桩，build 前可再补字段）──
 
         /** NodeDef 的测试用可变包装（record 不可变,链式补字段用）。 */
@@ -438,6 +563,11 @@ class DefinitionValidatorTest {
 
     static EdgeDef edge(String id, String from, String to, ConditionDef cond) {
         return new EdgeDef(id, from, to, cond);
+    }
+
+    static EdgeDef edge(String id, String from, String to, ConditionDef cond,
+            List<EdgeDef.EdgeAssign> assigns, EdgeDef.EdgeInput input) {
+        return new EdgeDef(id, from, to, cond, assigns, input);
     }
 
     static Definition def(Object... parts) {

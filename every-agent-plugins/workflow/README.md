@@ -48,7 +48,10 @@ workflow 插件
   `tasks/<taskId>/<agentId>.jsonl`、实例域→events.jsonl；
   agentId=`<name>#<instanceId>`）
   + `WorkflowEngine` 调度器（开始节点先行、边激活语义一次求值、同 agent fair 锁互斥、
-  循环上限 maxRuns、实例状态机、错误三策略 fail/supervisor/askUser、取消）+ `NodeRunners`
+  循环上限 maxRuns、实例状态机、错误三策略 fail/supervisor/askUser、取消）
+  + **边数据传递**（边激活写运行时变量：`assigns` 源输出→具名变量 + 边 `input`
+  模板渲染→变量〔缺省名 input〕；先赋值后渲染、先写后调度——校验-回指重试的
+  报告回传通道；rerun 从 events 的 vars 快照重放恢复）+ `NodeRunners`
   （命令节点走 nativeExec、AI 节点按会话时序 ①-⑥ 走 agentFactoryFor 装配链
   ——systemPrompt 节点自带或沿上游定义节点解析、supervisor 决策协议 retry/skip/fail/retryWithInput）。
 - **RPC 面**（`rpc/`）：`workflow.*` 15 方法——`def.list`/`def.get`/`def.save`/`def.delete`/
@@ -67,7 +70,8 @@ workflow 插件
 - **前端界面**（`web/`）：自研 SVG 画布（拖拽/连线/条件标签/运行态着色，Pointer
   Events 统一鼠标/触屏——节点拖拽、锚点连线、背景平移触屏可用）+ 定义编辑器
   （palette/节点属性面板（经典单列表单：上面属性名、下面控件，逐行竖向排列）/
-  八种边条件/运行变量/**主 agent 配置**（定义级模型配置：AI 节点未配置
+  八种边条件+**边数据传递**（输出赋值 assigns / 边 input 模板——选中边编辑，
+  画布边标签追加「→变量 ⇢变量」数据流标记）/运行变量/**主 agent 配置**（定义级模型配置：AI 节点未配置
   modelConfigId 时的统一回退，取值链 节点→主 agent 配置→系统默认）/出错策略/
   工具栏**一键自动布局**
   （Sugiyama 简化分层：回指边识别为逆向回线不参与分层、start 固定第 0 层、孤立

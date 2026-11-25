@@ -68,6 +68,13 @@ import dev.everyagent.plugin.workflow.store.WorkflowStore;
  * 剩余 pending 节点均为不可达死分支——不再阻塞实例收束；joinMode=all 未等齐的滞留激活
  * 同样不阻塞——整图静默时未齐 join 节点静默跳过，与死分支同语义）。
  *
+ * <p><b>边数据传递</b>：边激活时写运行时变量（assigns=源节点输出→具名变量；边 input=
+ * 模板渲染→变量，缺省名 input）——校验-回指重试等场景把输出/路径指令传递给下游
+ * （命令与 AI 节点经 {@code {{var}}} 同机制消费）。写入在 schedLock 内先于下游调度
+ * （先赋值后渲染，本边 assigns 可被本边模板引用）；变量解析优先级：边写入值 &gt;
+ * 用户输入 &gt; 声明默认值；rerun 从 events.jsonl 重放恢复（详见
+ * {@link #restoreRuntimeVars}）。
+ *
  * <p><b>状态机</b>：created/running/waiting-user/done/failed/cancelled；迁移点原子重写
  * meta.json（终态投影 nodeStates）。worker 重启扫描标 failed 已在 store 层（步骤 4）。
  *
@@ -96,6 +103,9 @@ public final class WorkflowEngine {
 
     /** 终态收口时等待节点线程退出的单线程上限。 */
     private static final long JOIN_TIMEOUT_MS = 10_000;
+
+    /** 边写入变量的单值上限（字符）——输出全文在 runs 文件留档，变量表与事件只承载截断值。 */
+    private static final int MAX_VAR_VALUE_CHARS = 8_192;
 
     /** wf.node trace 的 wire kind（非 AI 节点过程呈现，经任务 emitter 落任务 EventLog，§7.20.8）。 */
     public static final String WF_NODE_TRACE_KIND = "wf.node";
@@ -282,6 +292,7 @@ public final class WorkflowEngine {
                 meta.originTaskId(), taskExec == null ? "-" : taskExec.subjectId());
         synchronized (r.schedLock) {
             restoreNodeStates(r, meta);
+            restoreRuntimeVars(r, meta);
             if (input != null && !input.isBlank()) {
                 replaceNodeInput(r, target, input);
             }
@@ -334,6 +345,36 @@ public final class WorkflowEngine {
             }
         }
         return null;
+    }
+
+    /**
+     * 运行时变量重放（rerun 专用，schedLock 内调用）：从 events.jsonl 按序折叠
+     * {@code node.output}/{@code node.skipped} 的 {@code payload.vars} 恢复
+     * {@link InstanceRun#runtimeVars}——done 节点不重跑，其 assigns 不会再触发，
+     * 不重放则下游渲染读空。事件即完整事实源（追加写、seq 单调天然有序），
+     * meta.json 不加字段；读失败按空表处理（warn 不抛——rerun 修复优先于变量完备）。
+     */
+    private void restoreRuntimeVars(InstanceRun r, InstanceMeta meta) {
+        try {
+            for (EventLine ev : store.readEvents(meta.workspaceId(), r.instanceId, 0, 0)) {
+                if (!"node.output".equals(ev.event()) && !"node.skipped".equals(ev.event())) {
+                    continue;
+                }
+                var vars = ev.payload() == null ? null : ev.payload().path("vars");
+                if (vars == null || !vars.isObject() || vars.isEmpty()) {
+                    continue;
+                }
+                for (Map.Entry<String, tools.jackson.databind.JsonNode> f : vars.properties()) {
+                    String name = f.getKey();
+                    String value = f.getValue().asString(null);
+                    if (name != null && !name.isBlank() && value != null) {
+                        r.runtimeVars.put(name, value);
+                    }
+                }
+            }
+        } catch (RuntimeException e) {
+            log.warn("[workflow] 运行时变量重放失败(按空表处理) instance={}", r.instanceId, e);
+        }
     }
 
     /** 实例是否在运行（终态即不在）。 */
@@ -556,6 +597,13 @@ public final class WorkflowEngine {
         final ConcurrentHashMap<String, Thread> nodeThreads = new ConcurrentHashMap<>();
         /** runNo → 已落盘 RunRecord（终态后供失败上下文/rerun 取节点历史）。 */
         final ConcurrentHashMap<Integer, RunRecord> runRecords = new ConcurrentHashMap<>();
+        /**
+         * 边数据传递的运行时变量表（assigns + 边 input 写入；命令与 AI 节点的
+         * command/input 模板经 {{var}} 消费）。schedLock 临界区内写、节点虚拟线程
+         * 锁外渲染读 → ConcurrentHashMap；rerun 从 events.jsonl 的
+         * node.output/node.skipped payload.vars 重放恢复（meta.json 不加字段）。
+         */
+        final ConcurrentHashMap<String, String> runtimeVars = new ConcurrentHashMap<>();
         /** 终态放行 latch（{@code finish} 收口尾 countDown；awaitTerminalMeta 的可中断等待点）。 */
         final CountDownLatch terminalLatch = new CountDownLatch(1);
         /** 最近一次 rerun 时刻（终态时折算 resumedDurationMs；null=从未续跑）。 */
@@ -807,10 +855,14 @@ public final class WorkflowEngine {
                     activated.add(e.id());
                 }
             }
+            // 边数据传递：先 assigns 后边 input 模板（done/failed 两条路径共用——失败被
+            // 条件出边接住时报告沿 onError 边回传是校验-重试环的核心形态），全部写入
+            // 完成后才激活/调度下游——下游渲染时值必已就绪
+            Map<String, String> varsWritten = applyEdgeDataLocked(r, activated, result);
             RunRecord rec = buildRecord(r, node, runNo, startedAt, in, result, null, activated);
             r.runRecords.put(runNo, rec);
             store.saveRunRecord(r.wsId, r.instanceId, rec);
-            emitNodeOutput(r, node, runNo, runCount, result, activated);
+            emitNodeOutput(r, node, runNo, runCount, result, activated, varsWritten);
             if (failed) {
                 emitNodeError(r, node.id(), display(node), runNo,
                         "命令退出码非零: " + result.exitCode(), result.exitCode());
@@ -844,6 +896,58 @@ public final class WorkflowEngine {
      * joinMode=all 的目标：激活边 id 记入其到达记账（{@code arrivedEdges}，Set 对环内
      * 同一条边重复到达天然去重；pendingActivations 计数照旧——供完成判定的滞留检测）。
      */
+    /**
+     * 边数据传递写入端（schedLock 内调用，completeNode/skipNode 收口处；激活边按
+     * 定义 edges 列表序处理）：①assigns——源节点输出（conditionOutput，截断
+     * {@link #MAX_VAR_VALUE_CHARS}；全文在 runs 文件留档）写入运行时变量；②边 input
+     * 模板——经「用户变量 + 本批已写运行时变量」渲染后写入指定变量（缺省名 input，
+     * render 的不递归/防注入纪律原样适用）。两步分轮：全部 assigns 先落，再渲染模板
+     * ——本边 assigns 可被本边模板引用；同源多边写同名变量按列表序后写覆盖（LWW，
+     * 确定性可审查）。写入完成后才 activateTargetsLocked 调度下游，下游渲染时值必已
+     * 就绪（节点执行在锁外虚拟线程，但调度派发先于赋值完成不可能发生）。
+     *
+     * <p>result=null（skip 决策路径）：被跳过节点无输出可读——assigns 跳过，边 input
+     * 模板照常写入（模板仅引用变量，渲染语义自洽；「边激活即写」不变式统一）。
+     *
+     * @return 写入快照（node.output/node.skipped 事件 payload.vars 留档——rerun 重放
+     *         的依据；空表=本批无写入）
+     */
+    private Map<String, String> applyEdgeDataLocked(InstanceRun r, List<String> activatedEdgeIds,
+            NodeResult result) {
+        if (activatedEdgeIds == null || activatedEdgeIds.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, String> written = new LinkedHashMap<>();
+        for (String edgeId : activatedEdgeIds) {
+            EdgeDef e = r.edgeById.get(edgeId);
+            if (e == null || e.assigns() == null || result == null) {
+                continue;
+            }
+            for (EdgeDef.EdgeAssign a : e.assigns()) {
+                if (a == null || a.var() == null || a.var().isBlank()) {
+                    continue;
+                }
+                // v1 唯一来源 output（未知 from 校验期已拒，运行时按 output 兜底）
+                String output = result.conditionOutput() == null ? "" : result.conditionOutput();
+                String value = truncate(output, MAX_VAR_VALUE_CHARS);
+                r.runtimeVars.put(a.var(), value);
+                written.put(a.var(), value);
+            }
+        }
+        for (String edgeId : activatedEdgeIds) {
+            EdgeDef e = r.edgeById.get(edgeId);
+            if (e == null || e.input() == null || e.input().template() == null) {
+                continue;
+            }
+            String var = e.input().effectiveVar();
+            String rendered = NodeRunners.render(e.input().template(), mergedVars(r),
+                    r.snapshot.variablesOrEmpty());
+            r.runtimeVars.put(var, rendered);
+            written.put(var, rendered);
+        }
+        return written;
+    }
+
     private void activateTargetsLocked(InstanceRun r, List<String> activatedEdgeIds) {
         LinkedHashSet<String> targets = new LinkedHashSet<>();
         for (String edgeId : activatedEdgeIds) {
@@ -1088,7 +1192,9 @@ public final class WorkflowEngine {
         }
     }
 
-    /** skip：节点终态 skipped + 全部出边无条件激活（「跳过该节点继续下游」）。 */
+    /** skip：节点终态 skipped + 全部出边无条件激活（「跳过该节点继续下游」）。
+     * 边数据传递同「边激活即写」不变式：assigns 无输出可写=跳过（result 传 null），
+     * 边 input 模板照常渲染写入——下游拿到的指令材料不因跳过而缺席。 */
     private void skipNode(InstanceRun r, NodeDef node, int runNo) {
         synchronized (r.schedLock) {
             if (r.stopping || r.status.get().terminal()) {
@@ -1098,13 +1204,20 @@ public final class WorkflowEngine {
             if (st != null) {
                 st.status = "skipped";
             }
-            store.appendEvent(r.wsId, r.instanceId, "node.skipped", Json.obj()
-                    .put("nodeId", node.id()).put("runNo", runNo));
             // 被跳过节点无输出,条件求值无意义——全部出边激活
             List<String> all = new ArrayList<>();
             for (EdgeDef e : r.outEdges.getOrDefault(node.id(), List.of())) {
                 all.add(e.id());
             }
+            Map<String, String> varsWritten = applyEdgeDataLocked(r, all, null);
+            var payload = Json.obj()
+                    .put("nodeId", node.id()).put("runNo", runNo);
+            if (!varsWritten.isEmpty()) {
+                var vars = Json.obj();
+                varsWritten.forEach(vars::put);
+                payload.set("vars", vars);
+            }
+            store.appendEvent(r.wsId, r.instanceId, "node.skipped", payload);
             activateTargetsLocked(r, all);
             tryScheduleLocked(r, node.id());
             checkCompletionLocked(r);
@@ -1262,7 +1375,7 @@ public final class WorkflowEngine {
 
     /** 节点输入三视图（raw 模板 / rendered 变量渲染 / visibleToAi token 拍平；start 无输入）。 */
     private RenderedInput renderInput(InstanceRun r, NodeDef node) {
-        Map<String, String> vars = r.meta.variablesOrEmpty();
+        Map<String, String> vars = mergedVars(r);
         List<dev.everyagent.plugin.workflow.model.VariableDef> decls = r.snapshot.variablesOrEmpty();
         switch (node.type() == null ? "" : node.type()) {
             case NodeDef.TYPE_COMMAND -> {
@@ -1280,6 +1393,21 @@ public final class WorkflowEngine {
                 return new RenderedInput(null, null, null, null);
             }
         }
+    }
+
+    /**
+     * 节点渲染的变量解析集：用户输入变量 ∪ 运行时边写入变量（边写入值覆盖同名用户值
+     * ——校验器已禁同名，覆盖仅防御；{@link NodeRunners#resolveVariable} 的优先级
+     * 链 = 本表值 &gt; 声明默认值）。空表时零拷贝直返 meta 视图（旧定义热路径不变）。
+     */
+    private static Map<String, String> mergedVars(InstanceRun r) {
+        Map<String, String> user = r.meta.variablesOrEmpty();
+        if (r.runtimeVars.isEmpty()) {
+            return user;
+        }
+        Map<String, String> merged = new LinkedHashMap<>(user);
+        merged.putAll(r.runtimeVars);
+        return merged;
     }
 
     private record RenderedInput(String raw, String rendered, String visibleToAi, String preview) {
@@ -1342,9 +1470,11 @@ public final class WorkflowEngine {
      * node.output 事件：基础字段 + <b>运行水位</b>——runCount 与本次 node.started 同值
      * （同一次运行的收口），maxRuns=节点额度（缺省 1）：失败后仅凭末条事件即可诊断
      * 「这是第几次/还剩几次」（node.error 本身不带水位，水位由收口前的 started/output 携带）。
+     * 边数据传递时另携 {@code vars}（本次激活边写入的完整变量快照——rerun 重放依据，
+     * 值已按 {@link #MAX_VAR_VALUE_CHARS} 截断）。
      */
     private void emitNodeOutput(InstanceRun r, NodeDef node, int runNo, int runCount,
-            NodeResult result, List<String> activated) {
+            NodeResult result, List<String> activated, Map<String, String> varsWritten) {
         var payload = Json.obj()
                 .put("nodeId", node.id())
                 .put("runNo", runNo)
@@ -1353,6 +1483,11 @@ public final class WorkflowEngine {
                 .put("exitCode", result.exitCode())
                 .put("outputPreview", truncate(result.conditionOutput(), 1024))
                 .set("activatedEdges", Json.toJson(activated));
+        if (varsWritten != null && !varsWritten.isEmpty()) {
+            var vars = Json.obj();
+            varsWritten.forEach(vars::put);
+            payload.set("vars", vars);
+        }
         store.appendEvent(r.wsId, r.instanceId, "node.output", payload);
     }
 

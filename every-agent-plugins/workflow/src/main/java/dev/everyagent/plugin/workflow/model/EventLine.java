@@ -13,9 +13,9 @@ import tools.jackson.databind.JsonNode;
  * {@code wf.created{instanceId,definitionId,name,variables}} /
  * {@code wf.status{status,error?}} /
  * {@code node.started{nodeId,nodeName,runNo,runCount,maxRuns,agent?,inputPreview}} /
- * {@code node.output{nodeId,runNo,runCount,maxRuns,exitCode?,outputPreview,activatedEdges[]}} /
+ * {@code node.output{nodeId,runNo,runCount,maxRuns,exitCode?,outputPreview,activatedEdges[],vars?}} /
  * {@code node.error{nodeId,runNo,message,exitCode?}} /
- * {@code node.skipped{nodeId,runNo}} /
+ * {@code node.skipped{nodeId,runNo,vars?}} /
  * {@code supervisor.decision{nodeId,runNo,decision(action,input?),reason?}} /
  * {@code wf.askUser{nodeId,runNo,question,options[],context}} /
  * {@code wf.cancelled{by}} / {@code wf.done{durationMs}}。

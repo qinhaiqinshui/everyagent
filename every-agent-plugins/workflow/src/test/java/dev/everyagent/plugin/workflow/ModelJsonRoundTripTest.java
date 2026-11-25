@@ -51,6 +51,11 @@ class ModelJsonRoundTripTest {
         assertThat(json).contains("\"input\":\"请为《{{novelName}}》拟一份章节大纲\"");
         // 条件边
         assertThat(json).contains("\"condition\":{\"type\":\"outputMatches\",\"pattern\":\"ok.*\"}");
+        // 边数据传递（assigns + 边 input 模板）
+        assertThat(json).contains("\"assigns\":[{\"var\":\"aResult\",\"from\":\"output\"}]");
+        assertThat(json).contains("\"input\":{\"var\":\"bReport\",\"template\":\"报告:\\n{{aResult}}\"}");
+        // 纯路由边不带数据面字段（NON_NULL）
+        assertThat(json).contains("{\"id\":\"we_01\",\"from\":\"wn_st0\",\"to\":\"wn_b7\"}");
     }
 
     @Test
@@ -216,7 +221,9 @@ class ModelJsonRoundTripTest {
                 List.of(
                         new EdgeDef("we_01", "wn_st0", "wn_b7", null),
                         new EdgeDef("we_02", "wn_b7", "wn_c3",
-                                new ConditionDef(ConditionDef.OUTPUT_MATCHES, null, null, "ok.*")),
+                                new ConditionDef(ConditionDef.OUTPUT_MATCHES, null, null, "ok.*"),
+                                List.of(new EdgeDef.EdgeAssign("aResult", "output")),
+                                new EdgeDef.EdgeInput("bReport", "报告:\n{{aResult}}")),
                         new EdgeDef("we_03", "wn_c3", "wn_b7",
                                 new ConditionDef(ConditionDef.EXIT_CODE, 2L, null, null))));
     }

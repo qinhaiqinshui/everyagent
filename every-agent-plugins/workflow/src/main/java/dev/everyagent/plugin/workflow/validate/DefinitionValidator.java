@@ -1,8 +1,10 @@
 package dev.everyagent.plugin.workflow.validate;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
@@ -35,7 +37,16 @@ import dev.everyagent.plugin.workflow.model.VariableDef;
  *       定义节点，携带合法）；</li>
  *   <li>循环允许（不校验环——maxRuns 是运行期兜底）；</li>
  *   <li>outputMatches 正则可编译；exitCode/outputContains 等条件带齐各自参数；</li>
- *   <li>变量名唯一且为 [A-Za-z0-9_-]+（渲染替换的键安全）。</li>
+ *   <li>变量名唯一且为 [A-Za-z0-9_-]+（渲染替换的键安全）；</li>
+ *   <li><b>边数据传递（assigns/input）</b>：变量名安全；边 input 模板非空；assigns 的
+ *       from ∈ {output}；边写入变量（assigns var ∪ 边 input 变量）不得与用户输入变量
+ *       同名；<b>assigns 变量禁跨源</b>（具名输出=实例级载体，不同源竞写无静态时序；
+ *       同源多边按边列表序后写覆盖合法；边 input 变量=到达即写的路径指令，允许跨源）；
+ *       {@code {{var}}} 引用（command/input/边 input 模板三处扫描）必须已声明（用户
+ *       变量或某条边的写入变量）且来源可达——节点引用边写入变量要求写入边源节点在
+ *       其上游闭包内（环上含自身）、边 input 模板要求写入边源节点在 {@code from}
+ *       节点的上游闭包或就是 {@code from} 自身（模板渲染发生在 from 完成时，值须已
+ *       就绪；不可达 = 运行时序不确定的空值，创建期即拒）。</li>
  * </ol>
  *
  * <p>{@link #normalize} 在校验通过后调用：onError 缺省 supervisor、schemaVersion 归一、
@@ -72,8 +83,9 @@ public final class DefinitionValidator {
         }
         validateVariables(d, errors);
         Set<String> nodeIds = validateNodes(d, errors);
+        Map<String, Set<String>> writeSources = validateEdgeData(d, errors);
         validateEdges(d, nodeIds, errors);
-        validateVarRefs(d, errors);
+        validateVarRefs(d, writeSources, errors);
         return errors;
     }
 
@@ -176,6 +188,86 @@ public final class DefinitionValidator {
         return nodeIds;
     }
 
+    /**
+     * 边数据传递结构校验（assigns/input），返回「边写入变量 → 写入源节点集合」（含
+     * assigns 与边 input 两类写入端）供引用/可达性检查消费。规则：变量名安全；边
+     * input 模板非空；from ∈ {output}；边写入变量不与用户输入变量同名（解析优先级
+     * 固定为边写入值优先，同名只剩歧义）。<b>assigns 变量禁跨源</b>——具名输出是
+     * 实例级长生命周期载体（任意距离消费），不同源节点竞写无静态时序（同源多边按
+     * 边列表序后写覆盖合法）；边 input 变量<b>允许跨源</b>——「边激活即写」与目标
+     * 触发耦合（e0/e1/e2 式路径指令：多条不同源入边共写缺省 {@code input}），同名
+     * 后写覆盖。
+     */
+    private static Map<String, Set<String>> validateEdgeData(Definition d, List<String> errors) {
+        Set<String> userVars = new LinkedHashSet<>();
+        for (VariableDef v : d.variablesOrEmpty()) {
+            if (v != null && v.name() != null) {
+                userVars.add(v.name());
+            }
+        }
+        Map<String, Set<String>> writeSources = new LinkedHashMap<>();
+        Map<String, Set<String>> assignSources = new LinkedHashMap<>();
+        for (EdgeDef e : d.edgesOrEmpty()) {
+            if (e == null) {
+                continue;
+            }
+            String where = "边 " + e.id();
+            // from/to 缺失的边由 validateEdges 报错；此处跳过数据面校验（源集合不收 null 键）
+            if (e.from() == null || e.from().isBlank() || e.to() == null || e.to().isBlank()) {
+                continue;
+            }
+            if (e.assigns() != null) {
+                for (EdgeDef.EdgeAssign a : e.assigns()) {
+                    if (a == null) {
+                        errors.add("assigns 含空项: " + where);
+                        continue;
+                    }
+                    if (a.var() == null || a.var().isBlank()) {
+                        errors.add("assigns 的 var 不能为空: " + where);
+                        continue;
+                    }
+                    if (!SAFE_VAR_NAME.matcher(a.var()).matches()) {
+                        errors.add("assigns 变量名只能含字母/数字/下划线/连字符(≤64): "
+                                + a.var() + " @" + where);
+                        continue;
+                    }
+                    if (a.from() != null && !a.from().isBlank()
+                            && !EdgeDef.EdgeAssign.KNOWN_FROMS.contains(a.from())) {
+                        errors.add("assigns 的 from 未知(允许 output): " + a.from() + " @" + where);
+                        continue;
+                    }
+                    writeSources.computeIfAbsent(a.var(), k -> new LinkedHashSet<>()).add(e.from());
+                    assignSources.computeIfAbsent(a.var(), k -> new LinkedHashSet<>()).add(e.from());
+                }
+            }
+            if (e.input() != null) {
+                EdgeDef.EdgeInput in = e.input();
+                if (in.template() == null || in.template().isBlank()) {
+                    errors.add("边 input 模板不能为空: " + where);
+                } else if (in.var() != null && !in.var().isBlank()
+                        && !SAFE_VAR_NAME.matcher(in.var()).matches()) {
+                    errors.add("边 input 变量名只能含字母/数字/下划线/连字符(≤64): "
+                            + in.var() + " @" + where);
+                } else {
+                    writeSources.computeIfAbsent(in.effectiveVar(), k -> new LinkedHashSet<>()).add(e.from());
+                }
+            }
+        }
+        for (String var : writeSources.keySet()) {
+            if (userVars.contains(var)) {
+                errors.add("边写入变量与用户输入变量同名: " + var + "(请改名其一,解析优先级为边写入值优先)");
+            }
+        }
+        for (Map.Entry<String, Set<String>> en : assignSources.entrySet()) {
+            if (en.getValue().size() > 1) {
+                errors.add("assigns 变量 " + en.getKey() + " 被多个不同源节点的出边写入("
+                        + String.join(",", en.getValue())
+                        + "),并行竞写无静态时序——请收敛到同一源节点或拆分变量名");
+            }
+        }
+        return writeSources;
+    }
+
     private static void validateEdges(Definition d, Set<String> nodeIds, List<String> errors) {
         Set<String> edgeIds = new LinkedHashSet<>();
         for (EdgeDef e : d.edgesOrEmpty()) {
@@ -246,25 +338,46 @@ public final class DefinitionValidator {
         }
     }
 
-    /** command / input 中 {{var}} 引用必须已声明。 */
-    private static void validateVarRefs(Definition d, List<String> errors) {
+    /**
+     * {@code {{var}}} 引用校验（command / input / 边 input 模板三处扫描）：
+     * 引用必须「已声明」——用户输入变量或某条边的写入变量（assigns var ∪ 边 input
+     * 变量）；花括号配对 lint 同口径。边写入变量另加<b>可达性</b>：写入边源节点须在
+     * 引用方上游闭包内（节点模板：该节点的上游；边模板：from 节点的上游 ∪ from 自身
+     * ——模板在 from 完成时渲染，值须已就绪）。不可达 = 运行时序不确定的空值
+     * （并行分支竞速），创建期即拒而非静默空串。
+     */
+    private static void validateVarRefs(Definition d, Map<String, Set<String>> writeSources,
+            List<String> errors) {
         Set<String> declared = new LinkedHashSet<>();
         for (VariableDef v : d.variablesOrEmpty()) {
             if (v != null && v.name() != null) {
                 declared.add(v.name());
             }
         }
+        declared.addAll(writeSources.keySet());
         for (NodeDef n : d.nodesOrEmpty()) {
             if (n == null) {
                 continue;
             }
-            checkRefs(n.command(), n.id(), "command", declared, errors);
-            checkRefs(n.input(), n.id(), "input", declared, errors);
+            Set<String> upstream = NodeRunners.upstreamNodeIds(d, n.id());
+            checkRefs(n.command(), n.id(), "command", declared, writeSources, upstream, errors);
+            checkRefs(n.input(), n.id(), "input", declared, writeSources, upstream, errors);
+        }
+        for (EdgeDef e : d.edgesOrEmpty()) {
+            if (e == null || e.input() == null || e.input().template() == null
+                    || e.from() == null || e.from().isBlank()) {
+                continue;
+            }
+            // 边模板的可达集 = from 的上游 ∪ {from}（from 自身的出边 assigns 先于模板渲染）
+            Set<String> allowed = new LinkedHashSet<>(NodeRunners.upstreamNodeIds(d, e.from()));
+            allowed.add(e.from());
+            checkRefs(e.input().template(), e.id(), "边 input 模板", declared, writeSources,
+                    allowed, errors);
         }
     }
 
     private static void checkRefs(String text, String nodeId, String field, Set<String> declared,
-            List<String> errors) {
+            Map<String, Set<String>> writeSources, Set<String> reachableSources, List<String> errors) {
         if (text == null || text.isEmpty()) {
             return;
         }
@@ -273,6 +386,13 @@ public final class DefinitionValidator {
             String ref = m.group(1);
             if (!declared.contains(ref)) {
                 errors.add("{{" + ref + "}} 引用了未声明的变量 @" + nodeId + " " + field);
+                continue;
+            }
+            Set<String> sources = writeSources.get(ref);
+            if (sources != null && reachableSources.stream().noneMatch(sources::contains)) {
+                errors.add("{{" + ref + "}} 的写入边不在引用方上游(写入源: "
+                        + String.join(",", sources) + ",引用 @" + nodeId + " " + field
+                        + ")——运行时序不定会渲染为空,请调整图结构或改用用户输入变量");
             }
         }
         // 花括号配对 lint：挖掉合法 {{name}} 引用后仍残留 {{ = 引用写法不完整

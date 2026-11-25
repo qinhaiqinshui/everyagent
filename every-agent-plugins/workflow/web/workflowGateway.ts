@@ -80,12 +80,35 @@ export interface WorkflowNodeDef {
   systemPrompt?: string | null
 }
 
-/** 边定义（源节点完成时对出边条件求值一次）。 */
+/** 边级输出赋值（assigns）：边激活时把源节点输出写入运行时变量（from 仅 "output"）。 */
+export interface WorkflowEdgeAssign {
+  var: string
+  from?: string | null
+}
+
+/** 边级输入模板（input）：边激活时渲染模板并写入变量（var 缺省 "input"）。 */
+export interface WorkflowEdgeInput {
+  var?: string | null
+  template: string
+}
+
+/** 边定义（源节点完成时对出边条件求值一次；激活时可写运行时变量——assigns/input）。 */
 export interface WorkflowEdgeDef {
   id: string
   from: string
   to: string
   condition?: WorkflowCondition | null
+  /**
+   * 边激活时把源节点输出写入运行时变量（输出全文截断 8KB；下游 command/input 以
+   * {{var}} 消费）。assigns 变量禁跨源（校验器拒）；同源多边按边列表序后写覆盖。
+   */
+  assigns?: WorkflowEdgeAssign[] | null
+  /**
+   * 边激活时渲染本模板并写入变量（缺省名 input），目标节点经 {{input}} 消费——
+   * 「路径即指令」：不同入边（如首轮/回指修复轮）携带不同模板，无需哨兵默认值。
+   * 边 input 变量允许跨源（与目标触发耦合，后写覆盖）。
+   */
+  input?: WorkflowEdgeInput | null
 }
 
 /** 出错策略（默认 supervisor）。 */
@@ -294,6 +317,22 @@ export function conditionLabel(c?: WorkflowCondition | null): string {
     case 'outputMatches': return `匹配 ${c.pattern ?? '?'}`
     default: return c.type
   }
+}
+
+/**
+ * 边数据传递的画布短标签（无数据面字段=空串）：assigns → 「→变量」；边 input →
+ * 「⇢变量」。与 conditionLabel 并排拼进画布边标签（单槽复用）。
+ */
+export function edgeDataLabel(e?: WorkflowEdgeDef | null): string {
+  if (!e) return ''
+  const parts: string[] = []
+  const assignVars = (e.assigns ?? []).map(a => a.var).filter(v => v && v.trim().length > 0)
+  if (assignVars.length > 0) parts.push(`→ ${assignVars.join(',')}`)
+  if (e.input) {
+    const varName = e.input.var?.trim() || 'input'
+    parts.push(`⇢ ${varName}`)
+  }
+  return parts.join(' ')
 }
 
 // ─── instance.dataDir 预取缓存（侧栏「复制工作流路径」；宿主 taskDataDirCache 同款） ──

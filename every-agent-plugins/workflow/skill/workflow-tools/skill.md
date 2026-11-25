@@ -6,7 +6,7 @@ tools: [workflow_create, workflow_get, workflow_update, workflow_delete, workflo
 
 # 工作流编排
 
-工作流 = 可复用的多步骤执行图：开始节点先行，命令节点经系统 shell 执行（Windows 默认=PowerShell〔pwsh 优先/内置 5.1 回退，宿主极端无 PowerShell 才回退 `cmd.exe /c`〕、Unix=`/bin/sh -c`，详见「命令节点执行环境」），AI 节点由命名 agent（持续会话线）执行；边条件决定路由（支持循环，maxRuns 兜限；多入边节点可选 `joinMode:"all"` 汇合屏障，见「汇合与多入边语义」）；运行变量在 command/input 里以 `{{varName}}` 注入。
+工作流 = 可复用的多步骤执行图：开始节点先行，命令节点经系统 shell 执行（Windows 默认=PowerShell〔pwsh 优先/内置 5.1 回退，宿主极端无 PowerShell 才回退 `cmd.exe /c`〕、Unix=`/bin/sh -c`，详见「命令节点执行环境」），AI 节点由命名 agent（持续会话线）执行；边条件决定路由（支持循环，maxRuns 兜限；多入边节点可选 `joinMode:"all"` 汇合屏障，见「汇合与多入边语义」）；运行变量在 command/input 里以 `{{varName}}` 注入；**边数据传递**（`assigns`/边 `input` 模板）在边激活时写运行时变量——校验-回指重试等场景把节点输出/路径指令传给下游（见「边数据传递」专节）。
 本技能的十一个工具会在你读取本知识包后自动加入工具列表，直接按列表中的定义调用即可。
 
 ## 适用条件
@@ -59,7 +59,7 @@ tools: [workflow_create, workflow_get, workflow_update, workflow_delete, workflo
 - n5 演示**多入边汇合**：入边 e4（大纲分支）+e5（润色分支），`"joinMode": "all"` = 两条入边各激活一次才触发**一次**执行（maxRuns 按「触发执行次数」计=3 次额度，不用按入边数手算）；缺省不写 joinMode 时每条激活入边到达各触发一次执行。
 - 节点 x/y 只是画布坐标，可省略/置 0（不影响运行）；用户可在编辑器工具栏点「自动布局」一键分层重排并写回全部节点坐标。
 
-硬约束（校验失败返回逐项 `details`）：start 节点有且仅有一个；边引用的节点必须存在；maxRuns∈[1,10]；节点 `joinMode` ∈ {null, "", "none", "all"}（缺省 none；未知取值报错——语义见「汇合与多入边语义」；start/单入边节点带 all 等价缺省，宽松不报错）；`{{var}}` 只能出现在 command/input 且必须已在 variables 声明，**花括号必须配对**（`{{topic}` 缺右花括号会被创建期拒绝，不会按字面量静默输出）；AI 节点的 `agent` **必填**（不再支持匿名一次性会话）且不可用保留名 meta/events/runs/agents/supervisor；**引用节点不允许携带 systemPrompt**——定义节点=该 agent 名上游拓扑序最早持有者（见「会话线（agent）规则」），引用节点带非空白 systemPrompt 会被 create/update 直接拒绝（错误信息带定义节点定位）；outputMatches 的 pattern 必须是可编译正则；循环允许（靠 maxRuns 兜底：额度耗尽=节点失败→无人接住→实例 failed，`workflow_run` 返回 error 形态）。condition.type 取值：always（缺省）/onSuccess/onError/exitCode（带 `value`）/outputContains/outputNotContains（带 `text`）/outputEquals（带 `text`，输出与文本各自 trim 后精确相等——命令尾随换行不影响，适合 `PASS`/`FAIL` 这类标记行整行判定）/outputMatches（带 `pattern`）。
+硬约束（校验失败返回逐项 `details`）：start 节点有且仅有一个；边引用的节点必须存在；maxRuns∈[1,10]；节点 `joinMode` ∈ {null, "", "none", "all"}（缺省 none；未知取值报错——语义见「汇合与多入边语义」；start/单入边节点带 all 等价缺省，宽松不报错）；`{{var}}` 只能出现在 command/input/**边 input 模板**且必须已声明（用户变量 variables ∪ 边写入变量 assigns/input——引用边写入变量另加可达性检查：写入边源节点须在引用方上游闭包内，否则报「写入边不在引用方上游」），**花括号必须配对**（`{{topic}` 缺右花括号会被创建期拒绝，不会按字面量静默输出）；AI 节点的 `agent` **必填**（不再支持匿名一次性会话）且不可用保留名 meta/events/runs/agents/supervisor；**引用节点不允许携带 systemPrompt**——定义节点=该 agent 名上游拓扑序最早持有者（见「会话线（agent）规则」），引用节点带非空白 systemPrompt 会被 create/update 直接拒绝（错误信息带定义节点定位）；outputMatches 的 pattern 必须是可编译正则；循环允许（靠 maxRuns 兜底：额度耗尽=节点失败→无人接住→实例 failed，`workflow_run` 返回 error 形态）。condition.type 取值：always（缺省）/onSuccess/onError/exitCode（带 `value`）/outputContains/outputNotContains（带 `text`）/outputEquals（带 `text`，输出与文本各自 trim 后精确相等——命令尾随换行不影响，适合 `PASS`/`FAIL` 这类标记行整行判定）/outputMatches（带 `pattern`）。边数据传递约束见「边数据传递」专节。
 
 ### 命令节点执行环境
 命令节点由 worker 的 nativeExec 直接 spawn 系统 shell 进程执行（与 git/term 同一通道，不经 PermissionGate、不走本会话的命令工具）：
@@ -94,6 +94,35 @@ tools: [workflow_create, workflow_get, workflow_update, workflow_delete, workflo
 - **为什么不用 exit 1 表达探针结论**：非零退出码=节点失败（node.error 事件 + 节点 failed 状态）——错误通道与正常控制流耦合在一起：失败节点会进终态 failed 告警（实例收束 done 也要带 warning），「节点失败」与「探针结论=不通过」两种语义混在一处，诊断时要额外分辨。且 maxRuns 是终身额度——探针进重试环后每一轮触发都消耗额度，把「结论路由」伪装成失败会让预算语义更难算。
 - **现状**：首败即分流后，exit 非零 + onError/exitCode 出边**也可用**（分支接管、实例收束 done 带 warning）；但输出标记法路由更直观、节点状态干净（探针结论不污染 failed/done 词表），优先采用。
 - 探针配合回指循环做重试：把循环内节点的 maxRuns 设为期望轮数（每轮触发执行消耗 1 次）；额度耗尽=节点失败→无人接住→实例 failed（`workflow_run` 返回 error 形态，兜底语义见「maxRuns 记账清单」）。
+
+### 边数据传递（assigns / 边 input）——校验-回指重试的报告回传
+边除路由外可**写运行时变量**（激活时、调度下游之前，先赋值后渲染）：`"assigns": [{"var": "bReport", "from": "output"}]` 把**源节点输出**（命令=stdout+stderr、AI=最终回复全文；截断 8KB，全文在 runs 留档）写入具名变量；`"input": {"var": "可选变量名(缺省 input)", "template": "模板"}` 把**模板渲染结果**（可引用用户变量与本批已写变量）写入变量。下游节点（命令与 AI 同机制）在 command/input 里以 `{{var}}` 消费——变量是唯一数据通道。
+
+**旗舰场景：校验不通过回指重试**（执行 A → 校验 B → 不过则带报告回 A）：
+
+```json
+{"id": "a", "type": "ai", "agent": "worker", "maxRuns": 4, "input": "{{input}}"},
+{"id": "b", "type": "ai", "agent": "reviewer", "maxRuns": 4, "input": "{{input}}",
+ "systemPrompt": "你是验收员,首行输出 PASS 或 FAIL,随后逐条列出问题"},
+{"id": "c", "type": "ai", "agent": "finisher", "input": "最终产物:\n{{aResult}}\n结论:\n{{bReport}}"},
+"edges": [
+ {"id": "e0", "from": "start", "to": "a", "input": {"template": "任务:\n{{task}}\n请产出完整产物"}},
+ {"id": "e1", "from": "a", "to": "b", "assigns": [{"var": "aResult"}],
+  "input": {"template": "产物:\n{{aResult}}\n请校验"}},
+ {"id": "e2", "from": "b", "to": "a", "condition": {"type": "outputNotContains", "text": "PASS"},
+  "assigns": [{"var": "bReport"}], "input": {"template": "上一轮校验报告:\n{{bReport}}\n请逐条修复"}},
+ {"id": "e3", "from": "b", "to": "c", "condition": {"type": "outputContains", "text": "PASS"},
+  "assigns": [{"var": "bReport"}]}
+]
+```
+
+- **路径即指令**：a 的 input 是固定模板 `{{input}}`；首轮经 e0（任务指令）、修复轮经 e2（报告+修复指令）——不同入边携带不同模板，**无需哨兵默认值**。
+- **跨跳传值**：c 距 a 两跳，经 `{{aResult}}` 拿到最终产物——具名变量是实例级载体，任意距离可引用。
+- **命令节点同样可用**：B 改成跑测试的命令节点（条件换 `onError`/`exitCode`），`assigns` 的 `from:"output"`=stdout+stderr；A 是命令节点时写 `"command": "python fix.py --report \"{{input}}\""` 消费边输入。
+- **maxRuns 预算**：环上每轮 A、B **各消耗一份**额度——B 的 maxRuns 不得小于 A 的（否则校验先耗尽）。
+- 校验约束：边写入变量（assigns var ∪ 边 input 变量）不得与用户输入变量同名；**assigns 变量禁跨源**（不同源节点写同名变量被拒——并行竞写无静态时序）；边 input 变量允许跨源（e0/e1/e2 共写缺省 `input` 合法——写入与目标触发耦合，后写覆盖）；引用不可达（写入边不在引用方上游）会被拒。
+- 可观测：`node.output`/`node.skipped` 事件 payload 携带 `vars`（本次写入快照，rerun 重放依据）；跳过决策（skip）时边 input 模板照常写入、assigns 无输出可写跳过。
+- **注入面提醒**：`{{input}}`/`{{bReport}}` 常装载 AI 产出文本，接进 command 时值原样落位（`&`/`|`/`>` 会改写命令语义）——外部文本进命令要引号包裹并警惕注入（同「命令节点执行环境」注入提示）。
 
 ### 会话线（agent）规则
 - **定义节点** = 该 agent 名在**上游拓扑序最早的持有者**：沿边反向可达的 AI 节点里，拓扑序第一个用这个 agent 名的节点（判定与编辑器下拉候选、运行时 systemPrompt 解析同一实现；回指环上解析到自身=视为定义节点）。定义节点携带 `systemPrompt`（**允许为空**=这条会话线没有系统提示词）与可选 `modelConfigId`，即会话线的定义处。
@@ -132,7 +161,7 @@ maxRuns 是节点**终身执行额度**（不是失败重试预算——失败�
 `workflow_rerun` 阻塞至终态后返回（形态同 workflow_run）：
 - 续跑成功：`{"instanceId":"wi_...","status":"done","durationMs":...,"nodes":[...]}`——从中断节点续跑后的完整节点进度。
 - 再失败：`{"error":...,"nodeId":...,"runNo":...,"context":[...],"hint":"可用 workflow_rerun 从中断节点续跑..."}`——可诊断后再次调用（幂等链），或换 `nodeId` 重开其它节点。
-- 语义要点：仅 `failed` 实例可重开；已完成节点（done/skipped）不重跑，只重跑指定节点及其下游；runNo/runs/events 续号追加；命名 agent 复用同一会话（上下文从任务档案恢复，无需也不能重建）；`input` 替换目标节点输入并持久化到实例快照（AI 节点支持 `{{var}}` 模板；**命令节点的输入=command 本体，传 input 会被拒绝报错**——改命令请用 `workflow_update` 修改定义后重跑）。
+- 语义要点：仅 `failed` 实例可重开；已完成节点（done/skipped）不重跑，只重跑指定节点及其下游；runNo/runs/events 续号追加；命名 agent 复用同一会话（上下文从任务档案恢复，无需也不能重建）；`input` 替换目标节点输入并持久化到实例快照（AI 节点支持 `{{var}}` 模板；**命令节点的输入=command 本体，传 input 会被拒绝报错**——改命令请用 `workflow_update` 修改定义后重跑）；**边数据传递的运行时变量从 events 重放恢复**（done 节点不重跑、其 assigns 不会再触发——不重放则下游渲染读空），重开节点的 `{{var}}` 渲染照常可用。
 - 边界：实例关联的原任务已结束/删除（或当前任务不是原任务）时报错——会话档案在原任务目录，只能重新 `workflow_run` 全新运行；实例非 failed（含运行中/挂起）报错。
 
 ## 边界与注意

@@ -21,6 +21,7 @@ import dev.everyagent.plugin.api.spi.NativeExec;
 import dev.everyagent.plugin.workflow.engine.WorkflowEngine;
 import dev.everyagent.plugin.workflow.model.ConditionDef;
 import dev.everyagent.plugin.workflow.model.Definition;
+import dev.everyagent.plugin.workflow.model.EdgeDef;
 import dev.everyagent.plugin.workflow.model.EventLine;
 import dev.everyagent.plugin.workflow.model.InstanceMeta;
 import dev.everyagent.plugin.workflow.model.InstanceStatus;
@@ -384,6 +385,141 @@ class WorkflowEngineTest {
         assertThat(r1.agent().modelConfigId()).isEqualTo("main-model");
         RunRecord r2 = runs(m.id()).stream().filter(r -> "ai2".equals(r.nodeId())).findFirst().orElseThrow();
         assertThat(r2.agent().modelConfigId()).isEqualTo("node-model");
+    }
+
+    // ══════════════════════════ 边数据传递（assigns / 边 input） ══════════════════════════
+
+    @Test
+    void edgeAssignsFeedDownstreamNodeInput() throws Exception {
+        // 命令节点输出经边 assigns 写入运行时变量，下游 AI 节点 input 渲染消费；
+        // node.output 事件 payload.vars 携带写入快照（rerun 重放依据）
+        factory.script("consumer", key -> Fakes.Script.echo("消费完成"));
+        Definition d = save(
+                DefinitionValidatorTest.node("s", "start"),
+                DefinitionValidatorTest.node("a", "command").command("echo prod-v1"),
+                DefinitionValidatorTest.node("b", "ai").agent("consumer").input("收到产物:\n{{aResult}}"),
+                DefinitionValidatorTest.edge("e1", "s", "a"),
+                new EdgeDef("e2", "a", "b", null,
+                        List.of(new EdgeDef.EdgeAssign("aResult", "output")), null));
+        InstanceMeta m = start(d);
+        awaitTerminal(m.id());
+        assertThat(meta(m.id()).status())
+                .as(eventNames(m.id()) + "/" + runs(m.id())).isEqualTo(InstanceStatus.DONE);
+
+        RunRecord bRun = runs(m.id()).stream().filter(r -> "b".equals(r.nodeId()))
+                .findFirst().orElseThrow();
+        assertThat(bRun.input().rendered()).contains("prod-v1");
+        // 事件快照：node.output 的 vars 留档（值=截断口径的 conditionOutput）
+        var ev = events(m.id()).stream().filter(e -> "node.output".equals(e.event())
+                && "a".equals(e.payload().path("nodeId").asString())).findFirst().orElseThrow();
+        assertThat(ev.payload().path("vars").path("aResult").asString(null)).contains("prod-v1");
+    }
+
+    @Test
+    void validationRetryLoopCarriesReportAndConverges() throws Exception {
+        // 校验-回指重试环（本特性的旗舰场景）：a 产出→b 校验→FAIL 沿回指边回传报告
+        // （assigns 写 bReport + 边 input 模板注入修复指令）→a 修复→PASS→c 收尾
+        AtomicInteger aRound = new AtomicInteger();
+        factory.script("worker", key -> Fakes.Script.echo(aRound.getAndIncrement() == 0 ? "draft" : "final"));
+        AtomicInteger bRound = new AtomicInteger();
+        factory.script("reviewer", key -> Fakes.Script.echo(bRound.getAndIncrement() == 0 ? "FAIL: 问题A" : "PASS"));
+        factory.script("finisher", key -> Fakes.Script.echo("归档完成"));
+        Definition d = save(
+                DefinitionValidatorTest.node("s", "start"),
+                DefinitionValidatorTest.node("a", "ai").agent("worker").maxRuns(3).input("{{input}}"),
+                DefinitionValidatorTest.node("b", "ai").agent("reviewer").maxRuns(3).input("产物:\n{{aResult}}"),
+                DefinitionValidatorTest.node("c", "ai").agent("finisher").input("最终产物:\n{{aResult}}\n结论:\n{{bReport}}"),
+                new EdgeDef("e0", "s", "a", null, null,
+                        new EdgeDef.EdgeInput(null, "任务:\n请产出完整产物")),
+                new EdgeDef("e1", "a", "b", null,
+                        List.of(new EdgeDef.EdgeAssign("aResult", "output")),
+                        new EdgeDef.EdgeInput(null, "产物:\n{{aResult}}\n请校验")),
+                new EdgeDef("e2", "b", "a",
+                        new ConditionDef(ConditionDef.OUTPUT_NOT_CONTAINS, null, "PASS", null),
+                        List.of(new EdgeDef.EdgeAssign("bReport", "output")),
+                        new EdgeDef.EdgeInput(null, "校验报告:\n{{bReport}}\n请逐条修复,完整重写产物")),
+                new EdgeDef("e3", "b", "c",
+                        new ConditionDef(ConditionDef.OUTPUT_CONTAINS, null, "PASS", null),
+                        List.of(new EdgeDef.EdgeAssign("bReport", "output")), null));
+        InstanceMeta m = start(d);
+        awaitTerminal(m.id());
+        assertThat(meta(m.id()).status())
+                .as(eventNames(m.id()) + "/" + runs(m.id())).isEqualTo(InstanceStatus.DONE);
+
+        // 环两轮：a/b 各跑 2 次（每轮各消耗一份 maxRuns 预算）；c 一轮收尾
+        assertThat(meta(m.id()).nodeStates().get("a").runCount()).isEqualTo(2);
+        assertThat(meta(m.id()).nodeStates().get("b").runCount()).isEqualTo(2);
+        assertThat(meta(m.id()).nodeStates().get("c").status()).isEqualTo("done");
+
+        // a 首轮=e0 模板（任务指令）；第二轮=e2 模板（报告+修复指令）——路径即指令
+        List<RunRecord> aRuns = runs(m.id()).stream().filter(r -> "a".equals(r.nodeId())).toList();
+        assertThat(aRuns).hasSize(2);
+        assertThat(aRuns.get(0).input().rendered()).isEqualTo("任务:\n请产出完整产物");
+        assertThat(aRuns.get(1).input().rendered()).contains("FAIL: 问题A").contains("请逐条修复");
+        // b 两轮输入均含 a 的产物（assigns 正向传递；第二轮是修复后的 final）
+        List<RunRecord> bRuns = runs(m.id()).stream().filter(r -> "b".equals(r.nodeId())).toList();
+        assertThat(bRuns).hasSize(2);
+        assertThat(bRuns.get(0).input().rendered()).contains("draft");
+        assertThat(bRuns.get(1).input().rendered()).contains("final");
+        // c 输入跨两跳引用：最终产物 + PASS 结论
+        RunRecord cRun = runs(m.id()).stream().filter(r -> "c".equals(r.nodeId()))
+                .findFirst().orElseThrow();
+        assertThat(cRun.input().rendered()).contains("final").contains("PASS");
+    }
+
+    @Test
+    void edgeInputDefaultVarFeedsCommandNode() throws Exception {
+        // 边 input 缺省变量名 input：模板渲染写入后，命令节点 command 的 {{input}}
+        // 槽位消费（命令与 AI 节点同机制——变量是唯一数据通道）
+        Definition base = DefinitionValidatorTest.def(
+                DefinitionValidatorTest.node("s", "start"),
+                DefinitionValidatorTest.node("cmd", "command").command("echo got:{{input}}"),
+                new EdgeDef("e1", "s", "cmd", null, null,
+                        new EdgeDef.EdgeInput(null, "材料:{{material}}")));
+        Definition withVars = DefinitionValidatorTest.withVariables(base,
+                new VariableDef("material", null, true, null, null));
+        Definition saved = store.saveDefinition("ws_run", withVars);
+
+        InstanceMeta m = start(saved, Map.of("material", "铜矿"));
+        awaitTerminal(m.id());
+        assertThat(meta(m.id()).status()).isEqualTo(InstanceStatus.DONE);
+        RunRecord cmdRun = runs(m.id()).stream().filter(r -> "cmd".equals(r.nodeId()))
+                .findFirst().orElseThrow();
+        assertThat(cmdRun.input().rendered()).isEqualTo("echo got:材料:铜矿");
+        assertThat(cmdRun.output().stdout()).contains("got:材料:铜矿");
+    }
+
+    @Test
+    void runtimeVarsAreReplayedOnRerun() throws Exception {
+        // rerun：done 节点不重跑、其 assigns 不会再触发——运行时变量从 events.jsonl 的
+        // node.output payload.vars 重放恢复，失败节点重跑时输入渲染不丢值
+        AtomicInteger rounds = new AtomicInteger();
+        factory.script("failer", key -> rounds.incrementAndGet() == 1
+                ? Fakes.Script.failing(new IllegalStateException("第一轮炸"))
+                : Fakes.Script.echo("修复完成"));
+        Definition d = save(
+                DefinitionValidatorTest.node("s", "start"),
+                DefinitionValidatorTest.node("a", "command").command("echo hello"),
+                DefinitionValidatorTest.node("b", "ai").agent("failer").input("材料:{{v}}"),
+                DefinitionValidatorTest.edge("e1", "s", "a"),
+                new EdgeDef("e2", "a", "b", null,
+                        List.of(new EdgeDef.EdgeAssign("v", "output")), null));
+        InstanceMeta m = start(d);
+        awaitTerminal(m.id());
+        assertThat(meta(m.id()).status()).as("事件=" + eventNames(m.id()))
+                .isEqualTo(InstanceStatus.FAILED);
+
+        engine.rerun(m.id(), "b", null, task);
+        awaitTerminal(m.id());
+        assertThat(meta(m.id()).status())
+                .as(eventNames(m.id()) + "/" + runs(m.id())).isEqualTo(InstanceStatus.DONE);
+
+        List<RunRecord> bRuns = runs(m.id()).stream().filter(r -> "b".equals(r.nodeId())).toList();
+        assertThat(bRuns).hasSize(2);
+        // 重放生效：第二轮（重开）输入仍渲染出 v=hello——a 未重跑，值只能来自事件重放
+        // （命令 echo 输出带尾随换行，值按 conditionOutput 原样入变量）
+        assertThat(bRuns.get(1).input().rendered()).contains("材料:hello");
+        assertThat(runs(m.id()).stream().filter(r -> "a".equals(r.nodeId()))).hasSize(1);
     }
 
     // ══════════════════════════ 八种条件路由 ══════════════════════════

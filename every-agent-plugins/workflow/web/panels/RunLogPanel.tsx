@@ -354,6 +354,7 @@ export function buildTimelineEntries(
         evEntries.push({
           kind: 'line', key: e.seq, ts: e.ts, tone: 'info',
           text: `节点 ${nameOf(nodeId)} 已跳过（run #${runNo}）`,
+          detail: varsDetailOf(p),
         })
         break
       case 'node.retry':
@@ -440,6 +441,19 @@ export function buildTimelineEntries(
     i += 1
   }
   return result
+}
+
+/**
+ * 边数据传递的变量写入快照 → 展示明细（「k = v」逐行；node.output/node.skipped
+ * 事件的 payload.vars；值已按引擎 8KB 截断口径留档）。
+ */
+function varsDetailOf(p: Record<string, unknown>): string | undefined {
+  const vars = p.vars && typeof p.vars === 'object' ? (p.vars as Record<string, unknown>) : null
+  if (!vars) return undefined
+  const entries = Object.entries(vars)
+    .map(([k, v]) => `${k} = ${asStr(v)}`)
+    .filter(s => !s.endsWith('= '))
+  return entries.length > 0 ? `写入变量：\n${entries.join('\n')}` : undefined
 }
 
 // ─── 样式 ────────────────────────────────────────────────────────────────
@@ -540,9 +554,12 @@ function NodeTypeBadge({ type }: { type: string }): React.ReactElement {
 function RunItem({
   entry,
   edgeLabelById,
+  varsByRun,
 }: {
   entry: TimelineRunEntry
   edgeLabelById: Map<string, string>
+  /** runNo → 本次激活边写入的变量快照（事件侧聚合——runs 记录不含数据面）。 */
+  varsByRun: Map<number, Array<[string, string]>>
 }): React.ReactElement {
   const rec = entry.run
   const input = runInputOf(rec)
@@ -560,6 +577,7 @@ function RunItem({
   const dur = asNum(rec.durationMs) ?? (startedAt != null && endedAt != null ? endedAt - startedAt : null)
   const edges = asStrArray(rec.activatedEdges)
   const hasAnyOutput = out.stdout !== '' || out.stderr !== '' || out.text !== ''
+  const writtenVars = varsByRun.get(asNum(rec.runNo) ?? -1) ?? []
 
   return (
     <div className="wf-log-card">
@@ -619,6 +637,18 @@ function RunItem({
           <div className="wf-log-sec">
             <div className="wf-log-sec-label">错误</div>
             <pre className="wf-log-pre wf-log-pre--err">{errorMessage}</pre>
+          </div>
+        ) : null}
+        {writtenVars.length > 0 ? (
+          <div className="wf-log-sec">
+            <div className="wf-log-sec-label">写入变量（边激活时）</div>
+            <div className="wf-log-chips">
+              {writtenVars.map(([k, v]) => (
+                <span key={k} className="wf-log-chip" title={v}>
+                  {k} = {v.length > 60 ? `${v.slice(0, 59)}…` : v}
+                </span>
+              ))}
+            </div>
           </div>
         ) : null}
         {agent ? (
@@ -681,6 +711,26 @@ export default function RunLogPanel({ meta, runs, events, loading, loadError, on
     return m
   }, [meta])
 
+  // 边数据传递写入快照（node.output 事件 payload.vars → runNo 分组）：runs 记录
+  // 不含数据面，从事件侧聚合补挂到运行卡片（真记录与 live 合成卡片同一来源）。
+  const varsByRun = React.useMemo(() => {
+    const m = new Map<number, Array<[string, string]>>()
+    for (const e of events) {
+      if (e.event !== 'node.output') continue
+      const p = (e.payload ?? {}) as Record<string, unknown>
+      const runNo = asNum(p.runNo)
+      const vars = p.vars && typeof p.vars === 'object' ? (p.vars as Record<string, unknown>) : null
+      if (runNo == null || !vars) continue
+      const entries = Object.entries(vars)
+        .map(([k, v]) => [k, asStr(v)] as [string, string])
+        .filter(([, v]) => v !== '')
+      if (entries.length > 0) {
+        m.set(runNo, entries)
+      }
+    }
+    return m
+  }, [events])
+
   const entries = React.useMemo(
     () => buildTimelineEntries(runs, events, nodeNameById),
     [runs, events, nodeNameById],
@@ -709,7 +759,7 @@ export default function RunLogPanel({ meta, runs, events, loading, loadError, on
         {entries.map(entry =>
           entry.kind === 'run' ? (
             <div className="wf-log-item" key={entry.key}>
-              <RunItem entry={entry} edgeLabelById={edgeLabelById} />
+              <RunItem entry={entry} edgeLabelById={edgeLabelById} varsByRun={varsByRun} />
             </div>
           ) : (
             <div className={`wf-log-item wf-log-item--${entry.tone}`} key={entry.key}>
@@ -736,6 +786,9 @@ export default function RunLogPanel({ meta, runs, events, loading, loadError, on
  *    会话轮增量与 tokens 用量。
  * 4. 失败节点卡片：红色错误块；supervisor 介入后同卡片追加「督导介入链」行
  *    （介入 #n → retry/skip/... — reason），且时间线出现对应督导状态行。
+ * 4b. 边数据传递：带 assigns/边 input 的节点收口后，其运行卡片出现「写入变量（边激活
+ *     时）」区块（chips：变量名 = 值预览，hover 看全量值）；被跳过节点的「已跳过」
+ *     状态行明细同样携带写入变量（边 input 模板照写、assigns 无输出跳过）。
  * 5. 运行中实例：进行中节点先出现「运行中」闪烁徽标的合成卡片（输入预览来自
  *    node.started 事件）；节点收口落盘后点「重载」→ 合成卡片被真记录卡片取代
  *    （exit/输出全量）。不点重载也不重复（runNo 去重）。

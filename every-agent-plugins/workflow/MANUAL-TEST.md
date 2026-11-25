@@ -44,6 +44,15 @@
    出现 + toast 汇报「N 个节点排为 M 层；K 条回边留作回线；孤立节点 X 个」，视口
    回到原点；手工微调后再点一次仍正常；保存 → 重开还原新坐标，其余字段不变。60
    节点规模抽查一次（无重叠、层内连线交叉可接受）。
+8d. **边数据传递（输出赋值 + 边输入）**：选中边 →「输出赋值」加一条（变量名
+   bReport）+「边输入」点添加（变量名留空=input，模板填「上一轮校验报告：
+   {{bReport}}，请修复」）→ 画布边标签追加「→ bReport ⇢ input」、dirty ● 亮；
+   保存 → 重开定义全部还原（赋值列表/变量名/模板原样回读）。反向校验：目标节点
+   command/input 未引用对应变量或引用不在上游的写入变量 → 保存被拒，逐项红字
+   （「{{bReport}} 的写入边不在引用方上游」）；两个不同源节点的出边写同名 assigns
+   变量 →「被多个不同源节点的出边写入」拒绝；边写入变量与「运行变量」声明同名 →
+   「边写入变量与用户输入变量同名」拒绝；边 input 模板留空白 →「边 input 模板不能
+   为空」拒绝。
 
 ## 2. 侧边栏（只展示运行实例，推送驱动）
 
@@ -188,6 +197,11 @@
 8. 取消实例：出现「实例已取消（操作者：user）」行；被中断节点无收口卡片
    （其合成卡片保持运行中态——与引擎「中断如实呈现」口径一致）。
 9. 终态实例回放：整页历史完整（wf.created → … → wf.done/failed/cancelled 收尾）。
+10. **边数据传递可观测**：带 assigns/边 input 的定义跑实例 → 节点收口后其运行卡片
+    出现「写入变量（边激活时）」区块（chips：变量名 = 值预览，hover 看全量值）；
+    校验-回指重试环里执行节点第二轮卡片的**输入**可见上轮校验报告全文（渲染后的
+    指令模板）；被跳过节点的「已跳过」状态行明细携带写入变量（边 input 照写、
+    assigns 跳过）。
 
 ## 5a. 移动端适配（视口 ≤768px，桌面窄窗或手机/平板竖屏均可验证）
 
@@ -258,6 +272,17 @@
     失败、message 形如「命令退出码非零: 3」；双引号包中文变量
     （`python do.py "{{novelName}}"`）→ 参数原样到达；`python3 xxx` → 命令
     解析失败（Windows 无 python3 别名，验证文档口径）。
+13a. **校验-回指重试环（边数据传递端到端）**：搭 A（执行 AI/命令）→B（校验）→
+    e2（outputNotContains "PASS" 回指 A，assigns bReport + 边 input「上一轮校验
+    报告：{{bReport}}，请修复」）与 e3（outputContains "PASS" → C 收尾）→ 运行
+    实例：A 第二轮 runs 记录的 input.rendered 含 B 的 FAIL 报告全文；C 的输入含
+    最终产物与 PASS 结论；events.jsonl 的 `node.output` 事件 payload 带 `vars`
+    快照（bReport/input 值）；rerun 场景：B 失败（如故意把 B 改成失败节点）→
+    实例 failed → `workflow_rerun` 重开 B → B 第二轮输入仍渲染出既有变量值
+    （A 不重跑、assigns 不再触发——值来自 events 重放）。
+13b. **命令节点消费边输入**：A（命令 `echo done`）→边（assigns v）→ B（命令
+    `echo got:{{v}}`）→ B 的 runs 留档 stdout 含 `got:done`；start 出边带边
+    input 模板 + B 命令写 `{{input}}` 槽位同理（缺省变量名 input）。
 13. **失败首败即分流**：命令节点 `exit 1` + 一条 onError/exitCode 出边 →
     **第一次失败**即沿分支接管（events.jsonl 只有失败的 node.error，**无
     node.retry 事件**；节点终态 failed、实例可收束 done 带 warning）；同图去掉
