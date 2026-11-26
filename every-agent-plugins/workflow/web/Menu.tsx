@@ -168,6 +168,14 @@ export function MenuList({
  * 靠长按手势 openMenu 补救，本复制版无长按句柄），这里对插件侧行菜单放行
  * 常显，保证移动端行操作（取消/删除/运行…）仍可触达；同时放大触发按钮
  * 满足触控目标（≥30px）。
+ *
+ * 触发按钮上放行样式按两种 DOM 形态各写一条选择器（缺一不可，二者都压过宿主
+ * `.ui-row-actions__trigger{display:none}` 的单类特异性）：
+ * - 后代形态（RowActions）：外层 div 挂 wf-row-actions-visible、内层 button 挂
+ *   ui-row-actions__trigger → `.wf-row-actions-visible .ui-row-actions__trigger`；
+ * - 同元素形态（HeaderMenu）：button 同时挂两个类 → 复合选择器
+ *   `.wf-row-actions-visible.ui-row-actions__trigger`（后代选择器匹配不到
+ *   同元素双类，漏写会让组头 ⋯「更多操作」（批量删除入口）在移动端被隐藏）。
  */
 const MOBILE_ACTIONS_STYLE_ID = 'wf-row-actions-mobile-style'
 
@@ -178,7 +186,8 @@ function ensureMobileActionsStyles(): void {
   style.textContent = `
 @media (max-width: 768px) {
   .wf-row-actions-visible { opacity: 1 !important; visibility: visible !important; }
-  .wf-row-actions-visible .ui-row-actions__trigger { display: inline-flex; min-width: 30px; min-height: 30px; }
+  .wf-row-actions-visible .ui-row-actions__trigger,
+  .wf-row-actions-visible.ui-row-actions__trigger { display: inline-flex; min-width: 30px; min-height: 30px; }
   .wf-row-actions-visible .ui-menu__item { min-height: 36px; }
 }
 `
@@ -253,7 +262,9 @@ export function RowActions({
  * 组头「更多操作」（⋯）按钮——与宿主 ActionMenu 同角色：常显（不靠 hover 揭示），
  * 复用 .ui-row-actions__trigger 的图标按钮外观，点击弹出 MenuList（锚定按钮右下）。
  * 分组卡片组头使用（宿主 .ui-row-actions 包裹层靠 hover 揭示，组头处不适用）；
- * 移动端同样套 wf-row-actions-visible 放大触控目标。
+ * 移动端靠 wf-row-actions-visible 与 ui-row-actions__trigger **同元素**挂载（复合
+ * 选择器放行，见 ensureMobileActionsStyles）放大触控目标常显——批量删除等组级
+ * 操作的移动端唯一入口，勿改为后代形态以外的随意结构。
  */
 export function HeaderMenu({
   items,
