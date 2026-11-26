@@ -3,6 +3,9 @@ package dev.everyagent.worker.modules.search;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+
+import org.springframework.stereotype.Component;
 
 import dev.everyagent.plugin.api.spi.SuggestionProvider;
 import dev.everyagent.worker.task.TaskStore;
@@ -18,6 +21,7 @@ import dev.everyagent.worker.task.TaskStore;
  * 细节——聚合方总条数另有 10 条截断与保底配额)。不参与统一 search({@code kinds()}
  * 缺省空集)。
  */
+@Component
 public class TaskNameSuggestProvider implements SuggestionProvider {
 
     /** 本 provider 来源 id(建议条目 providerId 缺省填此值)。 */
