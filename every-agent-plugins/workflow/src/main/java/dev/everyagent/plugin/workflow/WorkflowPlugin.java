@@ -6,6 +6,7 @@ import dev.everyagent.plugin.api.event.Channels;
 import dev.everyagent.plugin.api.event.StreamEmitter;
 import dev.everyagent.plugin.workflow.engine.WorkflowEngine;
 import dev.everyagent.plugin.workflow.rpc.WorkflowRpc;
+import dev.everyagent.plugin.workflow.search.WorkflowSearchProvider;
 import dev.everyagent.plugin.workflow.slash.WorkflowRunSlashResolver;
 import dev.everyagent.plugin.workflow.store.WorkflowStore;
 import dev.everyagent.contract.json.Json;
@@ -34,6 +35,9 @@ import java.util.Locale;
  *   <li>注册 {@link dev.everyagent.plugin.workflow.slash.WorkflowRunSlashResolver}（kind=
  *       {@code workflow.run} 的提交解析：任务页运行按钮的 token 原串 → 工作流名+参数+
  *       workflow_run 调用引导的可读替换文本）。</li>
+ *   <li>注册 {@link dev.everyagent.plugin.workflow.search.WorkflowSearchProvider}（统一
+ *       search 后端：kind=workflow-definition（定义结构化字段内容）与 workflow-instance
+ *       （events 过程内容），架构 §8.5 插件 provider 与内置同权）。</li>
  * </ol>
  */
 public class WorkflowPlugin implements EveryAgentPlugin {
@@ -110,6 +114,9 @@ public class WorkflowPlugin implements EveryAgentPlugin {
         // 用户消息携带 opaque token 原串（前端不注册提交 resolver），经复用的
         // SlashTokenResolveAdvisor 分发到这里渲染「工作流名+参数+workflow_run 引导」文本
         ctx.registerSlashTokenResolver(new WorkflowRunSlashResolver(store));
+
+        // 统一搜索后端（kind=workflow-definition / workflow-instance，架构 §8.5 插件 provider 同权）
+        ctx.registerSearchProvider(new WorkflowSearchProvider(store));
     }
 
     /** 执行引擎（RPC 层与本插件内部共用）。 */
