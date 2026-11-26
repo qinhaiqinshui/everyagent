@@ -1,7 +1,7 @@
 /**
- * 工作流运行对话框：收集运行变量 → 组装「引导语 + workflow.run token 原串」的
- * 初始内容 → ctx.ui.startNewTask 经宿主新任务草稿页启动任务（预填初始内容 +
- * 定义的主 agent 模型配置，模拟用户点发送按钮）。
+ * 工作流运行对话框：收集运行变量 → 组装「引导语 + workflow.reference token 原串 +
+ * 参数普通文本」的初始内容 → ctx.ui.startNewTask 经宿主新任务草稿页启动任务
+ * （预填初始内容 + 定义的主 agent 模型配置，模拟用户点发送按钮）。
  *
  * 承载方式：ctx.ui.showDialog（宿主出模态壳——遮罩/居中/Esc/点遮罩取消/焦点管理，
  * task-wait WaitTaskPickerContent 同款范式）；宿主缺席 showDialog（极旧版本）时降级
@@ -11,18 +11,20 @@
  * （required 标 *，label/description/defaultValue 提示）→ 前端先本地校验 required
  * （与后端 missingRequiredVariables 同口径：有 defaultValue 的 required 允许留空）→
  * resolveWorkspaceRef 解析 {root, workerId} → ctx.ui.buildComposerToken 构造
- * kind=workflow.run 的 opaque token（payload {definitionId, definitionName, variables}，
- * 字段名/编码与 worker 侧 WorkflowRunToken 逐字对齐）→ rawContent = 引导语 + ' ' +
- * token + ' ' → ctx.ui.startNewTask({rawContent, modelConfigId: agentConfigId,
+ * kind=workflow.reference 的 opaque token（中性引用：payload {definitionId,
+ * definitionName}，无 variables——字段名/编码与 worker 侧 WorkflowReferenceToken 逐字
+ * 对齐）→ rawContent = 引导语 + ' ' + token + ' ' + 参数普通文本 →
+ * ctx.ui.startNewTask({rawContent, modelConfigId: agentConfigId,
  * workspace: root, title})：宿主打开新任务草稿标签页、预填输入框与模型选择、模拟
  * 用户点发送——任务走宿主原有建立路径创建（task.run 新建 + 任务级默认 token 逐个
  * apply），主 agent 即用定义的主 agent 配置模型、AI 审议等默认启用能力自动生效
  * （§7.20 运行入口统一走任务）。token 原串上行（程序化预填不经前端提交替换，
  * 未登记 kind 的 token 原样进 input，任务页胶囊回放由 rawContent 还原）。
- * worker 侧 SlashTokenResolveAdvisor + WorkflowRunSlashResolver 把 token 替换为
- * 「工作流名+参数+workflow_run 引导」文本，主 agent 调 workflow_run 工具执行——
- * AI 节点过程/wf.node 卡片都在任务页呈现。task.run 的失败错误（worker 掉线等）
- * 显示在新任务草稿页输入区，预填内容保留供用户重发（本对话框只承载解析/组装错误）。
+ * worker 侧 SlashTokenResolveAdvisor + WorkflowReferenceSlashResolver 把 token 替换为
+ * 「[引用工作流] 名 (definitionId)」中性引用文本；运行意图（引导语）与参数是普通
+ * 文字（用户可改写），主 agent 依文字调 workflow_run 工具执行——AI 节点过程/wf.node
+ * 卡片都在任务页呈现。task.run 的失败错误（worker 掉线等）显示在新任务草稿页输入区，
+ * 预填内容保留供用户重发（本对话框只承载解析/组装错误）。
  *
  * 两级入口：定义级（openRunDialog，管理页行尾「▶ 运行」直入变量表单）与工作区级
  * （openWorkspaceRunDialog，侧栏组头 ▶——先选定义〔默认=最近一次实例的定义，由
@@ -31,7 +33,7 @@
  *
  * 纯逻辑可测核（无插件 web 测试基建，导出保持可测，人工清单见文件尾注释）：
  * missingRequiredVariables / buildVariablesPayload /
- * buildWorkflowRunTokenInput / buildWorkflowRunSubmission。
+ * buildWorkflowReferenceTokenInput / buildWorkflowRunSubmission。
  */
 import React from 'react'
 import type { PluginDialogProps } from '@everyagent/plugin-api'
@@ -114,54 +116,64 @@ export function buildVariablesPayload(
   return out
 }
 
-/** workflow.run token 的 kind（与 worker 侧 WorkflowRunToken.KIND 逐字一致）。 */
-export const WORKFLOW_RUN_TOKEN_KIND = 'workflow.run'
+/** workflow.reference token 的 kind（与 worker 侧 WorkflowReferenceToken.KIND 逐字一致）。 */
+export const WORKFLOW_REFERENCE_TOKEN_KIND = 'workflow.reference'
 
 /**
- * 参数摘要（token summary 口径，与后端 WorkflowRunToken.summarizeVariables 一致）：
- * `参数: k=v; k2=v2`（「; 」分隔，保表单声明序）；无参数给「无参数」。
+ * 参数普通文本（引用化后参数不再进 token，落在胶囊外的普通文字里）：
+ * `参数: k=v; k2=v2`（「; 」分隔，保表单声明序）；无参数返回空串（不追加参数文本）。
  */
 export function summarizeRunVariables(variables: Record<string, string>): string {
   const keys = Object.keys(variables)
-  if (keys.length === 0) return '无参数'
+  if (keys.length === 0) return ''
   return `参数: ${keys.map(k => `${k}=${variables[k]}`).join('; ')}`
 }
 
 /**
- * 构造 workflow.run 胶囊的 buildComposerToken 入参（纯逻辑，可测核）。
+ * 构造 workflow.reference 胶囊的 buildComposerToken 入参（纯逻辑，可测核）。
  *
- * payload 字段名 {@code definitionId/definitionName/variables} 与 worker 侧
- * WorkflowRunToken 的 payload 逐字一致且键序相同（definitionId → definitionName →
- * variables），经宿主单点编码（buildOpaqueTokenText，与 Java SlashTokenEncoder 逐字节
- * 对齐：同 kind/label/summary/payload 两侧产出相同 token 串）。definitionName 空时
- * label 退用 definitionId（payload 原样携带空串，worker 侧经 WorkflowStore 反查补全）。
+ * <b>中性引用语义</b>（原「运行工作流」token 引用化）：label=工作流「名」、
+ * summary=definitionId、payload 仅 {@code definitionId/definitionName}（无 variables
+ * ——参数写在 token 外的普通文字）；对该工作流做什么操作由胶囊外普通文本描述，
+ * 提交解析（worker 侧 WorkflowReferenceSlashResolver）只渲染「[引用工作流] 名
+ * (definitionId)」。字段名/键序与 worker 侧 WorkflowReferenceToken 逐字一致
+ * （definitionId → definitionName），经宿主单点编码（buildOpaqueTokenText，与 Java
+ * SlashTokenEncoder 逐字节对齐）。definitionName 空时 label 退用 definitionId
+ * （payload 原样携带空串，worker 侧经 WorkflowStore 反查补全）。
  */
-export function buildWorkflowRunTokenInput(
+export function buildWorkflowReferenceTokenInput(
   definitionId: string,
   definitionName: string,
-  variables: Record<string, string>,
 ): { kind: string; label: string; summary: string; payload: Record<string, unknown> } {
   const name = definitionName && definitionName.trim() !== '' ? definitionName : definitionId
   return {
-    kind: WORKFLOW_RUN_TOKEN_KIND,
-    label: `运行「${name}」`,
-    summary: summarizeRunVariables(variables),
-    payload: { definitionId, definitionName, variables },
+    kind: WORKFLOW_REFERENCE_TOKEN_KIND,
+    label: `工作流「${name}」`,
+    summary: definitionId,
+    payload: { definitionId, definitionName },
   }
 }
 
-/** 任务用户消息引导语：把运行意图交给主 agent（其调 workflow_run 工具执行）。 */
+/** 任务用户消息引导语：对该工作流的操作意图（运行）写在普通文字里，用户可改写。 */
 export function workflowRunGuide(definitionName: string): string {
   return `请运行工作流《${definitionName}》：`
 }
 
 /**
- * 组装 task.run 的用户消息（=rawContent）：`引导语 + ' ' + token 串 + ' '`。
- * token 原串上行（前端不注册 workflow.run 提交 resolver，对齐 external_file 先例）——
- * worker 侧 SlashTokenResolveAdvisor 分发 WorkflowRunSlashResolver 渲染替换文本。
+ * 组装 task.run 的用户消息（=rawContent）：`引导语 + ' ' + token 串 + ' ' + 参数文本`。
+ * token 原串上行（前端不注册 workflow.reference 提交 resolver，对齐 external_file
+ * 先例）——worker 侧 SlashTokenResolveAdvisor 按 kind 分发 WorkflowReferenceSlashResolver
+ * 渲染「[引用工作流] 名 (definitionId)」；参数与操作意图在普通文字中（用户可改）。
  */
-export function buildWorkflowRunSubmission(definitionName: string, tokenText: string): string {
-  return `${workflowRunGuide(definitionName)} ${tokenText} `
+export function buildWorkflowRunSubmission(
+  definitionName: string,
+  tokenText: string,
+  variables: Record<string, string>,
+): string {
+  const paramsText = summarizeRunVariables(variables)
+  return paramsText !== ''
+    ? `${workflowRunGuide(definitionName)} ${tokenText} ${paramsText} `
+    : `${workflowRunGuide(definitionName)} ${tokenText} `
 }
 
 /**
@@ -193,9 +205,9 @@ export async function launchWorkflowRun(
     throw new Error('无法解析工作区根路径（工作区注册表无此工作区），无法创建运行任务')
   }
   const tokenText = ctx.ui.buildComposerToken(
-    buildWorkflowRunTokenInput(definitionId, definitionName, variables),
+    buildWorkflowReferenceTokenInput(definitionId, definitionName),
   )
-  const rawContent = buildWorkflowRunSubmission(definitionName, tokenText)
+  const rawContent = buildWorkflowRunSubmission(definitionName, tokenText, variables)
   ctx.ui.startNewTask({
     rawContent,
     modelConfigId: modelConfigId || undefined,
@@ -289,8 +301,8 @@ export function RunDialogContent({ close, workspace, definitionId }: RunDialogCo
     setRunError(null)
     try {
       // 运行入口统一走任务（§7.20）：经宿主新任务草稿页启动（预填「引导语 +
-      // workflow.run token 原串」+ 主 agent 模型配置，模拟用户点发送按钮），
-      // 主 agent 调 workflow_run 工具执行（阻塞至终态）。
+      // workflow.reference token 原串 + 参数普通文本」+ 主 agent 模型配置，模拟用户点
+      // 发送按钮），主 agent 依普通文字调 workflow_run 工具执行（阻塞至终态）。
       await launchWorkflowRun(
         workspace,
         definitionId,

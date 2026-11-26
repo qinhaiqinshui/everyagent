@@ -7,7 +7,8 @@ import dev.everyagent.plugin.api.event.StreamEmitter;
 import dev.everyagent.plugin.workflow.engine.WorkflowEngine;
 import dev.everyagent.plugin.workflow.rpc.WorkflowRpc;
 import dev.everyagent.plugin.workflow.search.WorkflowSearchProvider;
-import dev.everyagent.plugin.workflow.slash.WorkflowRunSlashResolver;
+import dev.everyagent.plugin.workflow.slash.WorkflowReferenceSlashResolver;
+import dev.everyagent.plugin.workflow.slash.WorkflowReferenceToken;
 import dev.everyagent.plugin.workflow.store.WorkflowStore;
 import dev.everyagent.contract.json.Json;
 import org.slf4j.Logger;
@@ -32,9 +33,10 @@ import java.util.Locale;
  *       契约=计划「RPC 参数契约」表）；</li>
  *   <li>注册 {@link WorkflowToolProvider}（定义 CRUD 五件 + workflow_run/实例查询四件 +
  *       cancel + workflow_rerun 共十一个 hidden 工具；技能包由 plugin.json 声明 {@code skills} 目录物化，不走代码注册）。</li>
- *   <li>注册 {@link dev.everyagent.plugin.workflow.slash.WorkflowRunSlashResolver}（kind=
- *       {@code workflow.run} 的提交解析：任务页运行按钮的 token 原串 → 工作流名+参数+
- *       workflow_run 调用引导的可读替换文本）。</li>
+ *   <li>注册 {@link WorkflowReferenceSlashResolver}（kind={@code workflow.reference}
+ *       + 兼容 {@code workflow.run} 各一份：任务页运行按钮 / @ 引用的工作流胶囊 token
+ *       原串 → 「[引用工作流] 名 (definitionId=…)」中性引用文本——操作意图写在
+ *       token 外的普通文字，主 agent 依文字自选 hidden 工具）。</li>
  *   <li>注册 {@link dev.everyagent.plugin.workflow.search.WorkflowSearchProvider}（统一
  *       search 后端：kind=workflow-definition（定义结构化字段内容）与 workflow-instance
  *       （events 过程内容），架构 §8.5 插件 provider 与内置同权）。</li>
@@ -110,10 +112,10 @@ public class WorkflowPlugin implements EveryAgentPlugin {
         // 读取 skill/workflow-tools/skill.md 后自动暴露进请求工具列表）
         ctx.registerToolProvider(new WorkflowToolProvider(store, engine));
 
-        // 「运行工作流」token 提交解析（kind=workflow.run）：任务页运行按钮发 task.run 的
-        // 用户消息携带 opaque token 原串（前端不注册提交 resolver），经复用的
-        // SlashTokenResolveAdvisor 分发到这里渲染「工作流名+参数+workflow_run 引导」文本
-        ctx.registerSlashTokenResolver(new WorkflowRunSlashResolver(store));
+        // 工作流引用 token 提交解析（中性引用：解析只留工作流名+id；kind=workflow.reference
+        // 新构造 + 兼容 LEGACY workflow.run 各注册一份，旧草稿/重发仍可解析）
+        ctx.registerSlashTokenResolver(new WorkflowReferenceSlashResolver(store, WorkflowReferenceToken.KIND));
+        ctx.registerSlashTokenResolver(new WorkflowReferenceSlashResolver(store, WorkflowReferenceToken.LEGACY_KIND));
 
         // 统一搜索后端（kind=workflow-definition / workflow-instance，架构 §8.5 插件 provider 同权）
         ctx.registerSearchProvider(new WorkflowSearchProvider(store));

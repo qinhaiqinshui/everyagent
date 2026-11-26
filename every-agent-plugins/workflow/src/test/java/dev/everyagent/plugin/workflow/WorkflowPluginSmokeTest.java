@@ -30,7 +30,8 @@ import dev.everyagent.plugin.api.spi.ToolExecutionInterceptor;
 import dev.everyagent.plugin.api.spi.ToolProvider;
 import dev.everyagent.plugin.api.task.TaskAdmissionPolicy;
 import dev.everyagent.plugin.api.task.TaskLifecycleNode;
-import dev.everyagent.plugin.workflow.slash.WorkflowRunToken;
+import dev.everyagent.plugin.workflow.slash.WorkflowReferenceToken;
+import dev.everyagent.plugin.workflow.search.WorkflowSearchProvider;
 import tools.jackson.databind.JsonNode;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -66,10 +67,20 @@ class WorkflowPluginSmokeTest {
         RecordingPluginContext ctx = new RecordingPluginContext(home);
         new WorkflowPlugin().activate(ctx);
 
-        // 「运行工作流」token 提交解析接线：kind=workflow.run（任务页运行按钮 → task.run
-        // 用户消息原串上行 → worker 复用的 SlashTokenResolveAdvisor 分发到该 resolver）
-        assertThat(ctx.slashTokenResolvers).singleElement()
-                .satisfies(r -> assertThat(r.kind()).isEqualTo(WorkflowRunToken.KIND));
+        // 「工作流引用」token 提交解析接线：kind=workflow.reference + 兼容 LEGACY
+        // workflow.run 各一份（任务页运行按钮 / @ 引用的胶囊原串上行 → worker 复用的
+        // SlashTokenResolveAdvisor 按 kind 分发到对应 resolver）
+        assertThat(ctx.slashTokenResolvers).hasSize(2);
+        assertThat(ctx.slashTokenResolvers)
+                .extracting(SlashTokenResolver::kind)
+                .containsExactlyInAnyOrder(
+                        WorkflowReferenceToken.KIND, WorkflowReferenceToken.LEGACY_KIND);
+
+        // 统一搜索后端接线：1 个 provider，声明 workflow-definition / workflow-instance 两 kind
+        assertThat(ctx.searchProviders).hasSize(1);
+        assertThat(ctx.searchProviders.get(0)).isInstanceOf(WorkflowSearchProvider.class);
+        assertThat(ctx.searchProviders.get(0).kinds())
+                .containsExactlyInAnyOrder("workflow-definition", "workflow-instance");
 
         // 既有注册面不回归：hidden 工具 provider + workflow.* RPC 方法
         assertThat(ctx.toolProviders).hasSize(1);
@@ -83,6 +94,7 @@ class WorkflowPluginSmokeTest {
         final List<ToolProvider> toolProviders = new CopyOnWriteArrayList<>();
         final List<SlashTokenResolver> slashTokenResolvers = new CopyOnWriteArrayList<>();
         final List<String> rpcMethods = new CopyOnWriteArrayList<>();
+        final List<SearchProvider> searchProviders = new CopyOnWriteArrayList<>();
         private final WorkerServices services;
 
         RecordingPluginContext(Path home) {
@@ -114,6 +126,7 @@ class WorkflowPluginSmokeTest {
 
         @Override
         public void registerSearchProvider(SearchProvider provider) {
+            searchProviders.add(provider);
         }
 
         @Override
