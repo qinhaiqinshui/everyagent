@@ -9,12 +9,14 @@ import {
   type WorkspaceFileEntry,
 } from '@/query/workspaceFileQueryService'
 import { buildWorkspaceFileToken } from '@/composerToken/workspaceFileToken'
+import { buildWorkflowReferenceToken } from '@/composerToken/workflowReferenceToken'
+import { buildTaskReferenceToken } from '@/composerToken/taskReferenceToken'
 import { buildExternalFileToken, type ExternalFileEntry } from '@/composerToken/externalFileToken'
 import { isOpaqueTokenText } from '@/composerToken/composerOpaqueToken'
 import InlineComposer, { type InlineComposerHandle, type InlineComposerChange } from '../taskComposer/InlineComposer'
 import ExternalFilePickerModal from '../taskComposer/ExternalFilePickerModal'
 import { Button, IconButton } from '@/components/shared/ui'
-import { FileIcon, FolderIcon, PlusIcon } from '../shared/AppGlyphs'
+import { BoltIcon, ChatBubbleIcon, FileIcon, FolderIcon, PlusIcon } from '../shared/AppGlyphs'
 import {
   slashCommandRegistry,
   type SlashCommandItem,
@@ -25,6 +27,12 @@ import { workspaceRegistry } from '@/hub/workspaceRegistry'
 
 /** 当前草稿变更（由内联编辑器上报，与 InlineComposer 同源）。 */
 export type ComposerDraftChange = InlineComposerChange
+
+/** 读取 worker 建议元数据袋的字符串值（宽松容错；缺省空串）。 */
+function metaStr(meta: Record<string, unknown> | undefined, key: string): string {
+  const v = meta?.[key]
+  return typeof v === 'string' ? v : ''
+}
 
 /**
  * 把内联编辑器上报的变更合并进草稿状态：
@@ -538,8 +546,22 @@ export default function RichComposer({
   }, [atSafeActiveIndex, atResults])
 
   const selectEntryAsToken = React.useCallback((entry: WorkspaceFileEntry) => {
-    const token = buildWorkspaceFileToken(entry)
-    // 删除触发用的 `@query` 片段，再在光标处插入文件引用胶囊。
+    // 按 kind 分派引用形态：磁盘条目（file/directory）→ 文件引用胶囊（现状）；
+    // 合成建议 → 中性引用胶囊（workflow.reference / task.reference，worker 侧提交解析）。
+    // meta 为 worker SuggestionProvider 建议携带的定义/任务元数据袋（兜底从合成 path 解析 id）。
+    let token: ChatComposerToken
+    if (entry.kind === 'workflow-definition') {
+      const definitionId = metaStr(entry.meta, 'definitionId')
+        || entry.path.replace(/^workflows\//, '')
+      token = buildWorkflowReferenceToken(definitionId, metaStr(entry.meta, 'definitionName'))
+    } else if (entry.kind === 'task-reference') {
+      const taskId = metaStr(entry.meta, 'taskId')
+        || entry.path.replace(/^tasks\//, '')
+      token = buildTaskReferenceToken(taskId, metaStr(entry.meta, 'title'))
+    } else {
+      token = buildWorkspaceFileToken(entry)
+    }
+    // 删除触发用的 `@query` 片段，再在光标处插入引用胶囊。
     editorRef.current?.insertToken(token, atQuery.length + 1)
     setAtOpen(false)
     setAtBrowse(null)
@@ -874,7 +896,19 @@ export default function RichComposer({
                   {atQuery.trim() ? '无匹配文件' : (atBrowse ? '该目录为空' : '无文件')}
                 </div>
               ) : null}
-              {atResults.map((entry, index) => (
+              {atResults.map((entry, index) => {
+                // 合成引用建议（工作流定义/任务名）：展示名取 meta 袋（worker suggestionEntry
+                // 的 name 由合成 path 末段派生，是 id 而非业务名），desc 用类型文案。
+                const synthetic = entry.kind === 'workflow-definition' || entry.kind === 'task-reference'
+                const label = synthetic
+                  ? (metaStr(entry.meta, 'definitionName') || metaStr(entry.meta, 'title') || entry.name)
+                  : entry.name
+                const desc = entry.kind === 'workflow-definition'
+                  ? '工作流定义'
+                  : entry.kind === 'task-reference'
+                    ? '任务'
+                    : entry.fullPath
+                return (
                 <button
                   key={entry.fullPath}
                   ref={(el) => {
@@ -892,12 +926,19 @@ export default function RichComposer({
                       }
                     >
                       <span className="ui-menu__icon">
-                        {entry.kind === 'directory' ? <FolderIcon size={14} /> : <FileIcon size={14} />}
+                        {entry.kind === 'directory'
+                          ? <FolderIcon size={14} />
+                          : entry.kind === 'workflow-definition'
+                            ? <BoltIcon size={14} />
+                            : entry.kind === 'task-reference'
+                              ? <ChatBubbleIcon size={14} />
+                              : <FileIcon size={14} />}
                       </span>
-                      <span className="ui-menu__label">{entry.name}</span>
-                      <span className="ui-menu__desc">{entry.fullPath}</span>
+                      <span className="ui-menu__label">{label}</span>
+                      <span className="ui-menu__desc">{desc}</span>
                     </button>
-                ))}
+                )
+              })}
             </>
           </div>
         ) : null}

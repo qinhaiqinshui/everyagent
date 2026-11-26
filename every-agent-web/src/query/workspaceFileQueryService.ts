@@ -23,24 +23,28 @@ import { hubSession } from '@/hub/session'
 import { workspaceRegistry } from '@/hub/workspaceRegistry'
 import { normalizeWorkspaceRelativePath } from '@/platform/fs/pathUtils'
 
-/** 单个文件/目录条目(已带上完整业务路径)。 */
+/** 单个文件/目录/引用对象条目(已带上完整业务路径)。 */
 export interface WorkspaceFileEntry {
-  /** 工作区内相对路径(展示 / 下钻用)。 */
+  /** 工作区内相对路径(展示 / 下钻用;合成建议为 workflows/<id> / tasks/<id> 形态)。 */
   path: string
-  /** 条目名称(最后一段)。 */
+  /** 条目名称(最后一段;合成建议由 worker 从 meta/路径派生)。 */
   name: string
-  /** 条目类型。 */
-  kind: 'file' | 'directory'
+  /** 条目类型(file/directory 为磁盘条目;workflow-definition/task-reference 为合成引用建议)。 */
+  kind: string
   /** 带前导 / 的业务绝对路径(仅用于展示与点击打开,不进入 AI 上下文)。 */
   fullPath: string
+  /** 合成建议的元数据袋(worker suggestionEntry 透传:如 definitionId/definitionName/taskId/title)。 */
+  meta?: Record<string, unknown>
 }
 
 /** worker `mention.query` 返回的单条结果(后端已完成匹配/隐藏过滤/截断)。 */
 interface RemoteMentionEntry {
   path: string
   name: string
-  kind: 'file' | 'directory'
+  kind: string
   fullPath: string
+  /** SuggestionProvider 建议携带的元数据袋(磁盘条目无此字段)。 */
+  meta?: Record<string, unknown>
 }
 
 /**
@@ -85,5 +89,6 @@ export async function listWorkspaceFiles(opts: {
     name: entry.name,
     kind: entry.kind,
     fullPath: entry.fullPath,
+    ...(entry.meta && typeof entry.meta === 'object' ? { meta: entry.meta } : {}),
   }))
 }
