@@ -196,7 +196,7 @@ public class MyFirstPlugin implements EveryAgentPlugin {
 | 3 | `registerSandboxProvider`（`:49`） | `SandboxProvider` | 提供沙箱后端（挂载 / 清理 / 探测） | [tools-and-sandbox.md](tools-and-sandbox.md) | sandbox-windows-mic（`:25`）、sandbox-windows-codex（`:47`）、sandbox-wsl-ubuntu（`:37`） |
 | 4 | `registerFileReadHandler`（`:70`） | `FileReadHandler` | 按扩展名接管 `read_file`（图片等非文本类型，未命中回落默认文本读取） | [tools-and-sandbox.md](tools-and-sandbox.md) | image-vision（`ImageVisionPlugin.java`） |
 | 5 | `registerAdvisorProvider`（`:46`） | `AdvisorProvider` | 向模型调用链贡献 Advisor | [advisors.md](advisors.md) | system-info（`SystemInfoPlugin.java:16`）、git（`:33`）、context-compression（`:18`）等 |
-| 6 | `registerSearchProvider`（`:52`） | `SearchProvider` | 搜索后端（统一 `search` 聚合；内置 `file-content`/`file-name`/`task` 为内置 provider，与插件 provider 同权） | [advisors.md](advisors.md) | 已接线、零插件使用（无内置范例；聚合行为由 worker 测试钉住） |
+| 6 | `registerSearchProvider`（`:52`） | `SearchProvider` | 搜索后端（统一 `search` 聚合；内置 `file-content`/`file-name`/`task` 为内置 provider，与插件 provider 同权） | [advisors.md](advisors.md) | workflow（`WorkflowSearchProvider.java`——kind `workflow-definition`/`workflow-instance`；`WorkflowDefinitionSuggestProvider.java` 为 `SuggestionProvider` 能力接口范例：@ 建议增补聚合） |
 | 7 | `registerAuthorizationHandler`（`:55`） | `AuthorizationHandler` | 授权决议链节点（无人值守 / AI 审议） | [advisors.md](advisors.md) | unattended（`UnattendedPlugin.java:23`）、ai-review（`:24`） |
 | 8 | `registerEventEgressFilter`（`:79`） | `EventEgressFilter` | 事件级出网过滤（可丢弃/改写 payload，事件仍落盘；出网投影单点 `EgressProjector`） | [架构 §8.5](../../ARCHITECTURE.md#85-插件系统统一加载架构)（暂无专篇） | ai-review（`AiReviewPlugin.java:37`） |
 | 9 | `registerRoundEgressFilter`（`:87`） | `RoundEgressFilter` | 轮次级出网过滤（裁剪/丢弃轮次 JSON 视图） | 同上 | ai-review（`AiReviewPlugin.java:38`） |

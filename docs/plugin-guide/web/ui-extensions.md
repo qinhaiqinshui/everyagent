@@ -32,7 +32,7 @@ has_children: false
 | `ui.file_content_editors` | `registerFileContentEditor` | 按扩展名注册文件编辑器 | pdf-viewer（.pdf） |
 | `ui.file_explorer_actions` | `registerFileExplorerAction` | 文件树右键菜单项 | git（「显示 Git 历史」，追加在内置项尾部，见 §13） |
 | `ui.round_tail_panels` | `registerRoundTailPanel` | 任务轮末展示区 | file-change |
-| `ui.search_types` | `registerSearchType` | 注册搜索类型（id/label/kinds/filters/ResultView…） | ⚠️ 无内置范例（内置三类型不走此扩展点） |
+| `ui.search_types` | `registerSearchType` | 注册搜索类型（id/label/kinds/filters/ResultView…） | workflow（`web/searchResultView.tsx`：工作流定义/实例两类型 + ResultView 点击跳转 workflow 标签页；§12.3） |
 | `ui.editor_context_menu_actions` | `registerEditorContextMenuAction` | 文件内容区（编辑器）右键菜单项 | selection-reference；核心内置「复制」项（`core.copy-selection`，见 §16.1） |
 | `ui.composer_chip_actions` | `registerComposerChipAction` | 按 kind 接管输入框/消息回放胶囊的点击行为 | selection-reference（核心 `system.workspace_file` 亦经此扩展点注册，见 §17） |
 | `ui.settings_sections` | `registerSettingsSection` | 向设置页贡献一个设置段 | **无**（novel-reader 起于此） |
