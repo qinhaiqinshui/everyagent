@@ -5,6 +5,7 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 
 /**
  * {@code @} 建议(mention)能力接口(架构 §8.5「能力接口扩展」)——{@link SearchProvider}
@@ -46,10 +47,17 @@ public interface SuggestionProvider extends SearchProvider {
      * 归一为 {@code "file"}(去重键 = {@code kind}+{@code path})。统一搜索结果模型(§8.5)
      * 的可选增补字段 {@code providerId}(聚合时由 worker 填 {@code provider.id()},自带则
      * 尊重不覆盖)与 {@code score}(仅排序提示)均可空,null 时序列化省略。
+     *
+     * <p>{@code metadata} 为<b>可选元数据袋</b>(provider 自持,聚合方原样并入应答条目
+     * {@code meta} 字段,§8.5 统一可选增补字段口径 must-ignore):非真实文件的合成建议
+     * (如工作流定义名/任务名引用)经它携带展示名与对象 id——如
+     * {@code {definitionId, definitionName}} / {@code {taskId, title}};消费方按 kind
+     * 按需读取,null/空袋不输出 meta。
      */
     @JsonIgnoreProperties(ignoreUnknown = true)
     @JsonInclude(JsonInclude.Include.NON_NULL)
-    record Suggestion(String path, String kind, String providerId, Double score) {
+    record Suggestion(String path, String kind, String providerId, Double score,
+            Map<String, Object> metadata) {
 
         public Suggestion {
             if (kind == null || kind.isBlank()) {
@@ -57,9 +65,19 @@ public interface SuggestionProvider extends SearchProvider {
             }
         }
 
-        /** 兼容构造:kind + 不带统一增补字段(providerId/score = null)。 */
+        /** 兼容构造:kind + 不带统一增补字段(providerId/score/metadata = null)。 */
         public Suggestion(String path, String kind) {
-            this(path, kind, null, null);
+            this(path, kind, null, null, null);
+        }
+
+        /** 兼容构造:kind + 统一增补字段(providerId/score,无 metadata)。 */
+        public Suggestion(String path, String kind, String providerId, Double score) {
+            this(path, kind, providerId, score, null);
+        }
+
+        /** 合成建议便捷构造:kind + 元数据袋(展示名/对象 id 等;providerId/score = null)。 */
+        public Suggestion(String path, String kind, Map<String, Object> metadata) {
+            this(path, kind, null, null, metadata);
         }
 
         /** 便捷构造:kind 取缺省 {@code file}。 */

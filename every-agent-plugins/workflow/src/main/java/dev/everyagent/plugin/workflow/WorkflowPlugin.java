@@ -6,6 +6,7 @@ import dev.everyagent.plugin.api.event.Channels;
 import dev.everyagent.plugin.api.event.StreamEmitter;
 import dev.everyagent.plugin.workflow.engine.WorkflowEngine;
 import dev.everyagent.plugin.workflow.rpc.WorkflowRpc;
+import dev.everyagent.plugin.workflow.search.WorkflowDefinitionSuggestProvider;
 import dev.everyagent.plugin.workflow.search.WorkflowSearchProvider;
 import dev.everyagent.plugin.workflow.slash.WorkflowReferenceSlashResolver;
 import dev.everyagent.plugin.workflow.slash.WorkflowReferenceToken;
@@ -119,6 +120,9 @@ public class WorkflowPlugin implements EveryAgentPlugin {
 
         // 统一搜索后端（kind=workflow-definition / workflow-instance，架构 §8.5 插件 provider 同权）
         ctx.registerSearchProvider(new WorkflowSearchProvider(store));
+
+        // 「工作流定义名」@ 建议源（SuggestionProvider 能力接口，mention.query 增补聚合）
+        ctx.registerSearchProvider(new WorkflowDefinitionSuggestProvider(store));
     }
 
     /** 执行引擎（RPC 层与本插件内部共用）。 */

@@ -27,6 +27,7 @@ import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -223,7 +224,7 @@ class SlashMethodsMentionProviderTest {
 
     @Test
     void appendSuggestionsSkipsWhenBuiltinAtLimitOrRegistryEmpty() {
-        // 内置已达上限:零调用、零追加
+        // 纯函数语义:entries 已达 limit 时零追加(保底配额在 RPC 路径 mentionQuery 处理)
         ArrayNode full = Json.arr();
         for (int i = 0; i < MENTION_LIMIT; i++) {
             full.add(builtInEntry("f" + i + ".md", "file"));
@@ -234,7 +235,7 @@ class SlashMethodsMentionProviderTest {
         reg.register(provider);
         SlashMethods.appendProviderSuggestions(full, reg, anySuggestReq(), MENTION_LIMIT, 0);
         assertEquals(MENTION_LIMIT, full.size());
-        assertNull(provider.lastReq, "内置已触顶时 provider 不被调用");
+        assertNull(provider.lastReq, "纯函数在 entries 已触顶时不追加");
 
         // 空注册表:零行为变化
         ArrayNode entries = Json.arr();
@@ -242,6 +243,25 @@ class SlashMethodsMentionProviderTest {
         SlashMethods.appendProviderSuggestions(entries, new SearchProviderRegistry(),
                 anySuggestReq(), MENTION_LIMIT, 0);
         assertEquals(1, entries.size());
+    }
+
+    @Test
+    void appendSuggestionsCarriesMetadataBagThrough() {
+        ArrayNode entries = Json.arr();
+        entries.add(builtInEntry("a.md", "file"));
+        SearchProviderRegistry reg = new SearchProviderRegistry();
+        reg.register(new StubSuggester("wf", 0f, List.of(
+                new SuggestionProvider.Suggestion("workflows/wf_1", "workflow-definition",
+                        java.util.Map.of("definitionId", "wf_1", "definitionName", "日更写作")))));
+
+        SlashMethods.appendProviderSuggestions(entries, reg, anySuggestReq(), MENTION_LIMIT, 0);
+
+        assertEquals(2, entries.size());
+        JsonNode e = entries.path(1);
+        assertEquals("workflow-definition", e.path("kind").asString());
+        assertEquals("wf_1", e.path("meta").path("definitionId").asString());
+        assertEquals("日更写作", e.path("meta").path("definitionName").asString());
+        assertEquals("/workflows/wf_1", e.path("fullPath").asString());
     }
 
     @Test
@@ -341,9 +361,9 @@ class SlashMethodsMentionProviderTest {
     }
 
     @Test
-    void builtinAtLimitSkipsProvidersOnRpcPath() throws Exception {
+    void builtinAtLimitStillReservesProviderSlotsWithBackfill() throws Exception {
         for (int i = 0; i < 12; i++) {
-            Files.writeString(ws.resolve("r" + i + ".md"), "x"); // 12 个命中 → 内置截断 10
+            Files.writeString(ws.resolve("r" + i + ".md"), "x"); // 12 个命中 > 上限 10
         }
         StubSuggester provider = new StubSuggester("recent", 0f, List.of(
                 new SuggestionProvider.Suggestion("recent/untitled.md")));
@@ -352,11 +372,41 @@ class SlashMethodsMentionProviderTest {
         JsonNode reply = mention("r");
         assertEquals("rpc.ok", reply.path("event").asString(), reply.toString());
         JsonNode entries = reply.path("payload").path("result").path("entries");
+        // 保底配额:内置最多占 7 条(10-3),provider 建议并入,剩余内置命中回填补满 10
         assertEquals(MENTION_LIMIT, entries.size(), "总条数仍截断 10: " + entries.size());
-        assertNull(provider.lastReq, "内置已达上限时 provider 不被调用");
+        assertEquals("recent/untitled.md", entries.path(7).path("path").asString(),
+                "provider 建议在保底槽位(内置让出 3 条后): " + entries);
+        assertNotNull(provider.lastReq, "注册了建议 provider 时内置不再独占 10 条");
+        Set<String> keys = new HashSet<>();
         for (JsonNode e : entries) {
-            assertFalse("recent/untitled.md".equals(e.path("path").asString()), entries.toString());
+            assertTrue(keys.add(e.path("kind").asString() + "\u0000" + e.path("path").asString()),
+                    "回填/去重后仍不重复: " + e);
         }
+    }
+
+    @Test
+    void providerSuggestionsShortfallBackfillsRemainingBuiltinHits() throws Exception {
+        for (int i = 0; i < 10; i++) {
+            Files.writeString(ws.resolve("s" + i + ".md"), "x");
+        }
+        // provider 只给 1 条建议(不足保底 3 槽)→ 剩余槽位由内置命中回填补满 10
+        registry.register(new StubSuggester("recent", 0f, List.of(
+                new SuggestionProvider.Suggestion("recent/untitled.md"))));
+
+        JsonNode reply = mention("s");
+        assertEquals("rpc.ok", reply.path("event").asString(), reply.toString());
+        JsonNode entries = reply.path("payload").path("result").path("entries");
+        assertEquals(MENTION_LIMIT, entries.size(), "provider 建议不足时内置回填补满: " + entries.size());
+        Set<String> keys = new HashSet<>();
+        boolean hasProviderEntry = false;
+        for (JsonNode e : entries) {
+            assertTrue(keys.add(e.path("kind").asString() + "\u0000" + e.path("path").asString()),
+                    "重复条目: " + e);
+            if ("recent/untitled.md".equals(e.path("path").asString())) {
+                hasProviderEntry = true;
+            }
+        }
+        assertTrue(hasProviderEntry, "provider 建议在场: " + entries.toString());
     }
 
     @Test

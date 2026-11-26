@@ -31,7 +31,7 @@ import dev.everyagent.plugin.api.spi.ToolProvider;
 import dev.everyagent.plugin.api.task.TaskAdmissionPolicy;
 import dev.everyagent.plugin.api.task.TaskLifecycleNode;
 import dev.everyagent.plugin.workflow.slash.WorkflowReferenceToken;
-import dev.everyagent.plugin.workflow.search.WorkflowSearchProvider;
+import dev.everyagent.plugin.workflow.search.WorkflowDefinitionSuggestProvider;
 import tools.jackson.databind.JsonNode;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -76,11 +76,14 @@ class WorkflowPluginSmokeTest {
                 .containsExactlyInAnyOrder(
                         WorkflowReferenceToken.KIND, WorkflowReferenceToken.LEGACY_KIND);
 
-        // 统一搜索后端接线：1 个 provider，声明 workflow-definition / workflow-instance 两 kind
-        assertThat(ctx.searchProviders).hasSize(1);
-        assertThat(ctx.searchProviders.get(0)).isInstanceOf(WorkflowSearchProvider.class);
-        assertThat(ctx.searchProviders.get(0).kinds())
-                .containsExactlyInAnyOrder("workflow-definition", "workflow-instance");
+        // 统一搜索后端接线：WorkflowSearchProvider（workflow-definition / workflow-instance
+        // 两 kind）+ WorkflowDefinitionSuggestProvider（建议源，kinds 空集不参与统一 search）
+        assertThat(ctx.searchProviders).hasSize(2);
+        assertThat(ctx.searchProviders).anySatisfy(p ->
+                assertThat(p.kinds()).containsExactlyInAnyOrder(
+                        "workflow-definition", "workflow-instance"));
+        assertThat(ctx.searchProviders).anySatisfy(p ->
+                assertThat(p).isInstanceOf(WorkflowDefinitionSuggestProvider.class));
 
         // 既有注册面不回归：hidden 工具 provider + workflow.* RPC 方法
         assertThat(ctx.toolProviders).hasSize(1);

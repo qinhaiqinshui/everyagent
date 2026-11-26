@@ -17,6 +17,7 @@ import java.util.Deque;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 
 import org.slf4j.Logger;
@@ -66,6 +67,9 @@ public class SlashMethods {
 
     /** @ 搜索返回条数上限(用户约束:最多 10 个)。 */
     private static final int MENTION_LIMIT = 10;
+
+    /** 建议保底配额:注册了建议 provider 时内置文件至少让出的槽位数(实现细节,非契约)。 */
+    private static final int SUGGEST_MIN_RESERVE = 3;
 
     /** 搜索模式递归收集节点上限,防超大目录树卡死(超限即截断,仍从已收集里取前 10)。 */
     private static final int MAX_SEARCH_NODES = 2000;
@@ -386,13 +390,35 @@ public class SlashMethods {
             hits.sort(Comparator.comparingInt((Hit h) -> -h.score())
                     .thenComparingInt(h -> h.entry().path("fullPath").asText().length())
                     .thenComparing(h -> h.entry().path("fullPath").asText(), zh));
-            for (int i = 0; i < hits.size() && i < MENTION_LIMIT; i++) {
-                entries.add(hits.get(i).entry());
+            // 保底配额:注册了建议 provider 时内置文件最多占 limit-RESERVE 条,给 provider
+            // 建议留槽(否则文件命中占满 10 条,工作流/任务引用建议永远不可见);provider
+            // 建议不足时由「内置回填」用剩余文件命中补满,配额不浪费槽位。未注册 provider
+            // 时零行为变化(内置独占全量)。
+            boolean hasSuggestProviders = !searchProviders.getSuggestionProviders().isEmpty();
+            int builtinCap = hasSuggestProviders
+                    ? Math.max(1, MENTION_LIMIT - SUGGEST_MIN_RESERVE)
+                    : MENTION_LIMIT;
+            int used = 0;
+            for (; used < hits.size() && entries.size() < builtinCap; used++) {
+                entries.add(hits.get(used).entry());
             }
-            // SuggestionProvider 增补聚合(§8.5):内置四档打分结果之后追加插件建议
+            // SuggestionProvider 增补聚合(§8.5):内置打分结果之后并入 provider 建议
             appendProviderSuggestions(entries, searchProviders, new SuggestionProvider.SuggestRequest(
                     workspaces.idOfRoot(sb.root().toString()), sb.root(), query, sb.display(dir)),
                     MENTION_LIMIT, providerTimeoutMs);
+            // 内置回填:provider 建议占不满保底槽时,剩余内置命中按分序补满(去重防重复)
+            if (used < hits.size() && entries.size() < MENTION_LIMIT) {
+                Set<String> seen = new HashSet<>();
+                for (JsonNode e : entries) {
+                    seen.add(e.path("kind").asString("file") + "\u0000" + e.path("path").asString());
+                }
+                while (used < hits.size() && entries.size() < MENTION_LIMIT) {
+                    JsonNode e = hits.get(used++).entry();
+                    if (seen.add(e.path("kind").asString("file") + "\u0000" + e.path("path").asString())) {
+                        entries.add(e);
+                    }
+                }
+            }
         }
         ctx.ok(Json.obj().set("entries", entries));
     }
@@ -446,7 +472,8 @@ public class SlashMethods {
                     continue;
                 }
                 entries.add(suggestionEntry(s.path(), s.kind(),
-                        SearchProvider.providerIdOr(s.providerId(), provider.id()), s.score()));
+                        SearchProvider.providerIdOr(s.providerId(), provider.id()), s.score(),
+                        s.metadata()));
             }
         }
     }
@@ -455,10 +482,13 @@ public class SlashMethods {
      * provider 建议的结果条目:形状与内置 {@link #entry} 一致({@code name} 取自 path
      * 末段、{@code fullPath} = {@code /}+path);统一模型(§8.5)增补字段
      * {@code providerId}(聚合方填 provider 声明 id,建议项自带则尊重)与 {@code score}
-     * (仅 provider 提供时携带)非空才输出;不探测磁盘存在性——索引型 provider 可
+     * (仅 provider 提供时携带)非空才输出;建议项携带 {@code metadata} 元数据袋时原样
+     * 并入条目 {@code meta} 字段(§8.5 增补口径 must-ignore——合成建议〔工作流定义名/
+     * 任务名引用〕经它携带展示名与对象 id);不探测磁盘存在性——索引型 provider 可
      * 建议近期/未落盘路径,kind 由建议项自带(缺省 file)。
      */
-    private static ObjectNode suggestionEntry(String rel, String kind, String providerId, Double score) {
+    private static ObjectNode suggestionEntry(String rel, String kind, String providerId,
+            Double score, Map<String, Object> metadata) {
         ObjectNode o = Json.obj();
         o.put("path", rel);
         o.put("name", rel.contains("/") ? rel.substring(rel.lastIndexOf('/') + 1) : rel);
@@ -469,6 +499,9 @@ public class SlashMethods {
         }
         if (score != null) {
             o.put("score", score);
+        }
+        if (metadata != null && !metadata.isEmpty()) {
+            o.set("meta", Json.toJson(metadata));
         }
         return o;
     }
