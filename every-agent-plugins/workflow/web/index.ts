@@ -11,7 +11,10 @@
  * - workflow-instance 工作区标签类型（实例运行页 + 运行日志页）；
  * - workflow-manage 工作区标签类型（工作区级定义管理页：列表 + 行操作）；
  * - wf.node trace 类型（任务流中非 AI 节点过程卡片：折叠行摘要 + 展开态全量
- *   input/output/error，WfNodeTraceView + wfNodeTrace.css）。
+ *   input/output/error，WfNodeTraceView + wfNodeTrace.css）；
+ * - 统一搜索类型 ×2（searchResultView.tsx：工作流定义 / 工作流实例——kind 与 worker
+ *   侧 WorkflowSearchProvider 逐字一致；ResultView 点击跳转 workflow-editor /
+ *   workflow-instance 标签页）。
  *
  * 硬约束（docs/plugin-guide/web/overview-and-loading.md）：
  * - 类型一律 import type ... from '@everyagent/plugin-api'（纯类型包）；
@@ -32,10 +35,11 @@
  *   打开方式：ctx.ui.openTab('workflow-manage', { workspaceId }, '管理工作流')
  */
 
-import type { Disposable, PluginContext, PluginModule, PluginTraceRecord, TraceTypeDefinition, UiSidebarItemDefinition } from '@everyagent/plugin-api'
+import type { Disposable, PluginContext, PluginModule, PluginTraceRecord, SearchTypeDefinition, TraceTypeDefinition, UiSidebarItemDefinition } from '@everyagent/plugin-api'
 import React from 'react'
 import { AiNodeIcon, CommandNodeIcon, StartNodeIcon, WorkflowIcon } from './icons'
 import { setPluginContext } from './pluginRuntime'
+import { WorkflowDefinitionResultView, WorkflowInstanceResultView } from './searchResultView'
 import { workflowEditorTabType, workflowInstanceTabType, workflowManageTabType } from './tabTypes'
 import SidebarPanel from './panels/SidebarPanel'
 import WfNodeTraceView, {
@@ -45,10 +49,61 @@ import WfNodeTraceView, {
   wfNodeStatus,
 } from './WfNodeTraceView'
 
+// ─── 统一搜索类型注册（ctx.ui.registerSearchType；kind 与 worker 侧 ──────────
+//  WorkflowSearchProvider 的 kinds 声明逐字一致）──
+
+/** kind 常量（worker 侧 WorkflowSearchProvider.KIND_* 同名）。 */
+export const WORKFLOW_DEFINITION_SEARCH_KIND = 'workflow-definition'
+export const WORKFLOW_INSTANCE_SEARCH_KIND = 'workflow-instance'
+
+/** 「工作流定义」搜索类型：定义结构化字段内容命中 → ResultView 点击打开定义编辑器。 */
+const workflowDefinitionSearchType: SearchTypeDefinition = {
+  id: WORKFLOW_DEFINITION_SEARCH_KIND,
+  label: '工作流定义',
+  pluginId: 'workflow',
+  order: 40,
+  kinds: [WORKFLOW_DEFINITION_SEARCH_KIND],
+  filters: [
+    { key: 'isRegex', label: '.*', help: '使用正则表达式', type: 'boolean', section: 'inline' },
+    { key: 'caseSensitive', label: 'Aa', help: '区分大小写', type: 'boolean', section: 'inline' },
+    { key: 'wholeWord', label: 'ab|', help: '全字匹配', type: 'boolean', section: 'inline' },
+  ],
+  ResultView: WorkflowDefinitionResultView,
+}
+
+/** 「工作流实例」搜索类型：events 过程内容命中 + 状态过滤 → 点击打开实例页。 */
+const workflowInstanceSearchType: SearchTypeDefinition = {
+  id: WORKFLOW_INSTANCE_SEARCH_KIND,
+  label: '工作流实例',
+  pluginId: 'workflow',
+  order: 41,
+  kinds: [WORKFLOW_INSTANCE_SEARCH_KIND],
+  filters: [
+    { key: 'isRegex', label: '.*', help: '使用正则表达式', type: 'boolean', section: 'inline' },
+    { key: 'caseSensitive', label: 'Aa', help: '区分大小写', type: 'boolean', section: 'inline' },
+    { key: 'wholeWord', label: 'ab|', help: '全字匹配', type: 'boolean', section: 'inline' },
+    {
+      key: 'status',
+      label: '实例状态',
+      type: 'select',
+      section: 'inline',
+      options: [
+        { label: '全部状态', value: '' },
+        { label: '已创建', value: 'created' },
+        { label: '运行中', value: 'running' },
+        { label: '等待用户', value: 'waiting-user' },
+        { label: '完成', value: 'done' },
+        { label: '失败', value: 'failed' },
+        { label: '已取消', value: 'cancelled' },
+      ],
+    },
+  ],
+  ResultView: WorkflowInstanceResultView,
+}
+
 /** wf.node trace 类型定义（非 AI 节点过程卡片，数据形状/状态推导见 WfNodeTraceView 文件头）。
  *  注：入口 .ts 不写 JSX（esbuild 对 .ts 不启用 JSX loader）——图标与渲染走 React.createElement。 */
-const wfNodeTraceDef: TraceTypeDefinition = {
-  kind: WF_NODE_TRACE_KIND,
+const wfNodeTraceDef: TraceTypeDefinition = {  kind: WF_NODE_TRACE_KIND,
   // 图标按节点类型分发 + 状态着色（色走 wfNodeTrace.css 的 wf-node-glyph--*，宿主 token）；
   // 13px = 工具行折叠行图标尺寸（与 trace 图标同列同尺寸）。未知类型回退命令图标。
   getIcon: (trace) => {
@@ -87,6 +142,10 @@ const workflowPlugin: PluginModule = {
     disposables.push(ctx.ui.registerWorkspaceTabType(workflowEditorTabType))
     disposables.push(ctx.ui.registerWorkspaceTabType(workflowInstanceTabType))
     disposables.push(ctx.ui.registerWorkspaceTabType(workflowManageTabType))
+
+    // 统一搜索类型（搜索弹窗/侧栏的类型选择器：工作流定义 + 工作流实例）。
+    disposables.push(ctx.ui.registerSearchType(workflowDefinitionSearchType))
+    disposables.push(ctx.ui.registerSearchType(workflowInstanceSearchType))
 
     // wf.node trace 卡片（非 AI 节点过程呈现：任务流折叠行 + 展开态全量 input/output/error）。
     disposables.push(ctx.ui.registerTraceType(wfNodeTraceDef))
